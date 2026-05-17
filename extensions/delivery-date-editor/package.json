@@ -1,0 +1,12 @@
+{
+  "name": "delivery-date-editor",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@shopify/ui-extensions": "2026.4.0",
+    "@shopify/ui-extensions-react": "^2026.0.0",
+    "react": "^18.3.1",
+    "react-reconciler": "^0.29.0"
+  }
+}
