@@ -1,0 +1,456 @@
+/* Orders Operations Dashboard — route-scoped styles (ods- prefix) */
+
+/* ── Header actions bar ────────────────────────────────────────────────── */
+.ods-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--p-color-border, #e1e3e5);
+  background: var(--p-color-bg-surface, #fff);
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ods-subtitle {
+  font-size: 13px;
+  color: var(--p-color-text-secondary, #6d7175);
+  margin: 0;
+}
+.ods-header-btns {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ── KPI grid ───────────────────────────────────────────────────────────── */
+.ods-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border-bottom: 1px solid var(--p-color-border, #e1e3e5);
+}
+.ods-kpi-card {
+  padding: 10px 16px;
+  border-right: 1px solid var(--p-color-border, #e1e3e5);
+}
+.ods-kpi-card:last-child { border-right: none; }
+.ods-kpi-label {
+  font-size: 12px;
+  color: var(--p-color-text-secondary, #6d7175);
+  margin: 0 0 2px;
+  font-weight: 500;
+}
+.ods-kpi-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--p-color-text, #202223);
+  margin: 0;
+  line-height: 1.2;
+}
+.ods-kpi-value--danger { color: #c9371d; }
+.ods-kpi-value--link {
+  font-size: 18px;
+  font-weight: 700;
+  color: #2c6ecb;
+  line-height: 1.2;
+}
+
+/* ── Tabs ───────────────────────────────────────────────────────────────── */
+.ods-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--p-color-border, #e1e3e5);
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0 12px;
+  background: var(--p-color-bg-surface, #fff);
+}
+.ods-tabs::-webkit-scrollbar { display: none; }
+.ods-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 11px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--p-color-text-secondary, #6d7175);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  margin-bottom: -1px;
+  font-family: inherit;
+  transition: color 0.12s;
+}
+.ods-tab:hover { color: var(--p-color-text, #202223); }
+.ods-tab--active {
+  color: var(--p-color-text, #202223);
+  border-bottom-color: var(--p-color-text, #202223);
+  font-weight: 600;
+}
+.ods-tab-count {
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--p-color-bg-surface-secondary, #f1f3f5);
+  color: var(--p-color-text-secondary, #6d7175);
+  border-radius: 10px;
+  padding: 1px 6px;
+  line-height: 1.5;
+}
+
+/* ── Drawer backdrop ────────────────────────────────────────────────────── */
+.ods-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 400;
+  cursor: default;
+}
+
+/* ── Drawer panel ───────────────────────────────────────────────────────── */
+.ods-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 440px;
+  max-width: 96vw;
+  background: #fff;
+  box-shadow: -4px 0 32px rgba(0, 0, 0, 0.18);
+  z-index: 401;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Drawer header ──────────────────────────────────────────────────────── */
+.ods-drawer-head {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid #e1e3e5;
+  background: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.ods-drawer-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ods-drawer-order-num {
+  font-size: 18px;
+  font-weight: 700;
+  color: #202223;
+  margin: 0 0 8px;
+}
+.ods-drawer-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.ods-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  line-height: 1.6;
+}
+.ods-drawer-customer {
+  font-size: 13px;
+  color: #6d7175;
+  margin: 0 0 2px;
+}
+.ods-drawer-total {
+  font-size: 16px;
+  font-weight: 700;
+  color: #202223;
+  margin: 0;
+}
+.ods-drawer-close {
+  background: none;
+  border: 1px solid #c9cccf;
+  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 20px;
+  color: #6d7175;
+  flex-shrink: 0;
+  line-height: 1;
+  font-family: inherit;
+}
+.ods-drawer-close:hover { background: #f6f6f7; color: #202223; }
+
+/* ── Drawer body ────────────────────────────────────────────────────────── */
+.ods-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+}
+.ods-drawer-section {
+  padding: 16px 20px;
+  border-bottom: 1px solid #e1e3e5;
+}
+.ods-drawer-section:last-child { border-bottom: none; }
+.ods-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6d7175;
+  margin: 0 0 12px;
+}
+
+/* Definition list */
+.ods-dl {
+  display: grid;
+  grid-template-columns: 108px 1fr;
+  gap: 5px 10px;
+  font-size: 13px;
+  margin: 0;
+}
+.ods-dt {
+  color: #6d7175;
+  font-weight: 500;
+  margin: 0;
+  padding: 2px 0;
+}
+.ods-dd {
+  color: #202223;
+  margin: 0;
+  padding: 2px 0;
+  word-break: break-word;
+}
+
+/* Action row inside drawer */
+.ods-drawer-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  align-items: center;
+}
+.ods-action-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #202223;
+  background: #fff;
+  border: 1px solid #c9cccf;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  text-decoration: none;
+  line-height: 1.4;
+}
+.ods-action-link:hover { background: #f6f6f7; }
+.ods-copy-success {
+  font-size: 12px;
+  color: #008060;
+  font-weight: 600;
+}
+
+/* Item list in drawer */
+.ods-item-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f1f3f5;
+}
+.ods-item-row:last-child { border-bottom: none; }
+.ods-item-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #e1e3e5;
+  flex-shrink: 0;
+}
+.ods-item-thumb-placeholder {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  border: 1px solid #e1e3e5;
+  background: #f6f6f7;
+  flex-shrink: 0;
+}
+.ods-item-info { flex: 1; min-width: 0; }
+.ods-item-name {
+  font-size: 13px;
+  color: #202223;
+  word-break: break-word;
+}
+.ods-item-sku {
+  font-size: 11px;
+  color: #6d7175;
+  margin-top: 2px;
+}
+.ods-item-qty {
+  font-size: 13px;
+  font-weight: 700;
+  color: #202223;
+  min-width: 32px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ── Tabs + table wrapper (single s-page child = no extra gap) ──────────── */
+.ods-tabs-table {
+  display: contents;
+}
+
+/* ── Toolbar (one flex row; overrides s-table slot default block layout) ── */
+.ods-toolbar {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 2px 0;
+  box-sizing: border-box;
+  flex-wrap: nowrap;
+  min-height: 0;
+}
+.ods-toolbar > s-search-field {
+  flex: 1 1 0;
+  min-width: 140px;
+  align-self: center;
+}
+/* Hide label text while keeping the input compact (label hidden via prop) */
+.ods-toolbar > s-date-field {
+  flex-shrink: 0;
+  width: auto;
+  min-width: 0;
+  align-self: center;
+}
+.ods-toolbar > s-select {
+  flex-shrink: 0;
+  width: auto;
+  min-width: 130px;
+  max-width: 170px;
+  align-self: center;
+}
+.ods-toolbar > s-button {
+  flex-shrink: 0;
+  align-self: center;
+}
+@media (max-width: 640px) {
+  .ods-toolbar {
+    flex-wrap: wrap;
+  }
+  .ods-toolbar > s-search-field {
+    flex-basis: 100%;
+  }
+  .ods-toolbar > s-date-field,
+  .ods-toolbar > s-select {
+    flex-basis: calc(50% - 3px);
+  }
+}
+
+/* ── KPI sub-label ──────────────────────────────────────────────────────── */
+.ods-kpi-sublabel {
+  font-size: 11px;
+  color: var(--p-color-text-secondary, #6d7175);
+  margin: 2px 0 0;
+  line-height: 1.35;
+}
+.ods-kpi-sublabel--danger { color: #c9371d; }
+
+/* ── Bulk selection bar (Shopify-Admin compact style) ───────────────────── */
+.ods-selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: var(--p-color-bg-surface-secondary, #f6f6f7);
+  border-bottom: 1px solid var(--p-color-border, #e1e3e5);
+  flex-wrap: wrap;
+  min-height: 36px;
+}
+.ods-selection-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--p-color-text, #202223);
+  padding: 0 4px 0 2px;
+  white-space: nowrap;
+}
+.ods-selection-bar > s-button {
+  flex-shrink: 0;
+}
+@media (max-width: 640px) {
+  .ods-selection-bar { padding: 4px 8px; }
+}
+
+/* ── Order name cell (name button + optional note icon) ─────────────────── */
+.ods-name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+.ods-note-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  color: var(--p-color-text-secondary, #6d7175);
+  cursor: default;
+  transition: color 0.1s, background 0.1s;
+}
+.ods-note-icon:hover,
+.ods-note-icon:focus-visible {
+  color: var(--p-color-text, #202223);
+  background: var(--p-color-bg-surface-secondary, #f1f3f5);
+  outline: none;
+}
+
+/* ── Customer cell (name + email stacked) ───────────────────────────────── */
+.ods-customer-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+.ods-customer-name {
+  font-size: 13px;
+  color: var(--p-color-text, #202223);
+}
+.ods-customer-email {
+  font-size: 11px;
+  color: var(--p-color-text-secondary, #6d7175);
+}
+
+/* ── Delivery cell (date + relative label stacked) ──────────────────────── */
+.ods-delivery-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ods-delivery-relative {
+  font-size: 11px;
+  color: var(--p-color-text-secondary, #6d7175);
+}
+
+/* ── Print ──────────────────────────────────────────────────────────────── */
+@media print {
+  .ods-backdrop,
+  .ods-drawer,
+  .ods-header-btns,
+  .ods-selection-bar,
+  .ods-tabs { display: none !important; }
+}
