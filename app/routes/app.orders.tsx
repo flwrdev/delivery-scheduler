@@ -4,6 +4,7 @@ import {
   useNavigate,
   useSearchParams,
   useFetcher,
+  useNavigation,
 } from "react-router";
 import { authenticate } from "../shopify.server";
 import stylesHref from "../styles/orders-dashboard.css?url";
@@ -30,6 +31,29 @@ const FULFILLMENT_ORDER: Record<string, number> = {
   RESTOCKED: 6,
 };
 
+const DEFAULT_VISIBLE_COLUMNS = [
+  "name",
+  "items",
+  "customer",
+  "city",
+  "payment",
+  "fulfillment",
+  "deliveryDate",
+  "timeWindow",
+  "total",
+  "actions",
+];
+
+const MOBILE_VISIBLE_COLUMNS = [
+  "name",
+  "customer",
+  "city",
+  "deliveryDate",
+  "timeWindow",
+  "fulfillment",
+  "actions",
+];
+
 function parseTimeWindowHour(tw: string): number {
   if (!tw || tw === "—") return 999;
   const colonMatch = tw.match(/^(\d{1,2}):(\d{2})/);
@@ -54,6 +78,13 @@ function parseDateValue(raw: string | null | undefined): number {
     parseInt(parts[1], 10) - 1,
     parseInt(parts[2], 10),
   ).getTime();
+}
+
+function toLocalISODate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -263,6 +294,12 @@ function financialStatusTone(status: string): BadgeTone {
   return "neutral";
 }
 
+function isUnpaidStatus(status: string): boolean {
+  return new Set(["pending", "authorized", "partially_paid"]).has(
+    (status || "").toLowerCase(),
+  );
+}
+
 function fulfillmentStatusTone(status: string): BadgeTone {
   const s = status.toUpperCase();
   if (s === "FULFILLED") return "neutral";
@@ -272,6 +309,12 @@ function fulfillmentStatusTone(status: string): BadgeTone {
     return "caution";
   if (s === "RESTOCKED") return "neutral";
   return "neutral";
+}
+
+function isOpenFulfillmentStatus(status: string): boolean {
+  return new Set(["UNFULFILLED", "ON_HOLD", "SCHEDULED"]).has(
+    (status || "").toUpperCase(),
+  );
 }
 
 function formatStatusLabel(status: string): string {
@@ -435,9 +478,16 @@ function getDeliveryRelativeLabel(rawISO: string, todayISO: string): string {
   const diffDays = Math.round((orderTs - todayTs) / 86400000);
   if (diffDays === 0) return "Today";
   if (diffDays === 1) return "Tomorrow";
-  if (diffDays === -1) return "Yesterday";
   if (diffDays > 1) return `In ${diffDays} days`;
+  if (diffDays === -1) return "Yesterday";
   return `${Math.abs(diffDays)} days ago`;
+}
+
+function isDeliveryOverdue(rawISO: string, todayISO: string): boolean {
+  if (!rawISO || rawISO === "—") return false;
+  const todayTs = parseDateValue(todayISO);
+  const orderTs = parseDateValue(rawISO);
+  return isFinite(todayTs) && isFinite(orderTs) && orderTs < todayTs;
 }
 
 // ─── Sortable column header ──────────────────────────────────────────────────
@@ -1150,6 +1200,14 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
   const phone = getOrderPhone(order);
   const rawDate = getDeliveryDateValue(order);
   const deliveryDate = rawDate !== "—" ? formatDeliveryDate(rawDate) : "—";
+  const todayISO = toLocalISODate(new Date());
+  const isOpenOrder = isOpenFulfillmentStatus(order.displayFulfillmentStatus);
+  const deliveryRelative =
+    rawDate !== "—" && isOpenOrder
+      ? getDeliveryRelativeLabel(rawDate, todayISO)
+      : "";
+  const deliveryOverdue =
+    rawDate !== "—" && isOpenOrder && isDeliveryOverdue(rawDate, todayISO);
   const timeWindow = getDeliveryTimeValue(order);
   const addr = order.shippingAddress;
   const fullAddress = getFullShippingAddress(order);
@@ -1176,6 +1234,22 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
       // clipboard unavailable — silently skip
     }
   };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+
+    // Lock body scroll while drawer is open
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [onClose]);
 
   return (
     <>
@@ -1224,7 +1298,18 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
             <p className="ods-section-title">Delivery</p>
             <dl className="ods-dl">
               <dt className="ods-dt">Date</dt>
-              <dd className="ods-dd">{deliveryDate}</dd>
+              <dd className="ods-dd">
+                <span className="ods-drawer-delivery-date">
+                  <span>{deliveryDate}</span>
+                  {deliveryRelative && (
+                    <span
+                      className={`ods-delivery-relative${deliveryOverdue ? " ods-delivery-relative--overdue" : ""}`}
+                    >
+                      {deliveryRelative}
+                    </span>
+                  )}
+                </span>
+              </dd>
               <dt className="ods-dt">Time window</dt>
               <dd className="ods-dd">{timeWindow}</dd>
               <dt className="ods-dt">Address</dt>
@@ -1244,11 +1329,9 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
             </dl>
             <div className="ods-drawer-actions">
               <button className="ods-action-link" onClick={handleCopy}>
-                📋 Copy all delivery info
+                Copy all delivery info
               </button>
-              {copySuccess && (
-                <span className="ods-copy-success">✓ Copied!</span>
-              )}
+              {copySuccess && <span className="ods-copy-success">Copied.</span>}
             </div>
           </div>
 
@@ -1266,12 +1349,12 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
             <div className="ods-drawer-actions">
               {phone !== "—" && (
                 <a href={`tel:${phone}`} className="ods-action-link">
-                  📞 Call
+                  Call
                 </a>
               )}
               {phone !== "—" && (
                 <a href={`sms:${phone}`} className="ods-action-link">
-                  💬 Text
+                  Text
                 </a>
               )}
               {customerId && (
@@ -1279,7 +1362,7 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
                   href={`shopify://admin/customers/${customerId}`}
                   className="ods-action-link"
                 >
-                  View customer →
+                  View customer
                 </a>
               )}
             </div>
@@ -1334,7 +1417,7 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
                 href={`shopify://admin/orders/${orderId}`}
                 className="ods-action-link"
               >
-                Open in Shopify Admin ↗
+                Open in Shopify Admin
               </a>
             </div>
           </div>
@@ -1349,11 +1432,12 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
 function Extension() {
   const loaderData = useLoaderData() as LoaderData;
   const navigate = useNavigate();
+  const navigation = useNavigation();
   const [searchParams] = useSearchParams();
 
   const orders = loaderData.orders;
   const pageInfo = loaderData.pageInfo;
-  const loading = false;
+  const loading = navigation.state === "loading";
   const deliveryDateFilter = loaderData.deliveryDateParam || "";
 
   const [error] = useState<string | null>(
@@ -1384,19 +1468,25 @@ function Extension() {
 
   // Column visibility state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
-    new Set([
-      "name",
-      "items",
-      "customer",
-      "city",
-      "payment",
-      "fulfillment",
-      "deliveryDate",
-      "timeWindow",
-      "total",
-      "actions",
-    ]),
+    new Set(DEFAULT_VISIBLE_COLUMNS),
   );
+
+  const handleCloseDrawer = useCallback(() => setSelectedOrder(null), []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mediaQuery = window.matchMedia("(max-width: 640px)");
+    const handleResize = (e: MediaQueryListEvent | MediaQueryList) => {
+      if (e.matches) {
+        setVisibleColumns(new Set(MOBILE_VISIBLE_COLUMNS));
+      } else {
+        setVisibleColumns(new Set(DEFAULT_VISIBLE_COLUMNS));
+      }
+    };
+    handleResize(mediaQuery); // Run immediately
+    mediaQuery.addEventListener("change", handleResize); // Listen for resizes
+    return () => mediaQuery.removeEventListener("change", handleResize);
+  }, []);
 
   const subtitleDate = useMemo(
     () =>
@@ -1411,10 +1501,10 @@ function Extension() {
   // Stable date references for tab filtering (computed once per mount)
   const dateRefs = useMemo(() => {
     const now = new Date();
-    const todayISO = now.toISOString().split("T")[0];
+    const todayISO = toLocalISODate(now);
     const tom = new Date(now);
     tom.setDate(now.getDate() + 1);
-    const tomorrowISO = tom.toISOString().split("T")[0];
+    const tomorrowISO = toLocalISODate(tom);
     const dow = now.getDay();
     const monday = new Date(now);
     monday.setDate(now.getDate() + (dow === 0 ? -6 : 1 - dow));
@@ -1423,8 +1513,8 @@ function Extension() {
     return {
       todayISO,
       tomorrowISO,
-      startWeekISO: monday.toISOString().split("T")[0],
-      endWeekISO: sunday.toISOString().split("T")[0],
+      startWeekISO: toLocalISODate(monday),
+      endWeekISO: toLocalISODate(sunday),
     };
   }, []);
 
@@ -1472,6 +1562,7 @@ function Extension() {
     setTimeWindowFilter("");
     setSelectedIds(new Set());
     setActiveTab("all");
+    setSortState({ column: null, direction: "asc" });
     navigate("?", { replace: true });
   };
 
@@ -1632,13 +1723,10 @@ function Extension() {
   }, [displayedOrders]);
 
   const { kpiUnpaidCount, kpiUnpaidTotal } = useMemo(() => {
-    const unpaidStatuses = new Set(["pending", "authorized", "partially_paid"]);
     let total = 0,
       currency = "";
     const count = displayedOrders.filter((o) => {
-      const match = unpaidStatuses.has(
-        (o.displayFinancialStatus || "").toLowerCase(),
-      );
+      const match = isUnpaidStatus(o.displayFinancialStatus);
       if (match && o.currentTotalPriceSet?.shopMoney) {
         total += parseFloat(o.currentTotalPriceSet.shopMoney.amount) || 0;
         if (!currency) currency = o.currentTotalPriceSet.shopMoney.currencyCode;
@@ -1702,7 +1790,6 @@ function Extension() {
   // ── Tab counts (for badge pills) ──────────────────────────────────────────
 
   const tabCounts = useMemo(() => {
-    const unpaidStatuses = new Set(["pending", "authorized", "partially_paid"]);
     return {
       today: orders.filter((o) => getDeliveryDateValue(o) === dateRefs.todayISO)
         .length,
@@ -1718,9 +1805,8 @@ function Extension() {
       unfulfilled: orders.filter(
         (o) => o.displayFulfillmentStatus?.toUpperCase() === "UNFULFILLED",
       ).length,
-      unpaid: orders.filter((o) =>
-        unpaidStatuses.has((o.displayFinancialStatus || "").toLowerCase()),
-      ).length,
+      unpaid: orders.filter((o) => isUnpaidStatus(o.displayFinancialStatus))
+        .length,
     };
   }, [orders, dateRefs]);
 
@@ -1750,7 +1836,7 @@ function Extension() {
       ].join(",");
     });
     const csv = [headers.join(","), ...rows].join("\n");
-    const today = new Date().toISOString().split("T")[0];
+    const today = toLocalISODate(new Date());
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1910,6 +1996,14 @@ function Extension() {
     { id: "unfulfilled", label: "Unfulfilled", count: tabCounts.unfulfilled },
     { id: "unpaid", label: "Unpaid", count: tabCounts.unpaid },
   ];
+
+  const hasActiveFilters = Boolean(
+    searchTerm.trim() ||
+    timeWindowFilter ||
+    deliveryDateFilter ||
+    activeTab !== "all",
+  );
+  const hasActiveViewControls = Boolean(hasActiveFilters || sortState.column);
 
   return (
     <s-page
@@ -2254,7 +2348,8 @@ function Extension() {
               <s-paragraph>
                 This creates a real Shopify fulfillment for {selectedCount}{" "}
                 {selectedCount === 1 ? "order" : "orders"}. Customers will
-                receive a notification email if &quot;Notify customer&quot; is enabled.
+                receive a notification email if &quot;Notify customer&quot; is
+                enabled.
               </s-paragraph>
             </s-banner>
             <s-text-field
@@ -2478,7 +2573,15 @@ function Extension() {
 
       {/* ── KPI grid ─────────────────────────────────────────────────────────── */}
       <div className="ods-kpi-grid">
-        <div className="ods-kpi-card">
+        <div
+          className="ods-kpi-card ods-kpi-card--clickable"
+          onClick={() => setActiveTab("all")}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) =>
+            (e.key === "Enter" || e.key === " ") && setActiveTab("all")
+          }
+        >
           <p className="ods-kpi-label">Orders</p>
           <p className="ods-kpi-value" aria-live="polite">
             {kpiOrderCount}
@@ -2498,7 +2601,15 @@ function Extension() {
             <p className="ods-kpi-sublabel">• {kpiAvgRevenue}</p>
           )}
         </div>
-        <div className="ods-kpi-card">
+        <div
+          className="ods-kpi-card ods-kpi-card--clickable"
+          onClick={() => setActiveTab("unpaid")}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) =>
+            (e.key === "Enter" || e.key === " ") && setActiveTab("unpaid")
+          }
+        >
           <p className="ods-kpi-label">Unpaid</p>
           <p
             className={`ods-kpi-value${kpiUnpaidCount > 0 ? " ods-kpi-value--danger" : ""}`}
@@ -2514,7 +2625,15 @@ function Extension() {
             </p>
           )}
         </div>
-        <div className="ods-kpi-card">
+        <div
+          className="ods-kpi-card ods-kpi-card--clickable"
+          onClick={() => setActiveTab("unfulfilled")}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) =>
+            (e.key === "Enter" || e.key === " ") && setActiveTab("unfulfilled")
+          }
+        >
           <p className="ods-kpi-label">Unfulfilled</p>
           <p
             className={`ods-kpi-value${kpiUnfulfilledCount > 0 ? " ods-kpi-value--danger" : ""}`}
@@ -2566,7 +2685,11 @@ function Extension() {
         {/* ── Table section ────────────────────────────────────────────────────── */}
         <s-section id="orders-table-section" padding="none">
           {selectedCount > 0 && (
-            <div id="selection-bar" className="ods-selection-bar">
+            <div
+              id="selection-bar"
+              className="ods-selection-bar"
+              aria-busy={isSubmitting}
+            >
               <span className="ods-selection-count">
                 {selectedCount} selected
               </span>
@@ -2593,514 +2716,573 @@ function Extension() {
               >
                 Clear selection
               </s-button>
+              {isSubmitting && (
+                <span className="ods-selection-status" aria-live="polite">
+                  Submitting selected orders...
+                </span>
+              )}
             </div>
           )}
 
-          <s-table
-            id="orders-table"
-            paginate={true}
-            loading={loading}
-            hasNextPage={pageInfo?.hasNextPage || false}
-            hasPreviousPage={pageInfo?.hasPreviousPage || false}
-            onNextPage={handleNextPage}
-            onPreviousPage={handlePreviousPage}
-          >
-            {/* Toolbar — single compact row */}
-            <div slot="filters" className="ods-toolbar">
-              <s-search-field
-                id="search-field"
-                label="Search orders"
-                labelAccessibilityVisibility="exclusive"
-                placeholder="Search by order, customer, phone, city"
-                value={searchTerm}
-                onInput={handleSearchInput}
-                onChange={handleSearchInput}
-              />
-              <s-date-field
-                id="toolbar-delivery-date-filter"
-                label="Delivery date"
-                labelAccessibilityVisibility="exclusive"
-                value={deliveryDateFilter}
-                onInput={(e: Event) => handleDateChange(getSafeEventValue(e))}
-                onChange={(e: Event) => handleDateChange(getSafeEventValue(e))}
-              />
-              <s-select
-                id="toolbar-time-slot-filter"
-                label="Time slot"
-                labelAccessibilityVisibility="exclusive"
-                value={timeWindowFilter}
-                onChange={(e: Event) => {
-                  setTimeWindowFilter(getSafeEventValue(e));
-                  setSelectedIds(new Set());
-                }}
-              >
-                <s-option value="">All time slots</s-option>
-                <s-option value="9AM-12PM">9AM-12PM</s-option>
-                <s-option value="12PM-3PM">12PM-3PM</s-option>
-                <s-option value="3PM-6PM">3PM-6PM</s-option>
-                <s-option value="6PM-11PM">6PM-11PM</s-option>
-                <s-option value="8:00 AM - 1:00 PM">8:00 AM - 1:00 PM</s-option>
-                <s-option value="1:00 PM - 7:00 PM">1:00 PM - 7:00 PM</s-option>
-              </s-select>
-              <s-button variant="tertiary" onClick={handleClearFilters}>
-                Clear all
-              </s-button>
-              <s-button
-                variant="secondary"
-                icon={sortState.column ? "sort-ascending" : "sort"}
-                commandFor="sort-menu"
-                accessibilityLabel="Sort orders"
-              >
-                {sortLabel}
-              </s-button>
-              <s-button
-                variant="secondary"
-                commandFor="modal-columns"
-                accessibilityLabel="Configure columns"
-              >
-                Columns
-              </s-button>
-            </div>
+          <div className="ods-table-frame">
+            <s-table
+              id="orders-table"
+              paginate={true}
+              loading={loading}
+              hasNextPage={pageInfo?.hasNextPage || false}
+              hasPreviousPage={pageInfo?.hasPreviousPage || false}
+              onNextPage={handleNextPage}
+              onPreviousPage={handlePreviousPage}
+            >
+              {/* Toolbar — single compact row */}
+              <div slot="filters" className="ods-toolbar">
+                <div className="ods-toolbar-search">
+                  <s-search-field
+                    id="search-field"
+                    label="Search orders"
+                    labelAccessibilityVisibility="exclusive"
+                    placeholder="Search by order, customer, phone, city"
+                    value={searchTerm}
+                    onInput={handleSearchInput}
+                    onChange={handleSearchInput}
+                  />
+                </div>
+                <div className="ods-toolbar-date">
+                  <s-date-field
+                    id="toolbar-delivery-date-filter"
+                    label="Delivery date"
+                    labelAccessibilityVisibility="exclusive"
+                    value={deliveryDateFilter}
+                    onInput={(e: Event) =>
+                      handleDateChange(getSafeEventValue(e))
+                    }
+                    onChange={(e: Event) =>
+                      handleDateChange(getSafeEventValue(e))
+                    }
+                  />
+                </div>
+                <div className="ods-toolbar-slot">
+                  <s-select
+                    id="toolbar-time-slot-filter"
+                    label="Time slot"
+                    labelAccessibilityVisibility="exclusive"
+                    value={timeWindowFilter}
+                    onChange={(e: Event) => {
+                      setTimeWindowFilter(getSafeEventValue(e));
+                      setSelectedIds(new Set());
+                    }}
+                  >
+                    <s-option value="">All time slots</s-option>
+                    <s-option value="9AM-12PM">9AM-12PM</s-option>
+                    <s-option value="12PM-3PM">12PM-3PM</s-option>
+                    <s-option value="3PM-6PM">3PM-6PM</s-option>
+                    <s-option value="6PM-11PM">6PM-11PM</s-option>
+                    <s-option value="8:00 AM - 1:00 PM">
+                      8:00 AM - 1:00 PM
+                    </s-option>
+                    <s-option value="1:00 PM - 7:00 PM">
+                      1:00 PM - 7:00 PM
+                    </s-option>
+                  </s-select>
+                </div>
+                <div className="ods-toolbar-actions">
+                  <s-button
+                    variant={hasActiveViewControls ? "secondary" : "tertiary"}
+                    onClick={handleClearFilters}
+                    disabled={!hasActiveViewControls}
+                  >
+                    Reset
+                  </s-button>
+                  <s-button
+                    variant="secondary"
+                    icon={sortState.column ? "sort-ascending" : "sort"}
+                    commandFor="sort-menu"
+                    accessibilityLabel="Sort orders"
+                  >
+                    {sortLabel}
+                  </s-button>
+                  <s-button
+                    variant="secondary"
+                    commandFor="modal-columns"
+                    accessibilityLabel="Configure columns"
+                  >
+                    Columns
+                  </s-button>
+                </div>
+              </div>
 
-            {/* Table header */}
-            <s-table-header-row id="orders-header-row">
-              <s-table-header id="header-select" listSlot="kicker">
-                <s-checkbox
-                  id="checkbox-select-all"
-                  accessibilityLabel="Select all orders"
-                  checked={allSelected}
-                  indeterminate={someSelected}
-                  onChange={(e: Event) =>
-                    handleToggleAll(
-                      (e.currentTarget as HTMLInputElement).checked,
-                    )
-                  }
-                />
-              </s-table-header>
-              {visibleColumns.has("name") && (
-                <s-table-header id="header-order" listSlot="primary">
-                  Order
-                </s-table-header>
-              )}
-              {visibleColumns.has("items") && (
-                <s-table-header id="header-item" listSlot="labeled">
-                  Items
-                </s-table-header>
-              )}
-              {visibleColumns.has("customer") && (
-                <s-table-header id="header-customer" listSlot="secondary">
-                  Customer
-                </s-table-header>
-              )}
-              {visibleColumns.has("city") && (
-                <SortableHeader
-                  id="header-city"
-                  column="city"
-                  label="City"
-                  sortState={sortState}
-                  onSort={handleSort}
-                  listSlot="labeled"
-                />
-              )}
-              {visibleColumns.has("payment") && (
-                <s-table-header id="header-payment" listSlot="labeled">
-                  Payment
-                </s-table-header>
-              )}
-              {visibleColumns.has("fulfillment") && (
-                <SortableHeader
-                  id="header-fulfillment"
-                  column="fulfillment"
-                  label="Fulfillment"
-                  sortState={sortState}
-                  onSort={handleSort}
-                  listSlot="labeled"
-                />
-              )}
-              {visibleColumns.has("deliveryDate") && (
-                <SortableHeader
-                  id="header-delivery-date"
-                  column="deliveryDate"
-                  label="Delivery date"
-                  sortState={sortState}
-                  onSort={handleSort}
-                  listSlot="labeled"
-                />
-              )}
-              {visibleColumns.has("timeWindow") && (
-                <SortableHeader
-                  id="header-time-window"
-                  column="timeWindow"
-                  label="Time window"
-                  sortState={sortState}
-                  onSort={handleSort}
-                  listSlot="labeled"
-                />
-              )}
-              {visibleColumns.has("total") && (
-                <s-table-header id="header-total" listSlot="labeled">
-                  Total
-                </s-table-header>
-              )}
-              {visibleColumns.has("actions") && (
-                <s-table-header id="header-actions" listSlot="labeled">
-                  Actions
-                </s-table-header>
-              )}
-              {visibleColumns.has("tags") && (
-                <s-table-header id="header-tags" listSlot="labeled">
-                  Tags
-                </s-table-header>
-              )}
-            </s-table-header-row>
-
-            {/* Table body */}
-            <s-table-body id="orders-table-body">
-              {!loading && displayedOrders.length === 0 ? (
-                <s-table-row id="empty-row">
-                  <s-table-cell id="empty-cell">
-                    <s-stack gap="small" alignItems="center">
-                      <s-text type="strong">No orders found</s-text>
-                      <s-text color="subdued">
-                        Try adjusting your search or filters.
-                      </s-text>
-                    </s-stack>
-                  </s-table-cell>
-                </s-table-row>
-              ) : (
-                displayedOrders.map((order) => {
-                  const orderId = order.id.split("/").pop() || order.id;
-                  const isChecked: boolean = selectedIds.has(order.id);
-                  const customerName =
-                    getCustomerName(order) === "—"
-                      ? "Guest"
-                      : getCustomerName(order);
-                  const instructionText = getInstructionValue(order);
-                  const rawDeliveryDate = getDeliveryDateValue(order);
-                  const deliveryDateDisplay =
-                    rawDeliveryDate !== "—"
-                      ? formatDeliveryDate(rawDeliveryDate)
-                      : "—";
-                  const timeWindow = getDeliveryTimeValue(order);
-                  const total = order.currentTotalPriceSet
-                    ? formatMoney(
-                        order.currentTotalPriceSet.shopMoney.amount,
-                        order.currentTotalPriceSet.shopMoney.currencyCode,
+              {/* Table header */}
+              <s-table-header-row id="orders-header-row">
+                <s-table-header id="header-select" listSlot="kicker">
+                  <s-checkbox
+                    id="checkbox-select-all"
+                    accessibilityLabel="Select all orders"
+                    checked={allSelected}
+                    indeterminate={someSelected}
+                    onChange={(e: Event) =>
+                      handleToggleAll(
+                        (e.currentTarget as HTMLInputElement).checked,
                       )
-                    : "—";
+                    }
+                  />
+                </s-table-header>
+                {visibleColumns.has("name") && (
+                  <s-table-header id="header-order" listSlot="primary">
+                    Order
+                  </s-table-header>
+                )}
+                {visibleColumns.has("items") && (
+                  <s-table-header id="header-item" listSlot="labeled">
+                    Items
+                  </s-table-header>
+                )}
+                {visibleColumns.has("customer") && (
+                  <s-table-header id="header-customer" listSlot="secondary">
+                    Customer
+                  </s-table-header>
+                )}
+                {visibleColumns.has("city") && (
+                  <SortableHeader
+                    id="header-city"
+                    column="city"
+                    label="City"
+                    sortState={sortState}
+                    onSort={handleSort}
+                    listSlot="labeled"
+                  />
+                )}
+                {visibleColumns.has("deliveryDate") && (
+                  <SortableHeader
+                    id="header-delivery-date"
+                    column="deliveryDate"
+                    label="Delivery date"
+                    sortState={sortState}
+                    onSort={handleSort}
+                    listSlot="labeled"
+                  />
+                )}
+                {visibleColumns.has("timeWindow") && (
+                  <SortableHeader
+                    id="header-time-window"
+                    column="timeWindow"
+                    label="Time window"
+                    sortState={sortState}
+                    onSort={handleSort}
+                    listSlot="labeled"
+                  />
+                )}
+                {visibleColumns.has("payment") && (
+                  <s-table-header id="header-payment" listSlot="labeled">
+                    Payment
+                  </s-table-header>
+                )}
+                {visibleColumns.has("fulfillment") && (
+                  <SortableHeader
+                    id="header-fulfillment"
+                    column="fulfillment"
+                    label="Fulfillment"
+                    sortState={sortState}
+                    onSort={handleSort}
+                    listSlot="labeled"
+                  />
+                )}
+                {visibleColumns.has("total") && (
+                  <s-table-header id="header-total" listSlot="labeled">
+                    Total
+                  </s-table-header>
+                )}
+                {visibleColumns.has("actions") && (
+                  <s-table-header id="header-actions" listSlot="labeled">
+                    Actions
+                  </s-table-header>
+                )}
+                {visibleColumns.has("tags") && (
+                  <s-table-header id="header-tags" listSlot="labeled">
+                    Tags
+                  </s-table-header>
+                )}
+              </s-table-header-row>
 
-                  return (
-                    <s-table-row id={`order-row-${orderId}`} key={order.id}>
-                      {/* Checkbox */}
-                      <s-table-cell id={`cell-select-${orderId}`}>
-                        <s-checkbox
-                          id={`checkbox-row-${orderId}`}
-                          accessibilityLabel={`Select order ${order.name}`}
-                          checked={isChecked}
-                          onChange={(e: Event) =>
-                            handleToggleRow(
-                              order.id,
-                              (e.currentTarget as HTMLInputElement).checked,
-                            )
-                          }
-                        />
-                      </s-table-cell>
+              {/* Table body */}
+              <s-table-body id="orders-table-body">
+                {!loading && displayedOrders.length === 0 ? (
+                  <s-table-row id="empty-row">
+                    <s-table-cell id="empty-cell">
+                      <s-stack gap="small" alignItems="center">
+                        <s-text type="strong">
+                          {hasActiveFilters
+                            ? "No orders match this view"
+                            : "No orders found"}
+                        </s-text>
+                        <s-text color="subdued">
+                          {hasActiveFilters
+                            ? "A search, tab, delivery date, or time slot filter may be active. Use Reset to see all loaded orders."
+                            : "Orders will appear here after Shopify returns them."}
+                        </s-text>
+                      </s-stack>
+                    </s-table-cell>
+                  </s-table-row>
+                ) : (
+                  displayedOrders.map((order) => {
+                    const orderId = order.id.split("/").pop() || order.id;
+                    const isChecked: boolean = selectedIds.has(order.id);
+                    const customerName =
+                      getCustomerName(order) === "—"
+                        ? "Guest"
+                        : getCustomerName(order);
+                    const instructionText = getInstructionValue(order);
+                    const rawDeliveryDate = getDeliveryDateValue(order);
+                    const deliveryDateDisplay =
+                      rawDeliveryDate !== "—"
+                        ? formatDeliveryDate(rawDeliveryDate)
+                        : "—";
+                    const timeWindow = getDeliveryTimeValue(order);
+                    const isOpenOrder = isOpenFulfillmentStatus(
+                      order.displayFulfillmentStatus,
+                    );
+                    const deliveryRelative =
+                      rawDeliveryDate !== "—" && isOpenOrder
+                        ? getDeliveryRelativeLabel(
+                            rawDeliveryDate,
+                            dateRefs.todayISO,
+                          )
+                        : "";
+                    const deliveryOverdue =
+                      rawDeliveryDate !== "—" &&
+                      isOpenOrder &&
+                      isDeliveryOverdue(rawDeliveryDate, dateRefs.todayISO);
+                    const paymentNeedsAttention = isUnpaidStatus(
+                      order.displayFinancialStatus,
+                    );
+                    const fulfillmentNeedsAttention = isOpenOrder;
+                    const total = order.currentTotalPriceSet
+                      ? formatMoney(
+                          order.currentTotalPriceSet.shopMoney.amount,
+                          order.currentTotalPriceSet.shopMoney.currencyCode,
+                        )
+                      : "—";
 
-                      {/* Order name — opens drawer */}
-                      {visibleColumns.has("name") && (
-                        <s-table-cell id={`cell-name-${orderId}`}>
-                          <span className="ods-name-cell">
-                            <s-button
-                              id={`btn-name-${orderId}`}
-                              variant="tertiary"
-                              onClick={() => setSelectedOrder(order)}
-                              accessibilityLabel={`View order ${order.name} details`}
-                            >
-                              <s-text type="strong">{order.name}</s-text>
-                            </s-button>
-                            {instructionText !== "—" && (
-                              <span
-                                className="ods-note-icon"
-                                title={instructionText}
-                                aria-label={`Note: ${instructionText}`}
-                                role="img"
-                              >
-                                <svg
-                                  width="13"
-                                  height="13"
-                                  viewBox="0 0 14 14"
-                                  fill="none"
-                                  aria-hidden="true"
-                                  xmlns="http://www.w3.org/2000/svg"
-                                >
-                                  <rect
-                                    x="1"
-                                    y="1"
-                                    width="12"
-                                    height="12"
-                                    rx="2"
-                                    stroke="currentColor"
-                                    strokeWidth="1.4"
-                                  />
-                                  <line
-                                    x1="3.5"
-                                    y1="4.5"
-                                    x2="10.5"
-                                    y2="4.5"
-                                    stroke="currentColor"
-                                    strokeWidth="1.2"
-                                    strokeLinecap="round"
-                                  />
-                                  <line
-                                    x1="3.5"
-                                    y1="7"
-                                    x2="10.5"
-                                    y2="7"
-                                    stroke="currentColor"
-                                    strokeWidth="1.2"
-                                    strokeLinecap="round"
-                                  />
-                                  <line
-                                    x1="3.5"
-                                    y1="9.5"
-                                    x2="7.5"
-                                    y2="9.5"
-                                    stroke="currentColor"
-                                    strokeWidth="1.2"
-                                    strokeLinecap="round"
-                                  />
-                                </svg>
-                              </span>
-                            )}
-                          </span>
+                    return (
+                      <s-table-row id={`order-row-${orderId}`} key={order.id}>
+                        {/* Checkbox */}
+                        <s-table-cell id={`cell-select-${orderId}`}>
+                          <s-checkbox
+                            id={`checkbox-row-${orderId}`}
+                            accessibilityLabel={`Select order ${order.name}`}
+                            checked={isChecked}
+                            onChange={(e: Event) =>
+                              handleToggleRow(
+                                order.id,
+                                (e.currentTarget as HTMLInputElement).checked,
+                              )
+                            }
+                          />
                         </s-table-cell>
-                      )}
 
-                      {/* Items — thumbnail + summary */}
-                      {visibleColumns.has("items") && (
-                        <s-table-cell id={`cell-item-${orderId}`}>
-                          {(() => {
-                            const items = order.lineItems?.edges || [];
-                            const itemCount = items.length;
-                            const totalQty = items.reduce(
-                              (sum, item) => sum + (item.node.quantity || 0),
-                              0,
-                            );
-                            const hasMore = itemCount >= 10;
-                            const displayText =
-                              itemCount === 0
-                                ? "—"
-                                : itemCount === 1
-                                  ? `×${totalQty}`
-                                  : hasMore
-                                    ? "10+ items"
-                                    : `${itemCount} items`;
-                            return (
+                        {/* Order name — opens drawer */}
+                        {visibleColumns.has("name") && (
+                          <s-table-cell id={`cell-name-${orderId}`}>
+                            <span className="ods-name-cell">
                               <s-button
+                                id={`btn-name-${orderId}`}
                                 variant="tertiary"
-                                id={`btn-item-${orderId}`}
                                 onClick={() => setSelectedOrder(order)}
+                                accessibilityLabel={`View order ${order.name} details`}
                               >
-                                <s-stack
-                                  direction="inline"
-                                  gap="small"
-                                  alignItems="center"
-                                >
-                                  <s-thumbnail
-                                    id={`thumbnail-item-${orderId}`}
-                                    src={getFirstItemImageUrl(order)}
-                                    alt={getFirstItemAltText(order)}
-                                    size="small-200"
-                                  />
-                                  <s-text>{displayText}</s-text>
-                                </s-stack>
+                                <s-text type="strong">{order.name}</s-text>
                               </s-button>
-                            );
-                          })()}
-                        </s-table-cell>
-                      )}
-
-                      {/* Customer */}
-                      {visibleColumns.has("customer") && (
-                        <s-table-cell id={`cell-customer-${orderId}`}>
-                          <s-button
-                            variant="tertiary"
-                            id={`btn-customer-${orderId}`}
-                            onClick={() => setSelectedOrder(order)}
-                          >
-                            <span className="ods-customer-cell">
-                              <span className="ods-customer-name">
-                                {customerName}
-                              </span>
-                              {order.customer?.defaultEmailAddress
-                                ?.emailAddress && (
-                                <span className="ods-customer-email">
-                                  {
-                                    order.customer.defaultEmailAddress
-                                      .emailAddress
-                                  }
+                              {instructionText !== "—" && (
+                                <span
+                                  className="ods-note-icon"
+                                  title={instructionText}
+                                  aria-label={`Note: ${instructionText}`}
+                                  role="img"
+                                >
+                                  <svg
+                                    width="13"
+                                    height="13"
+                                    viewBox="0 0 14 14"
+                                    fill="none"
+                                    aria-hidden="true"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                  >
+                                    <rect
+                                      x="1"
+                                      y="1"
+                                      width="12"
+                                      height="12"
+                                      rx="2"
+                                      stroke="currentColor"
+                                      strokeWidth="1.4"
+                                    />
+                                    <line
+                                      x1="3.5"
+                                      y1="4.5"
+                                      x2="10.5"
+                                      y2="4.5"
+                                      stroke="currentColor"
+                                      strokeWidth="1.2"
+                                      strokeLinecap="round"
+                                    />
+                                    <line
+                                      x1="3.5"
+                                      y1="7"
+                                      x2="10.5"
+                                      y2="7"
+                                      stroke="currentColor"
+                                      strokeWidth="1.2"
+                                      strokeLinecap="round"
+                                    />
+                                    <line
+                                      x1="3.5"
+                                      y1="9.5"
+                                      x2="7.5"
+                                      y2="9.5"
+                                      stroke="currentColor"
+                                      strokeWidth="1.2"
+                                      strokeLinecap="round"
+                                    />
+                                  </svg>
                                 </span>
                               )}
                             </span>
-                          </s-button>
-                        </s-table-cell>
-                      )}
+                          </s-table-cell>
+                        )}
 
-                      {/* City */}
-                      {visibleColumns.has("city") && (
-                        <s-table-cell id={`cell-city-${orderId}`}>
-                          <s-text>{getCity(order)}</s-text>
-                        </s-table-cell>
-                      )}
-
-                      {/* Payment */}
-                      {visibleColumns.has("payment") && (
-                        <s-table-cell id={`cell-payment-${orderId}`}>
-                          <s-badge
-                            tone={financialStatusTone(
-                              order.displayFinancialStatus,
-                            )}
-                          >
-                            {formatStatusLabel(order.displayFinancialStatus)}
-                          </s-badge>
-                        </s-table-cell>
-                      )}
-
-                      {/* Fulfillment */}
-                      {visibleColumns.has("fulfillment") && (
-                        <s-table-cell id={`cell-fulfillment-${orderId}`}>
-                          <s-badge
-                            tone={fulfillmentStatusTone(
-                              order.displayFulfillmentStatus,
-                            )}
-                          >
-                            {formatStatusLabel(order.displayFulfillmentStatus)}
-                          </s-badge>
-                        </s-table-cell>
-                      )}
-
-                      {/* Delivery date */}
-                      {visibleColumns.has("deliveryDate") && (
-                        <s-table-cell id={`cell-delivery-${orderId}`}>
-                          <span className="ods-delivery-cell">
-                            <s-text
-                              color={
-                                rawDeliveryDate !== "—" ? undefined : "subdued"
-                              }
-                            >
-                              {deliveryDateDisplay}
-                            </s-text>
-                            {rawDeliveryDate !== "—" && (
-                              <span className="ods-delivery-relative">
-                                {getDeliveryRelativeLabel(
-                                  rawDeliveryDate,
-                                  dateRefs.todayISO,
-                                )}
-                              </span>
-                            )}
-                          </span>
-                        </s-table-cell>
-                      )}
-
-                      {/* Time window */}
-                      {visibleColumns.has("timeWindow") && (
-                        <s-table-cell id={`cell-time-window-${orderId}`}>
-                          <s-text
-                            color={timeWindow === "—" ? "subdued" : undefined}
-                          >
-                            {timeWindow}
-                          </s-text>
-                        </s-table-cell>
-                      )}
-
-                      {/* Total */}
-                      {visibleColumns.has("total") && (
-                        <s-table-cell id={`cell-total-${orderId}`}>
-                          <s-text>{total}</s-text>
-                        </s-table-cell>
-                      )}
-
-                      {/* Actions — opens drawer */}
-                      {visibleColumns.has("actions") && (
-                        <s-table-cell id={`cell-action-${orderId}`}>
-                          <s-button
-                            id={`btn-view-${orderId}`}
-                            variant="tertiary"
-                            icon="view"
-                            onClick={() => setSelectedOrder(order)}
-                            accessibilityLabel={`View details for order ${order.name}`}
-                          />
-                        </s-table-cell>
-                      )}
-
-                      {/* Tags */}
-                      {visibleColumns.has("tags") && (
-                        <s-table-cell id={`cell-tags-${orderId}`}>
-                          {(() => {
-                            const meaningful = getMeaningfulTags(
-                              order.tags || [],
-                            );
-                            if (meaningful.length === 0) {
-                              return <s-text color="subdued">—</s-text>;
-                            }
-                            const attrCount = meaningful.length;
-                            return (
-                              <>
+                        {/* Items — thumbnail + summary */}
+                        {visibleColumns.has("items") && (
+                          <s-table-cell id={`cell-item-${orderId}`}>
+                            {(() => {
+                              const items = order.lineItems?.edges || [];
+                              const itemCount = items.length;
+                              const totalQty = items.reduce(
+                                (sum, item) => sum + (item.node.quantity || 0),
+                                0,
+                              );
+                              const hasMore = itemCount >= 10;
+                              const displayText =
+                                itemCount === 0
+                                  ? "—"
+                                  : itemCount === 1
+                                    ? `×${totalQty}`
+                                    : hasMore
+                                      ? "10+ items"
+                                      : `${itemCount} items`;
+                              return (
                                 <s-button
                                   variant="tertiary"
-                                  id={`btn-tags-${orderId}`}
-                                  commandFor={`modal-tags-${orderId}`}
-                                  command="--show"
+                                  id={`btn-item-${orderId}`}
+                                  onClick={() => setSelectedOrder(order)}
                                 >
-                                  {attrCount}{" "}
-                                  {attrCount === 1 ? "attribute" : "attributes"}
-                                </s-button>
-                                <s-modal
-                                  id={`modal-tags-${orderId}`}
-                                  heading="Attributes"
-                                  size="small"
-                                >
-                                  <s-box padding="base">
-                                    <s-stack direction="inline" gap="small">
-                                      {meaningful.map((tag) => (
-                                        <s-chip
-                                          id={`tag-${orderId}-${tag}`}
-                                          key={tag}
-                                        >
-                                          {tagDisplayLabel(tag)}
-                                        </s-chip>
-                                      ))}
-                                    </s-stack>
-                                  </s-box>
-                                  <s-button
-                                    slot="primary-action"
-                                    commandFor={`modal-tags-${orderId}`}
-                                    command="--hide"
+                                  <s-stack
+                                    direction="inline"
+                                    gap="small"
+                                    alignItems="center"
                                   >
-                                    Close
+                                    <s-thumbnail
+                                      id={`thumbnail-item-${orderId}`}
+                                      src={getFirstItemImageUrl(order)}
+                                      alt={getFirstItemAltText(order)}
+                                      size="small-200"
+                                    />
+                                    <s-text>{displayText}</s-text>
+                                  </s-stack>
+                                </s-button>
+                              );
+                            })()}
+                          </s-table-cell>
+                        )}
+
+                        {/* Customer */}
+                        {visibleColumns.has("customer") && (
+                          <s-table-cell id={`cell-customer-${orderId}`}>
+                            <s-button
+                              variant="tertiary"
+                              id={`btn-customer-${orderId}`}
+                              onClick={() => setSelectedOrder(order)}
+                            >
+                              <span className="ods-customer-cell">
+                                <span className="ods-customer-name">
+                                  {customerName}
+                                </span>
+                                {order.customer?.defaultEmailAddress
+                                  ?.emailAddress && (
+                                  <span className="ods-customer-email">
+                                    {
+                                      order.customer.defaultEmailAddress
+                                        .emailAddress
+                                    }
+                                  </span>
+                                )}
+                              </span>
+                            </s-button>
+                          </s-table-cell>
+                        )}
+
+                        {/* City */}
+                        {visibleColumns.has("city") && (
+                          <s-table-cell id={`cell-city-${orderId}`}>
+                            <s-text>{getCity(order)}</s-text>
+                          </s-table-cell>
+                        )}
+
+                        {/* Delivery date */}
+                        {visibleColumns.has("deliveryDate") && (
+                          <s-table-cell id={`cell-delivery-${orderId}`}>
+                            <span className="ods-delivery-cell">
+                              <span
+                                className={`ods-delivery-date-main${rawDeliveryDate === "—" ? " ods-muted" : ""}`}
+                              >
+                                {deliveryDateDisplay}
+                              </span>
+                              {deliveryRelative && (
+                                <span
+                                  className={`ods-delivery-relative${deliveryOverdue ? " ods-delivery-relative--overdue" : ""}`}
+                                >
+                                  {deliveryRelative}
+                                </span>
+                              )}
+                            </span>
+                          </s-table-cell>
+                        )}
+
+                        {/* Time window */}
+                        {visibleColumns.has("timeWindow") && (
+                          <s-table-cell id={`cell-time-window-${orderId}`}>
+                            <span
+                              className={`ods-time-window${timeWindow === "—" ? " ods-muted" : ""}`}
+                            >
+                              {timeWindow}
+                            </span>
+                          </s-table-cell>
+                        )}
+
+                        {/* Payment */}
+                        {visibleColumns.has("payment") && (
+                          <s-table-cell id={`cell-payment-${orderId}`}>
+                            <span
+                              className={`ods-status-cell${paymentNeedsAttention ? " ods-status-cell--attention" : ""}`}
+                            >
+                              <s-badge
+                                tone={financialStatusTone(
+                                  order.displayFinancialStatus,
+                                )}
+                              >
+                                {formatStatusLabel(
+                                  order.displayFinancialStatus,
+                                )}
+                              </s-badge>
+                            </span>
+                          </s-table-cell>
+                        )}
+
+                        {/* Fulfillment */}
+                        {visibleColumns.has("fulfillment") && (
+                          <s-table-cell id={`cell-fulfillment-${orderId}`}>
+                            <span
+                              className={`ods-status-cell${fulfillmentNeedsAttention ? " ods-status-cell--attention" : ""}`}
+                            >
+                              <s-badge
+                                tone={fulfillmentStatusTone(
+                                  order.displayFulfillmentStatus,
+                                )}
+                              >
+                                {formatStatusLabel(
+                                  order.displayFulfillmentStatus,
+                                )}
+                              </s-badge>
+                            </span>
+                          </s-table-cell>
+                        )}
+
+                        {/* Total */}
+                        {visibleColumns.has("total") && (
+                          <s-table-cell id={`cell-total-${orderId}`}>
+                            <s-text>{total}</s-text>
+                          </s-table-cell>
+                        )}
+
+                        {/* Actions — opens drawer */}
+                        {visibleColumns.has("actions") && (
+                          <s-table-cell id={`cell-action-${orderId}`}>
+                            <s-button
+                              id={`btn-view-${orderId}`}
+                              variant="tertiary"
+                              icon="view"
+                              onClick={() => setSelectedOrder(order)}
+                              accessibilityLabel={`View details for order ${order.name}`}
+                            />
+                          </s-table-cell>
+                        )}
+
+                        {/* Tags */}
+                        {visibleColumns.has("tags") && (
+                          <s-table-cell id={`cell-tags-${orderId}`}>
+                            {(() => {
+                              const meaningful = getMeaningfulTags(
+                                order.tags || [],
+                              );
+                              if (meaningful.length === 0) {
+                                return <s-text color="subdued">—</s-text>;
+                              }
+                              const attrCount = meaningful.length;
+                              return (
+                                <>
+                                  <s-button
+                                    variant="tertiary"
+                                    id={`btn-tags-${orderId}`}
+                                    commandFor={`modal-tags-${orderId}`}
+                                    command="--show"
+                                  >
+                                    {attrCount}{" "}
+                                    {attrCount === 1
+                                      ? "attribute"
+                                      : "attributes"}
                                   </s-button>
-                                </s-modal>
-                              </>
-                            );
-                          })()}
-                        </s-table-cell>
-                      )}
-                    </s-table-row>
-                  );
-                })
-              )}
-            </s-table-body>
-          </s-table>
+                                  <s-modal
+                                    id={`modal-tags-${orderId}`}
+                                    heading="Attributes"
+                                    size="small"
+                                  >
+                                    <s-box padding="base">
+                                      <s-stack direction="inline" gap="small">
+                                        {meaningful.map((tag) => (
+                                          <s-chip
+                                            id={`tag-${orderId}-${tag}`}
+                                            key={tag}
+                                          >
+                                            {tagDisplayLabel(tag)}
+                                          </s-chip>
+                                        ))}
+                                      </s-stack>
+                                    </s-box>
+                                    <s-button
+                                      slot="primary-action"
+                                      commandFor={`modal-tags-${orderId}`}
+                                      command="--hide"
+                                    >
+                                      Close
+                                    </s-button>
+                                  </s-modal>
+                                </>
+                              );
+                            })()}
+                          </s-table-cell>
+                        )}
+                      </s-table-row>
+                    );
+                  })
+                )}
+              </s-table-body>
+            </s-table>
+          </div>
         </s-section>
       </div>
       {/* end ods-tabs-table */}
 
       {/* ── Right-side order detail drawer ──────────────────────────────────── */}
       {selectedOrder && (
-        <OrderDrawer
-          order={selectedOrder}
-          onClose={() => setSelectedOrder(null)}
-        />
+        <OrderDrawer order={selectedOrder} onClose={handleCloseDrawer} />
       )}
     </s-page>
   );

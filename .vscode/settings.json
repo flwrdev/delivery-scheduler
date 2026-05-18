@@ -1,3 +1,6 @@
 {
-    "claudeCode.useTerminal": true
+    "claudeCode.useTerminal": true,
+    "workbench.editor.autoLockGroups": {
+        "imagePreview.previewEditor": true
+    }
 }
