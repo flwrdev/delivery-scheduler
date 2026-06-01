@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { Fragment, useState, useCallback, useMemo, useEffect } from "react";
 import {
   useLoaderData,
   useNavigate,
@@ -107,6 +107,7 @@ interface Customer {
 
 interface Metafield {
   value: string;
+  jsonValue?: unknown;
 }
 
 interface ShippingAddress {
@@ -155,9 +156,13 @@ interface Order {
   deliveryTimeSlot: Metafield | null;
   customDate: Metafield | null;
   customTimeSlot: Metafield | null;
+  rescheduleHistory: Metafield | null;
   shippingAddress: ShippingAddress | null;
   note: string | null;
   currentTotalPriceSet: {
+    shopMoney: { amount: string; currencyCode: string };
+  } | null;
+  totalShippingPriceSet: {
     shopMoney: { amount: string; currencyCode: string };
   } | null;
   customAttributes: CustomAttribute[];
@@ -226,6 +231,12 @@ const GET_ORDERS_QUERY = `
               currencyCode
             }
           }
+          totalShippingPriceSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
           customAttributes {
             key
             value
@@ -241,6 +252,10 @@ const GET_ORDERS_QUERY = `
           }
           customTimeSlot: metafield(namespace: "custom", key: "time_slot") {
             value
+          }
+          rescheduleHistory: metafield(namespace: "delivery", key: "reschedule_history") {
+            value
+            jsonValue
           }
           lineItems(first: 10) {
             edges {
@@ -623,6 +638,144 @@ function buildDeliveryInfoText(order: Order): string {
   ].join("\n");
 }
 
+type RescheduleTimelineEvent = {
+  date: string;
+  timeSlot: string;
+  requestedAt: string;
+  status: string;
+};
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getStringField(
+  value: Record<string, unknown>,
+  ...keys: string[]
+): string {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return "—";
+}
+
+function getRescheduleHistorySource(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (isRecordValue(value) && Array.isArray(value.events)) return value.events;
+  if (isRecordValue(value) && Array.isArray(value.history))
+    return value.history;
+  if (typeof value !== "string" || !value.trim()) return [];
+
+  try {
+    return getRescheduleHistorySource(JSON.parse(value));
+  } catch {
+    return [];
+  }
+}
+
+function getRescheduleTimelineEvents(order: Order): RescheduleTimelineEvent[] {
+  const metafield = order.rescheduleHistory;
+  const rawEvents = [
+    ...getRescheduleHistorySource(metafield?.jsonValue),
+    ...getRescheduleHistorySource(metafield?.value),
+  ];
+  const seen = new Set<string>();
+
+  return rawEvents
+    .flatMap((event): RescheduleTimelineEvent[] => {
+      if (!isRecordValue(event)) return [];
+
+      const timelineEvent = {
+        date: getStringField(
+          event,
+          "date",
+          "toDate",
+          "newDate",
+          "deliveryDate",
+        ),
+        timeSlot: getStringField(
+          event,
+          "timeSlot",
+          "time_slot",
+          "toTimeSlot",
+          "newTimeSlot",
+          "deliveryTimeSlot",
+        ),
+        requestedAt: getStringField(
+          event,
+          "requestedAt",
+          "requested_at",
+          "rescheduledAt",
+          "createdAt",
+          "updatedAt",
+        ),
+        status: getStringField(event, "status", "rescheduleStatus"),
+      };
+
+      if (
+        timelineEvent.date === "—" &&
+        timelineEvent.timeSlot === "—" &&
+        timelineEvent.requestedAt === "—" &&
+        timelineEvent.status === "—"
+      ) {
+        return [];
+      }
+
+      const fingerprint = JSON.stringify(timelineEvent);
+      if (seen.has(fingerprint)) return [];
+      seen.add(fingerprint);
+
+      return [timelineEvent];
+    })
+    .sort((a, b) => {
+      const aTime = Date.parse(a.requestedAt);
+      const bTime = Date.parse(b.requestedAt);
+      if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0;
+      if (Number.isNaN(aTime)) return 1;
+      if (Number.isNaN(bTime)) return -1;
+      return bTime - aTime;
+    });
+}
+
+function hasRescheduleTag(order: Order): boolean {
+  return (order.tags || []).some(
+    (tag) => tag.trim().toLowerCase() === "resched",
+  );
+}
+
+function formatTimelineDelivery(date: string, timeSlot: string): string {
+  const formattedDate =
+    date !== "—" ? formatDeliveryDate(normalizeDateToISO(date) ?? date) : "—";
+
+  if (formattedDate === "—" && timeSlot === "—") return "—";
+  if (formattedDate === "—") return timeSlot;
+  if (timeSlot === "—") return formattedDate;
+  return `${formattedDate} (${timeSlot})`;
+}
+
+function formatTimelineTimestamp(value: string): string {
+  if (value === "—") return "Requested time not recorded";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatTimelineStatus(value: string): string {
+  return value === "—" ? "Status not recorded" : formatStatusLabel(value);
+}
+
 function getSearchableOrderText(order: Order): string {
   const fullName = [order.customer?.firstName, order.customer?.lastName]
     .filter(Boolean)
@@ -736,13 +889,17 @@ export const loader = async ({
     errors?: Array<{ message: string }>;
   };
 
-  return Response.json({
-    orders:
-      body.data?.orders?.edges?.map((edge: { node: Order }) => edge.node) ?? [],
-    pageInfo: body.data?.orders?.pageInfo ?? null,
-    errors: body.errors ?? null,
-    deliveryDateParam,
-  } satisfies LoaderData);
+  return Response.json(
+    {
+      orders:
+        body.data?.orders?.edges?.map((edge: { node: Order }) => edge.node) ??
+        [],
+      pageInfo: body.data?.orders?.pageInfo ?? null,
+      errors: body.errors ?? null,
+      deliveryDateParam,
+    } satisfies LoaderData,
+    { headers: { "Cache-Control": "no-store" } },
+  );
 };
 
 // ─── Bulk action mutations ────────────────────────────────────────────────────
@@ -1194,6 +1351,7 @@ interface OrderDrawerProps {
 
 function OrderDrawer({ order, onClose }: OrderDrawerProps) {
   const [copySuccess, setCopySuccess] = useState(false);
+  const [fieldCopied, setFieldCopied] = useState<string | null>(null);
 
   const orderId = order.id.split("/").pop() || order.id;
   const customerName = getCustomerName(order);
@@ -1213,6 +1371,11 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
   const fullAddress = getFullShippingAddress(order);
   const city = getCity(order);
   const attrs = order.customAttributes || [];
+  const originalDeliveryDate = getAttr(attrs, "Delivery Date");
+  const originalDeliveryTime = getAttr(attrs, "Delivery Time");
+  const rescheduleEvents = getRescheduleTimelineEvents(order);
+  const showDeliveryTimeline =
+    rescheduleEvents.length > 0 || hasRescheduleTag(order);
   const cardMessage = getAttr(attrs, "Card Message", "card_message");
   const instruction = getInstructionValue(order);
   const items = order.lineItems?.edges || [];
@@ -1224,6 +1387,25 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
     : "—";
   const email = order.customer?.defaultEmailAddress?.emailAddress || "—";
   const customerId = order.customer?.id?.split("/").pop();
+  const shippingAmount = order.totalShippingPriceSet
+    ? parseFloat(order.totalShippingPriceSet.shopMoney.amount)
+    : 0;
+  const totalAmount = order.currentTotalPriceSet
+    ? parseFloat(order.currentTotalPriceSet.shopMoney.amount)
+    : 0;
+  const currencyCode =
+    order.currentTotalPriceSet?.shopMoney.currencyCode ||
+    order.totalShippingPriceSet?.shopMoney.currencyCode ||
+    "USD";
+  const subtotalFormatted =
+    order.currentTotalPriceSet
+      ? formatMoney((totalAmount - shippingAmount).toFixed(2), currencyCode)
+      : "—";
+  const shippingFormatted =
+    order.totalShippingPriceSet
+      ? formatMoney(order.totalShippingPriceSet.shopMoney.amount, currencyCode)
+      : "—";
+  const meaningfulTags = getMeaningfulTags(order.tags || []);
 
   const handleCopy = async () => {
     try {
@@ -1234,6 +1416,20 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
       // clipboard unavailable — silently skip
     }
   };
+
+  const handleFieldCopy = useCallback(
+    async (fieldKey: string, value: string) => {
+      if (!value || value === "—") return;
+      try {
+        await navigator.clipboard.writeText(value);
+        setFieldCopied(fieldKey);
+        setTimeout(() => setFieldCopied(null), 1500);
+      } catch {
+        // clipboard unavailable — silently skip
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1313,56 +1509,195 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
               <dt className="ods-dt">Time window</dt>
               <dd className="ods-dd">{timeWindow}</dd>
               <dt className="ods-dt">Address</dt>
-              <dd className="ods-dd">{fullAddress}</dd>
+              <dd className="ods-dd ods-dd--long">{fullAddress || "—"}</dd>
               <dt className="ods-dt">City</dt>
-              <dd className="ods-dd">{city}</dd>
+              <dd className="ods-dd">{city || "—"}</dd>
               {addr?.province && (
                 <>
                   <dt className="ods-dt">Province</dt>
-                  <dd className="ods-dd">{addr.province}</dd>
+                  <dd className="ods-dd">
+                    <span
+                      className={`ods-copyable${fieldCopied === "province" ? " ods-copyable--copied" : ""}`}
+                      onClick={() => handleFieldCopy("province", addr.province!)}
+                      title="Click to copy"
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => e.key === "Enter" && handleFieldCopy("province", addr.province!)}
+                    >
+                      {addr.province}
+                    </span>
+                  </dd>
                 </>
               )}
               <dt className="ods-dt">Card message</dt>
-              <dd className="ods-dd">{cardMessage}</dd>
+              <dd className={`ods-dd${cardMessage === "—" ? " ods-dd--muted" : " ods-dd--scrollable"}`}>
+                {cardMessage !== "—" ? (
+                  <span
+                    className={`ods-copyable${fieldCopied === "cardMessage" ? " ods-copyable--copied" : ""}`}
+                    onClick={() => handleFieldCopy("cardMessage", cardMessage)}
+                    title="Click to copy"
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === "Enter" && handleFieldCopy("cardMessage", cardMessage)}
+                  >
+                    {cardMessage}
+                  </span>
+                ) : cardMessage}
+              </dd>
               <dt className="ods-dt">Instructions</dt>
-              <dd className="ods-dd">{instruction}</dd>
+              <dd className={`ods-dd${instruction === "—" ? " ods-dd--muted" : " ods-dd--scrollable"}`}>
+                {instruction !== "—" ? (
+                  <span
+                    className={`ods-copyable${fieldCopied === "instruction" ? " ods-copyable--copied" : ""}`}
+                    onClick={() => handleFieldCopy("instruction", instruction)}
+                    title="Click to copy"
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === "Enter" && handleFieldCopy("instruction", instruction)}
+                  >
+                    {instruction}
+                  </span>
+                ) : instruction}
+              </dd>
             </dl>
             <div className="ods-drawer-actions">
-              <button className="ods-action-link" onClick={handleCopy}>
+              <button className="ods-action-link ods-action-link--with-icon" onClick={handleCopy}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
+                  <rect x="7" y="2" width="6" height="3" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+                  <path d="M6 3H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M8 10h4M8 13h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
                 Copy all delivery info
               </button>
               {copySuccess && <span className="ods-copy-success">Copied.</span>}
             </div>
           </div>
 
+          {showDeliveryTimeline && (
+            <div className="ods-drawer-section">
+              <p className="ods-section-title">DELIVERY TIMELINE</p>
+              <dl className="ods-dl">
+                <dt className="ods-dt">Original delivery</dt>
+                <dd className="ods-dd">
+                  {formatTimelineDelivery(
+                    originalDeliveryDate,
+                    originalDeliveryTime,
+                  )}
+                </dd>
+                {rescheduleEvents.length > 0 ? (
+                  <>
+                    <dt className="ods-dt">Count</dt>
+                    <dd className="ods-dd">
+                      Rescheduled {rescheduleEvents.length}x
+                    </dd>
+                    {rescheduleEvents.map((event, index) => (
+                      <Fragment
+                        key={`${event.requestedAt}-${event.date}-${event.timeSlot}-${index}`}
+                      >
+                        <dt className="ods-dt">
+                          {index === 0 ? "Latest" : `Change ${index + 1}`}
+                        </dt>
+                        <dd className="ods-dd">
+                          <span className="ods-drawer-delivery-date">
+                            <span>
+                              {formatTimelineDelivery(
+                                event.date,
+                                event.timeSlot,
+                              )}
+                            </span>
+                            <span className="ods-delivery-relative">
+                              {formatTimelineTimestamp(event.requestedAt)} •{" "}
+                              {formatTimelineStatus(event.status)}
+                            </span>
+                          </span>
+                        </dd>
+                      </Fragment>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <dt className="ods-dt">Status</dt>
+                    <dd className="ods-dd">
+                      Rescheduled — history not yet recorded
+                    </dd>
+                  </>
+                )}
+              </dl>
+            </div>
+          )}
+
           {/* Customer section */}
           <div className="ods-drawer-section">
             <p className="ods-section-title">Customer</p>
             <dl className="ods-dl">
               <dt className="ods-dt">Name</dt>
-              <dd className="ods-dd">{customerName}</dd>
+              <dd className="ods-dd">
+                <span
+                  className={`ods-copyable${fieldCopied === "customerName" ? " ods-copyable--copied" : ""}`}
+                  onClick={() => handleFieldCopy("customerName", customerName)}
+                  title="Click to copy"
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => e.key === "Enter" && handleFieldCopy("customerName", customerName)}
+                >
+                  {customerName || "—"}
+                </span>
+              </dd>
               <dt className="ods-dt">Email</dt>
-              <dd className="ods-dd">{email}</dd>
+              <dd className="ods-dd ods-dd--long">{email}</dd>
               <dt className="ods-dt">Phone</dt>
-              <dd className="ods-dd">{phone}</dd>
+              <dd className="ods-dd">
+                {phone !== "—" ? (
+                  <span
+                    className={`ods-copyable${fieldCopied === "phone" ? " ods-copyable--copied" : ""}`}
+                    onClick={() => handleFieldCopy("phone", phone)}
+                    title="Click to copy"
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => e.key === "Enter" && handleFieldCopy("phone", phone)}
+                  >
+                    {phone}
+                  </span>
+                ) : "—"}
+              </dd>
             </dl>
             <div className="ods-drawer-actions">
               {phone !== "—" && (
-                <a href={`tel:${phone}`} className="ods-action-link">
-                  Call
+                <a
+                  href={`tel:${phone}`}
+                  className="ods-action-icon"
+                  data-tooltip="Call customer"
+                  aria-label="Call customer"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
+                    <path d="M3 5a2 2 0 0 1 2-2h.5a1 1 0 0 1 .95.68l.8 2.4a1 1 0 0 1-.23 1.02L6 8.12A11.05 11.05 0 0 0 11.88 14l1.02-1.02a1 1 0 0 1 1.02-.23l2.4.8A1 1 0 0 1 17 14.5V15a2 2 0 0 1-2 2h-.5C8.6 17 3 11.4 3 5.5V5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+                  </svg>
                 </a>
               )}
               {phone !== "—" && (
-                <a href={`sms:${phone}`} className="ods-action-link">
-                  Text
+                <a
+                  href={`sms:${phone}`}
+                  className="ods-action-icon"
+                  data-tooltip="Text customer"
+                  aria-label="Text customer"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
+                    <path d="M4 4h12a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7l-4 3V5a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+                    <path d="M7 8.5h6M7 11h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  </svg>
                 </a>
               )}
               {customerId && (
                 <a
                   href={`shopify://admin/customers/${customerId}`}
-                  className="ods-action-link"
+                  className="ods-action-icon"
+                  data-tooltip="View customer"
+                  aria-label="View customer"
                 >
-                  View customer
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
+                    <circle cx="10" cy="7" r="3" stroke="currentColor" strokeWidth="1.5"/>
+                    <path d="M4 17c0-3.31 2.69-6 6-6s6 2.69 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  </svg>
                 </a>
               )}
             </div>
@@ -1408,6 +1743,21 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
                 })}
               </div>
             )}
+            {/* Totals */}
+            <div className="ods-totals">
+              <div className="ods-totals-row">
+                <span className="ods-totals-label">Subtotal</span>
+                <span className="ods-totals-value">{subtotalFormatted}</span>
+              </div>
+              <div className="ods-totals-row">
+                <span className="ods-totals-label">Shipping</span>
+                <span className="ods-totals-value">{shippingFormatted}</span>
+              </div>
+              <div className="ods-totals-row ods-totals-row--total">
+                <span className="ods-totals-label">Total</span>
+                <span className="ods-totals-value">{total}</span>
+              </div>
+            </div>
           </div>
 
           {/* Admin link */}
@@ -1420,6 +1770,22 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
                 Open in Shopify Admin
               </a>
             </div>
+          </div>
+
+          {/* Tags section */}
+          <div className="ods-drawer-section">
+            <p className="ods-section-title">Tags</p>
+            {meaningfulTags.length === 0 ? (
+              <p className="ods-tag-empty">No tags</p>
+            ) : (
+              <ul className="ods-tag-list">
+                {meaningfulTags.map((tag) => (
+                  <li key={tag} className="ods-tag-pill">
+                    {tagDisplayLabel(tag)}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       </div>
@@ -1784,6 +2150,24 @@ function Extension() {
     return {
       kpiTotalQuantity: String(total), // F06: always show the real counted total
       kpiProducts: sortedProducts,
+    };
+  }, [displayedOrders]);
+
+  const { kpiDeliveryFees } = useMemo(() => {
+    let total = 0, currency = "";
+    for (const o of displayedOrders) {
+      const money = o.totalShippingPriceSet?.shopMoney;
+      if (money) {
+        total += parseFloat(money.amount);
+        if (!currency) currency = money.currencyCode;
+      }
+    }
+    if (!currency) return { kpiDeliveryFees: "—" };
+    return {
+      kpiDeliveryFees: total.toLocaleString("en-US", {
+        style: "currency",
+        currency,
+      }),
     };
   }, [displayedOrders]);
 
@@ -2420,7 +2804,7 @@ function Extension() {
             <s-text-field
               id="add-tags-input"
               label="Tags (comma-separated)"
-              placeholder="e.g. priority, vip, mothers-day"
+              placeholder="e.g. priority, vip, holiday"
               value={addTagsInput}
               onInput={(e: Event) => setAddTagsInput(getSafeEventValue(e))}
               onChange={(e: Event) => setAddTagsInput(getSafeEventValue(e))}
@@ -2573,19 +2957,18 @@ function Extension() {
 
       {/* ── KPI grid ─────────────────────────────────────────────────────────── */}
       <div className="ods-kpi-grid">
-        <div
-          className="ods-kpi-card ods-kpi-card--clickable"
-          onClick={() => setActiveTab("all")}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) =>
-            (e.key === "Enter" || e.key === " ") && setActiveTab("all")
-          }
-        >
+        <div className="ods-kpi-card">
           <p className="ods-kpi-label">Orders</p>
-          <p className="ods-kpi-value" aria-live="polite">
-            {kpiOrderCount}
-          </p>
+          <s-button
+            variant="tertiary"
+            commandFor="modal-kpi-products"
+            command="--show"
+            aria-live="polite"
+          >
+            <span className="ods-kpi-value ods-kpi-value--link">
+              {kpiOrderCount}
+            </span>
+          </s-button>
           {tabCounts.today > 0 && (
             <p className="ods-kpi-sublabel">
               • {tabCounts.today} delivering today
@@ -2648,18 +3031,10 @@ function Extension() {
           )}
         </div>
         <div className="ods-kpi-card">
-          <p className="ods-kpi-label">Items to prep</p>
-          <s-button
-            variant="tertiary"
-            commandFor="modal-kpi-products"
-            command="--show"
-            aria-live="polite"
-          >
-            <span className="ods-kpi-value ods-kpi-value--link">
-              {kpiTotalQuantity}
-            </span>
-          </s-button>
-          <p className="ods-kpi-sublabel">See breakdown →</p>
+          <p className="ods-kpi-label">Delivery Fees</p>
+          <p className="ods-kpi-value" aria-live="polite">
+            {kpiDeliveryFees}
+          </p>
         </div>
       </div>
 
@@ -2777,12 +3152,6 @@ function Extension() {
                     <s-option value="12PM-3PM">12PM-3PM</s-option>
                     <s-option value="3PM-6PM">3PM-6PM</s-option>
                     <s-option value="6PM-11PM">6PM-11PM</s-option>
-                    <s-option value="8:00 AM - 1:00 PM">
-                      8:00 AM - 1:00 PM
-                    </s-option>
-                    <s-option value="1:00 PM - 7:00 PM">
-                      1:00 PM - 7:00 PM
-                    </s-option>
                   </s-select>
                 </div>
                 <div className="ods-toolbar-actions">
