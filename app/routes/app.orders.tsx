@@ -1324,19 +1324,9 @@ type ActiveTab =
 
 // ─── StatusBadge (plain HTML — for use inside the drawer div overlay) ─────────
 
-const BADGE_COLORS: Record<BadgeTone, { color: string; bg: string }> = {
-  success: { color: "#008060", bg: "#d3f0e0" },
-  warning: { color: "#916a00", bg: "#fdf0cc" },
-  critical: { color: "#d72c0d", bg: "#ffe9e8" },
-  info: { color: "#0065bd", bg: "#e0f0ff" },
-  caution: { color: "#916a00", bg: "#fdf0cc" },
-  neutral: { color: "#6d7175", bg: "#f0f0f0" },
-};
-
 function StatusBadge({ tone, label }: { tone: BadgeTone; label: string }) {
-  const { color, bg } = BADGE_COLORS[tone] ?? BADGE_COLORS.neutral;
   return (
-    <span className="ods-badge" style={{ color, background: bg }}>
+    <span className={`ods-badge ods-badge--${tone}`}>
       {label}
     </span>
   );
