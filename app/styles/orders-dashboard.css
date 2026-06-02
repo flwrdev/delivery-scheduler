@@ -428,11 +428,24 @@ s-modal {
   display: inline;
   cursor: pointer;
   position: relative;
+  border-radius: 3px;
+  padding: 1px 2px;
 }
 .ods-copyable:hover {
   text-decoration: underline;
   text-decoration-style: dashed;
   text-underline-offset: 3px;
+  background: var(--p-color-bg-surface-hover, #f6f6f7);
+}
+.ods-copy-hint-icon {
+  display: inline;
+  opacity: 0;
+  margin-left: 3px;
+  vertical-align: middle;
+  transition: opacity 0.15s;
+}
+.ods-copyable:hover .ods-copy-hint-icon {
+  opacity: 0.5;
 }
 .ods-copyable--copied {
   color: var(--p-color-text-success, #008060);
