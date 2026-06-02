@@ -1,4 +1,4 @@
-import { Fragment, useState, useCallback, useMemo, useEffect } from "react";
+import { Fragment, useState, useCallback, useMemo, useEffect, type ChangeEvent } from "react";
 import {
   useLoaderData,
   useNavigate,
@@ -120,6 +120,12 @@ interface ShippingAddress {
   phone: string | null;
 }
 
+interface BillingAddress {
+  name: string | null;
+  address1: string | null;
+  phone: string | null;
+}
+
 interface CustomAttribute {
   key: string;
   value: string | null;
@@ -158,6 +164,7 @@ interface Order {
   customTimeSlot: Metafield | null;
   rescheduleHistory: Metafield | null;
   shippingAddress: ShippingAddress | null;
+  billingAddress: BillingAddress | null;
   note: string | null;
   currentTotalPriceSet: {
     shopMoney: { amount: string; currencyCode: string };
@@ -223,6 +230,11 @@ const GET_ORDERS_QUERY = `
             province
             zip
             country
+            phone
+          }
+          billingAddress {
+            name
+            address1
             phone
           }
           currentTotalPriceSet {
@@ -403,20 +415,21 @@ const DATE_ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_SLOT_RE =
   /^\d{1,2}(:\d{2})?\s*(AM|PM)\s*[-–]\s*\d{1,2}(:\d{2})?\s*(AM|PM)$/i;
 
-// Primary date source: custom.date metafield (reschedule writes here), then delivery.date (order creation), then fallbacks
+// Primary date source: custom.date metafield (reschedule writes here), then delivery.date (order creation), then fallbacks.
+// Every candidate is normalized to ISO (YYYY-MM-DD) before returning so callers always receive a consistent format.
 function getDeliveryDateValue(order: Order): string {
   const attrs = order.customAttributes || [];
-  if (order.customDate?.value) return order.customDate.value;
-  if (order.deliveryDate?.value) return order.deliveryDate.value;
-  const fromAttr = findAttrValue(
-    attrs,
-    "Delivery Date",
-    "delivery.date",
-    "sidekick.delivery_date",
-  );
-  if (fromAttr) return fromAttr;
-  const dateTag = (order.tags || []).find((t) => DATE_ISO_RE.test(t.trim()));
-  if (dateTag) return dateTag.trim();
+  const candidates = [
+    order.customDate?.value,
+    order.deliveryDate?.value,
+    findAttrValue(attrs, "Delivery Date", "delivery.date", "sidekick.delivery_date"),
+    (order.tags || []).find((t) => DATE_ISO_RE.test(t.trim()))?.trim(),
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const iso = normalizeDateToISO(raw);
+    if (iso) return iso;
+  }
   return "—";
 }
 
@@ -615,27 +628,11 @@ function getInstructionValue(order: Order): string {
 }
 
 function buildDeliveryInfoText(order: Order): string {
-  const attrs: CustomAttribute[] = order.customAttributes || [];
-  const customerName = getCustomerName(order);
+  const address1 = order.shippingAddress?.address1 ?? "";
+  const city = order.shippingAddress?.city ?? "";
+  const name = getCustomerName(order);
   const phone = getOrderPhone(order);
-  const fullAddress = getFullShippingAddress(order);
-  const city = getCity(order);
-  const rawDate = getDeliveryDateValue(order);
-  const deliveryDate = rawDate !== "—" ? formatDeliveryDate(rawDate) : "—";
-  const timeWindow = getDeliveryTimeValue(order);
-  const cardMessage = getAttr(attrs, "Card Message", "card_message");
-  const instruction = getInstructionValue(order);
-
-  return [
-    `Customer: ${customerName}`,
-    `Phone #: ${phone}`,
-    `Address: ${fullAddress}`,
-    `City: ${city}`,
-    `Delivery date: ${deliveryDate}`,
-    `Time window: ${timeWindow}`,
-    `Card message: ${cardMessage}`,
-    `Instruction: ${instruction}`,
-  ].join("\n");
+  return [address1, city, name, phone].filter(Boolean).join("\n");
 }
 
 type RescheduleTimelineEvent = {
@@ -868,6 +865,9 @@ export const loader = async ({
     ? rawDeliveryDateParam
     : null;
 
+  const after = url.searchParams.get("after") || null;
+  const before = url.searchParams.get("before") || null;
+
   const variables = deliveryDateParam
     ? {
         first: 250,
@@ -876,7 +876,7 @@ export const loader = async ({
         before: null,
         query: `metafields.custom.date:${deliveryDateParam}`,
       }
-    : { first: 25, after: null, last: null, before: null, query: null };
+    : { first: before ? null : 25, after, last: before ? 25 : null, before, query: null };
 
   const response = await admin.graphql(GET_ORDERS_QUERY, { variables });
   const body = (await response.json()) as {
@@ -989,6 +989,41 @@ const FULFILLMENT_CREATE_MUTATION = `
   }
 `;
 
+const STAGED_UPLOADS_CREATE_MUTATION = `
+  mutation StagedUploadsCreate($input: [StagedUploadInput!]!) {
+    stagedUploadsCreate(input: $input) {
+      stagedTargets {
+        url
+        resourceUrl
+        parameters { name value }
+      }
+      userErrors { field message }
+    }
+  }
+`;
+
+const FILE_CREATE_MUTATION = `
+  mutation FileCreate($files: [FileCreateInput!]!) {
+    fileCreate(files: $files) {
+      files {
+        ... on MediaImage {
+          image { url }
+        }
+      }
+      userErrors { field message }
+    }
+  }
+`;
+
+const ORDER_UPDATE_METAFIELD_MUTATION = `
+  mutation OrderUpdateMetafield($input: OrderInput!) {
+    orderUpdate(input: $input) {
+      order { id }
+      userErrors { field message }
+    }
+  }
+`;
+
 // Rewrite raw Shopify access-denied / scope errors into something the merchant can act on.
 function scopeHint(msg: string): string {
   if (
@@ -997,6 +1032,72 @@ function scopeHint(msg: string): string {
     return "Access denied — the app needs fulfillment-order permission. Please reinstall the app to grant the new scope.";
   }
   return msg;
+}
+
+async function uploadBouquetPhoto(
+  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
+  file: File,
+): Promise<string> {
+  const stagedRes = await admin.graphql(STAGED_UPLOADS_CREATE_MUTATION, {
+    variables: {
+      input: [
+        {
+          resource: "FILE",
+          filename: file.name,
+          mimeType: file.type,
+          httpMethod: "POST",
+          fileSize: String(file.size),
+        },
+      ],
+    },
+  });
+  const stagedJson = (await stagedRes.json()) as {
+    data?: {
+      stagedUploadsCreate?: {
+        stagedTargets: Array<{
+          url: string;
+          resourceUrl: string;
+          parameters: Array<{ name: string; value: string }>;
+        }>;
+        userErrors: Array<{ message: string }>;
+      };
+    };
+  };
+  const stagingErrors = stagedJson.data?.stagedUploadsCreate?.userErrors;
+  if (stagingErrors?.length) {
+    throw new Error(`Staged upload failed: ${stagingErrors.map((e) => e.message).join("; ")}`);
+  }
+  const target = stagedJson.data?.stagedUploadsCreate?.stagedTargets?.[0];
+  if (!target) throw new Error("Staged upload returned no target URL.");
+
+  const uploadForm = new FormData();
+  for (const { name, value } of target.parameters) {
+    uploadForm.append(name, value);
+  }
+  uploadForm.append("file", file);
+  const uploadRes = await fetch(target.url, { method: "POST", body: uploadForm });
+  if (!uploadRes.ok) throw new Error(`Photo upload failed (HTTP ${uploadRes.status}).`);
+
+  const fileRes = await admin.graphql(FILE_CREATE_MUTATION, {
+    variables: {
+      files: [{ originalSource: target.resourceUrl, contentType: "IMAGE" }],
+    },
+  });
+  const fileJson = (await fileRes.json()) as {
+    data?: {
+      fileCreate?: {
+        files: Array<{ image?: { url: string } }>;
+        userErrors: Array<{ message: string }>;
+      };
+    };
+  };
+  const fileErrors = fileJson.data?.fileCreate?.userErrors;
+  if (fileErrors?.length) {
+    throw new Error(`File creation failed: ${fileErrors.map((e) => e.message).join("; ")}`);
+  }
+  const url = fileJson.data?.fileCreate?.files?.[0]?.image?.url;
+  if (!url) throw new Error("File created but URL was not returned.");
+  return url;
 }
 
 // ─── Action result types ──────────────────────────────────────────────────────
@@ -1222,6 +1323,28 @@ export const action = async ({
       );
     }
 
+    const bouquetPhotoFile =
+      fd.get("bouquetPhoto") instanceof File
+        ? (fd.get("bouquetPhoto") as File)
+        : null;
+    const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+    if (bouquetPhotoFile && bouquetPhotoFile.size > MAX_PHOTO_BYTES) {
+      return Response.json(
+        { ...empty, message: "Bouquet photo must be 5 MB or smaller." },
+        { status: 400 },
+      );
+    }
+
+    let bouquetPhotoUrl: string | null = null;
+    let photoUploadWarning: string | null = null;
+    if (bouquetPhotoFile && bouquetPhotoFile.size > 0) {
+      try {
+        bouquetPhotoUrl = await uploadBouquetPhoto(admin, bouquetPhotoFile);
+      } catch (e: unknown) {
+        photoUploadWarning = e instanceof Error ? e.message : "Photo upload failed.";
+      }
+    }
+
     for (const id of orderIds) {
       let foJson: {
         data?: {
@@ -1292,6 +1415,31 @@ export const action = async ({
       for (let i = before; i < results.length; i++) {
         const r = results[i];
         if (!r.success && r.message) r.message = scopeHint(r.message);
+        if (r.success && photoUploadWarning) {
+          r.message = `Fulfilled. Note: photo upload failed — ${photoUploadWarning}`;
+        }
+      }
+
+      if (bouquetPhotoUrl) {
+        try {
+          await admin.graphql(ORDER_UPDATE_METAFIELD_MUTATION, {
+            variables: {
+              input: {
+                id,
+                metafields: [
+                  {
+                    namespace: "custom",
+                    key: "bouquet_photo",
+                    type: "single_line_text_field",
+                    value: bouquetPhotoUrl,
+                  },
+                ],
+              },
+            },
+          });
+        } catch {
+          // non-fatal — fulfillment already processed
+        }
       }
     }
   } else {
@@ -1377,6 +1525,11 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
     : "—";
   const email = order.customer?.defaultEmailAddress?.emailAddress || "—";
   const customerId = order.customer?.id?.split("/").pop();
+  const billingAddress = order.billingAddress ?? null;
+  const showSenderInfo =
+    billingAddress != null &&
+    billingAddress.address1 != null &&
+    billingAddress.address1 !== (order.shippingAddress?.address1 ?? "");
   const shippingAmount = order.totalShippingPriceSet
     ? parseFloat(order.totalShippingPriceSet.shopMoney.amount)
     : 0;
@@ -1552,14 +1705,19 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
             </dl>
             <div className="ods-drawer-actions">
               <button className="ods-action-link ods-action-link--with-icon" onClick={handleCopy}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
-                  <rect x="7" y="2" width="6" height="3" rx="1" stroke="currentColor" strokeWidth="1.5"/>
-                  <path d="M6 3H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                  <path d="M8 10h4M8 13h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                </svg>
-                Copy all delivery info
+                {copySuccess ? (
+                  "✓ Copied!"
+                ) : (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
+                      <rect x="7" y="2" width="6" height="3" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+                      <path d="M6 3H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                      <path d="M8 10h4M8 13h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    </svg>
+                    Copy all delivery info
+                  </>
+                )}
               </button>
-              {copySuccess && <span className="ods-copy-success">Copied.</span>}
             </div>
           </div>
 
@@ -1693,6 +1851,33 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
             </div>
           </div>
 
+          {/* Sender Info section — only when billing ≠ shipping (gift orders) */}
+          {showSenderInfo && (
+            <div className="ods-drawer-section">
+              <p className="ods-section-title">Sender Info</p>
+              <dl className="ods-dl">
+                {billingAddress!.name && (
+                  <>
+                    <dt className="ods-dt">Sender Name</dt>
+                    <dd className="ods-dd">{billingAddress!.name}</dd>
+                  </>
+                )}
+                {billingAddress!.address1 && (
+                  <>
+                    <dt className="ods-dt">Address</dt>
+                    <dd className="ods-dd ods-dd--long">{billingAddress!.address1}</dd>
+                  </>
+                )}
+                {billingAddress!.phone && (
+                  <>
+                    <dt className="ods-dt">Sender Phone</dt>
+                    <dd className="ods-dd">{billingAddress!.phone}</dd>
+                  </>
+                )}
+              </dl>
+            </div>
+          )}
+
           {/* Items section */}
           <div className="ods-drawer-section">
             <p className="ods-section-title">Items ({items.length})</p>
@@ -1783,6 +1968,22 @@ function OrderDrawer({ order, onClose }: OrderDrawerProps) {
   );
 }
 
+// ─── useFilteredSelection ─────────────────────────────────────────────────────
+
+function useFilteredSelection(
+  displayedOrders: Order[],
+  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>,
+) {
+  useEffect(() => {
+    const visibleIds = new Set(displayedOrders.map((o) => o.id));
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const pruned = new Set([...prev].filter((id) => visibleIds.has(id)));
+      return pruned.size === prev.size ? prev : pruned;
+    });
+  }, [displayedOrders, setSelectedIds]);
+}
+
 // ─── Main Extension ───────────────────────────────────────────────────────────
 
 function Extension() {
@@ -1819,15 +2020,16 @@ function Extension() {
   // Row selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // Right-side drawer state
-  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  // Right-side drawer state — store only the ID so the drawer always reflects fresh loader data
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const selectedOrder = orders.find((o) => o.id === selectedOrderId) ?? null;
 
   // Column visibility state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
     new Set(DEFAULT_VISIBLE_COLUMNS),
   );
 
-  const handleCloseDrawer = useCallback(() => setSelectedOrder(null), []);
+  const handleCloseDrawer = useCallback(() => setSelectedOrderId(null), []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1843,6 +2045,10 @@ function Extension() {
     mediaQuery.addEventListener("change", handleResize); // Listen for resizes
     return () => mediaQuery.removeEventListener("change", handleResize);
   }, []);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [activeTab]);
 
   const subtitleDate = useMemo(
     () =>
@@ -1945,10 +2151,23 @@ function Extension() {
     setSelectedIds(new Set());
   };
 
-  // ── Pagination (no-op — server pagination requires useFetcher) ─────────────
+  // ── Pagination handlers — update URL cursors to trigger loader refetch ───────
 
-  const handleNextPage = (): void => {};
-  const handlePreviousPage = (): void => {};
+  const handleNextPage = (): void => {
+    if (!pageInfo?.hasNextPage || !pageInfo.endCursor) return;
+    const params = new URLSearchParams(searchParams);
+    params.set("after", pageInfo.endCursor);
+    params.delete("before");
+    navigate(`?${params.toString()}`, { replace: true });
+  };
+
+  const handlePreviousPage = (): void => {
+    if (!pageInfo?.hasPreviousPage || !pageInfo.startCursor) return;
+    const params = new URLSearchParams(searchParams);
+    params.set("before", pageInfo.startCursor);
+    params.delete("after");
+    navigate(`?${params.toString()}`, { replace: true });
+  };
 
   // ── Client-side filter (existing logic preserved; tab filter added before) ──
 
@@ -2035,6 +2254,8 @@ function Extension() {
       return sortState.direction === "asc" ? cmp : -cmp;
     });
   }, [filteredOrders, sortState]);
+
+  useFilteredSelection(displayedOrders, setSelectedIds);
 
   // Selection derived values
   const selectedCount: number = selectedIds.size;
@@ -2248,6 +2469,9 @@ function Extension() {
     useState<string>("");
   const [fulfillTrackingUrl, setFulfillTrackingUrl] = useState<string>("");
   const [fulfillNotify, setFulfillNotify] = useState<boolean>(false);
+  const [fulfillPhotoFile, setFulfillPhotoFile] = useState<File | null>(null);
+  const [fulfillPhotoPreview, setFulfillPhotoPreview] = useState<string>("");
+  const [fulfillPhotoError, setFulfillPhotoError] = useState<string>("");
 
   const hideModal = (id: string) => {
     const el = document.getElementById(id) as
@@ -2294,12 +2518,36 @@ function Extension() {
     submitBulk("tagsRemove", { tags: removeTagsInput });
   };
 
-  const handleMarkFulfilled = () => {
-    submitBulk("markFulfilled", {
-      trackingNumber: fulfillTrackingNumber,
-      trackingUrl: fulfillTrackingUrl,
-      notifyCustomer: fulfillNotify ? "1" : "0",
-    });
+  const handleMarkFulfilled = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const fd = new FormData();
+    fd.append("_action", "markFulfilled");
+    selectedIds.forEach((id) => fd.append("orderId", id));
+    fd.append("trackingNumber", fulfillTrackingNumber);
+    fd.append("trackingUrl", fulfillTrackingUrl);
+    fd.append("notifyCustomer", fulfillNotify ? "1" : "0");
+    if (fulfillPhotoFile) fd.append("bouquetPhoto", fulfillPhotoFile);
+    fetcher.submit(fd, { method: "post", encType: "multipart/form-data" });
+  }, [selectedIds, fetcher, fulfillTrackingNumber, fulfillTrackingUrl, fulfillNotify, fulfillPhotoFile]);
+
+  const handlePhotoChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setFulfillPhotoFile(null);
+    setFulfillPhotoPreview("");
+    setFulfillPhotoError("");
+    if (!file) return;
+    const MAX = 5 * 1024 * 1024;
+    const allowed = ["image/jpeg", "image/png", "image/webp"];
+    if (!allowed.includes(file.type)) {
+      setFulfillPhotoError("Only JPEG, PNG, or WebP images are accepted.");
+      return;
+    }
+    if (file.size > MAX) {
+      setFulfillPhotoError("File must be 5 MB or smaller.");
+      return;
+    }
+    setFulfillPhotoFile(file);
+    setFulfillPhotoPreview(URL.createObjectURL(file));
   };
 
   useEffect(() => {
@@ -2332,6 +2580,9 @@ function Extension() {
       setFulfillTrackingNumber("");
       setFulfillTrackingUrl("");
       setFulfillNotify(false);
+      setFulfillPhotoFile(null);
+      setFulfillPhotoPreview("");
+      setFulfillPhotoError("");
     } else if (d.summary && d.summary.failed > 0) {
       const failed = (d.results || []).filter((r) => !r.success);
       const lines = failed
@@ -2757,6 +3008,40 @@ function Extension() {
                 setFulfillNotify((e.currentTarget as HTMLInputElement).checked)
               }
             />
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <label
+                htmlFor="fulfill-photo-input"
+                style={{ fontSize: 13, fontWeight: 500, color: "#202223" }}
+              >
+                Bouquet Photo (optional)
+              </label>
+              <input
+                id="fulfill-photo-input"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                style={{ fontSize: 13 }}
+                onChange={handlePhotoChange}
+              />
+              {fulfillPhotoError && (
+                <p style={{ margin: 0, fontSize: 13, color: "#d72c0d" }}>
+                  {fulfillPhotoError}
+                </p>
+              )}
+              {fulfillPhotoPreview && (
+                <img
+                  src={fulfillPhotoPreview}
+                  alt="Bouquet preview"
+                  style={{
+                    marginTop: 4,
+                    maxWidth: 120,
+                    maxHeight: 120,
+                    objectFit: "cover",
+                    borderRadius: 6,
+                    border: "1px solid #e1e3e5",
+                  }}
+                />
+              )}
+            </div>
           </s-stack>
         </s-box>
         <s-button
@@ -3345,7 +3630,7 @@ function Extension() {
                               <s-button
                                 id={`btn-name-${orderId}`}
                                 variant="tertiary"
-                                onClick={() => setSelectedOrder(order)}
+                                onClick={() => setSelectedOrderId(order.id)}
                                 accessibilityLabel={`View order ${order.name} details`}
                               >
                                 <s-text type="strong">{order.name}</s-text>
@@ -3431,7 +3716,7 @@ function Extension() {
                                 <s-button
                                   variant="tertiary"
                                   id={`btn-item-${orderId}`}
-                                  onClick={() => setSelectedOrder(order)}
+                                  onClick={() => setSelectedOrderId(order.id)}
                                 >
                                   <s-stack
                                     direction="inline"
@@ -3458,7 +3743,7 @@ function Extension() {
                             <s-button
                               variant="tertiary"
                               id={`btn-customer-${orderId}`}
-                              onClick={() => setSelectedOrder(order)}
+                              onClick={() => setSelectedOrderId(order.id)}
                             >
                               <span className="ods-customer-cell">
                                 <span className="ods-customer-name">
@@ -3568,7 +3853,7 @@ function Extension() {
                               id={`btn-view-${orderId}`}
                               variant="tertiary"
                               icon="view"
-                              onClick={() => setSelectedOrder(order)}
+                              onClick={() => setSelectedOrderId(order.id)}
                               accessibilityLabel={`View details for order ${order.name}`}
                             />
                           </s-table-cell>
