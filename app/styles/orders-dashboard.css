@@ -97,6 +97,9 @@ s-modal {
   .ods-kpi-card {
     border-bottom: 1px solid var(--p-color-border, #e1e3e5);
   }
+  .ods-kpi-card:nth-child(3n) {
+    border-right: none;
+  }
 }
 @media (max-width: 640px) {
   .ods-kpi-grid {
@@ -104,6 +107,12 @@ s-modal {
   }
   .ods-kpi-card {
     padding: var(--p-space-3, 12px) var(--p-space-4, 16px);
+  }
+  .ods-kpi-card:nth-child(3n) {
+    border-right: 1px solid var(--p-color-border, #e1e3e5);
+  }
+  .ods-kpi-card:nth-child(2n) {
+    border-right: none;
   }
 }
 @media (max-width: 420px) {
@@ -887,7 +896,15 @@ button.ods-action-link:hover {
   .ods-drawer,
   .ods-header-btns,
   .ods-selection-bar,
-  .ods-tabs {
+  .ods-tabs,
+  .ods-toolbar,
+  .ods-name-cell .ods-note-icon,
+  [id="error-banner"],
+  [id="bulk-action-banner"],
+  [id="header-select"],
+  [id^="cell-select-"],
+  [id="header-actions"],
+  [id^="cell-action-"] {
     display: none !important;
   }
 }
