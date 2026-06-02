@@ -1,4 +1,40 @@
-import { Fragment, useState, useCallback, useMemo, useEffect, type ChangeEvent } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef, type ChangeEvent } from "react";
+import { OrderDrawer } from "../components/OrderDrawer";
+import {
+  type Order,
+  type CustomAttribute,
+  type BadgeTone,
+  parseTimeWindowHour,
+  parseDateValue,
+  toLocalISODate,
+  normalizeDateToISO,
+  normalizeTimeSlot,
+  formatDeliveryDate,
+  formatMoney,
+  DATE_ISO_RE,
+  TIME_SLOT_RE,
+  financialStatusTone,
+  isUnpaidStatus,
+  fulfillmentStatusTone,
+  isOpenFulfillmentStatus,
+  formatStatusLabel,
+  isHiddenDateTag,
+  isHiddenTag,
+  tagDisplayLabel,
+  getMeaningfulTags,
+  getDeliveryRelativeLabel,
+  isDeliveryOverdue,
+  findAttrValue,
+  getDeliveryDateValue,
+  getDeliveryTimeValue,
+  getCustomerName,
+  getOrderPhone,
+  getCity,
+  getInstructionValue,
+  getSearchableOrderText,
+  getFirstItemImageUrl,
+  getFirstItemAltText,
+} from "../lib/order-utils";
 import {
   useLoaderData,
   useNavigate,
@@ -53,128 +89,6 @@ const MOBILE_VISIBLE_COLUMNS = [
   "fulfillment",
   "actions",
 ];
-
-function parseTimeWindowHour(tw: string): number {
-  if (!tw || tw === "—") return 999;
-  const colonMatch = tw.match(/^(\d{1,2}):(\d{2})/);
-  if (colonMatch) return parseInt(colonMatch[1], 10);
-  const ampmMatch = tw.match(/(\d{1,2})\s*(am|pm)/i);
-  if (ampmMatch) {
-    let h = parseInt(ampmMatch[1], 10);
-    const period = ampmMatch[2].toLowerCase();
-    if (period === "pm" && h !== 12) h += 12;
-    if (period === "am" && h === 12) h = 0;
-    return h;
-  }
-  return 999;
-}
-
-function parseDateValue(raw: string | null | undefined): number {
-  if (!raw) return Infinity;
-  const parts = raw.split("-");
-  if (parts.length !== 3) return Infinity;
-  return new Date(
-    parseInt(parts[0], 10),
-    parseInt(parts[1], 10) - 1,
-    parseInt(parts[2], 10),
-  ).getTime();
-}
-
-function toLocalISODate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface EmailAddress {
-  emailAddress: string;
-}
-
-interface PhoneNumber {
-  phoneNumber: string;
-}
-
-interface Customer {
-  id: string | null;
-  firstName: string | null;
-  lastName: string | null;
-  defaultEmailAddress: EmailAddress | null;
-  defaultPhoneNumber: PhoneNumber | null;
-}
-
-interface Metafield {
-  value: string;
-  jsonValue?: unknown;
-}
-
-interface ShippingAddress {
-  address1: string | null;
-  address2: string | null;
-  city: string | null;
-  province: string | null;
-  zip: string | null;
-  country: string | null;
-  phone: string | null;
-}
-
-interface BillingAddress {
-  name: string | null;
-  address1: string | null;
-  phone: string | null;
-}
-
-interface CustomAttribute {
-  key: string;
-  value: string | null;
-}
-
-interface LineItemImage {
-  url: string;
-  altText: string | null;
-}
-
-interface LineItemProduct {
-  title: string;
-  featuredImage: LineItemImage | null;
-}
-
-interface LineItem {
-  name: string;
-  quantity: number;
-  sku: string | null;
-  image: LineItemImage | null;
-  product: LineItemProduct | null;
-}
-
-interface Order {
-  id: string;
-  name: string;
-  createdAt: string;
-  cancelledAt: string | null;
-  displayFulfillmentStatus: string;
-  displayFinancialStatus: string;
-  tags: string[];
-  customer: Customer | null;
-  deliveryDate: Metafield | null;
-  deliveryTimeSlot: Metafield | null;
-  customDate: Metafield | null;
-  customTimeSlot: Metafield | null;
-  rescheduleHistory: Metafield | null;
-  shippingAddress: ShippingAddress | null;
-  billingAddress: BillingAddress | null;
-  note: string | null;
-  currentTotalPriceSet: {
-    shopMoney: { amount: string; currencyCode: string };
-  } | null;
-  totalShippingPriceSet: {
-    shopMoney: { amount: string; currencyCode: string };
-  } | null;
-  customAttributes: CustomAttribute[];
-  lineItems: { edges: { node: LineItem }[] } | null;
-}
 
 interface PageInfo {
   hasNextPage: boolean;
@@ -301,223 +215,6 @@ const GET_ORDERS_QUERY = `
   }
 `;
 
-// ─── Badge helpers ────────────────────────────────────────────────────────────
-
-type BadgeTone =
-  | "success"
-  | "warning"
-  | "critical"
-  | "info"
-  | "caution"
-  | "neutral";
-
-function financialStatusTone(status: string): BadgeTone {
-  const s = status.toLowerCase();
-  if (s === "paid") return "neutral";
-  if (s === "pending" || s === "authorized") return "caution";
-  if (s === "partially_paid") return "warning";
-  if (s === "refunded" || s === "partially_refunded" || s === "voided")
-    return "neutral";
-  return "neutral";
-}
-
-function isUnpaidStatus(status: string): boolean {
-  return new Set(["pending", "authorized", "partially_paid"]).has(
-    (status || "").toLowerCase(),
-  );
-}
-
-function fulfillmentStatusTone(status: string): BadgeTone {
-  const s = status.toUpperCase();
-  if (s === "FULFILLED") return "neutral";
-  if (s === "PARTIALLY_FULFILLED") return "warning";
-  if (s === "IN_PROGRESS") return "info";
-  if (s === "UNFULFILLED" || s === "ON_HOLD" || s === "SCHEDULED")
-    return "caution";
-  if (s === "RESTOCKED") return "neutral";
-  return "neutral";
-}
-
-function isOpenFulfillmentStatus(status: string): boolean {
-  return new Set(["UNFULFILLED", "ON_HOLD", "SCHEDULED"]).has(
-    (status || "").toUpperCase(),
-  );
-}
-
-function formatStatusLabel(status: string): string {
-  return status
-    .toLowerCase()
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-// ─── Date formatters ─────────────────────────────────────────────────────────
-
-function formatDeliveryDate(raw: string): string {
-  const parts = raw.split("-");
-  if (parts.length !== 3) return raw;
-  const year = parseInt(parts[0], 10);
-  const month = parseInt(parts[1], 10) - 1;
-  const day = parseInt(parts[2], 10);
-  const d = new Date(year, month, day);
-  return d.toLocaleDateString("en-US", {
-    weekday: "short",
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function formatMoney(amount: string, currencyCode: string): string {
-  const num = parseFloat(amount);
-  return num.toLocaleString("en-US", {
-    style: "currency",
-    currency: currencyCode,
-  });
-}
-
-// ─── Filter Helpers ──────────────────────────────────────────────────────────
-
-function normalizeDateToISO(value: string): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-  const ymdMatch = trimmed.match(/^(\d{4})(\d{2})(\d{2})$/);
-  if (ymdMatch) return `${ymdMatch[1]}-${ymdMatch[2]}-${ymdMatch[3]}`;
-  const d = new Date(trimmed);
-  if (!isNaN(d.getTime())) {
-    const y = d.getFullYear();
-    const mo = String(d.getMonth() + 1).padStart(2, "0");
-    const dy = String(d.getDate()).padStart(2, "0");
-    return `${y}-${mo}-${dy}`;
-  }
-  return null;
-}
-
-function normalizeTimeSlot(value: string): string {
-  if (!value) return "";
-  let s = value.trim();
-  // Strip label prefixes — keep from first digit
-  const firstDigit = s.search(/\d/);
-  if (firstDigit > 0) s = s.slice(firstDigit);
-  // Normalize en-dash and em-dash to hyphen
-  s = s.replace(/[–—]/g, "-");
-  // Strip all whitespace
-  s = s.replace(/\s+/g, "");
-  // Strip :00 (e.g. "9:00AM" → "9AM", "12:00PM" → "12PM")
-  s = s.replace(/:00/g, "");
-  // Uppercase for consistent comparison
-  return s.toUpperCase();
-}
-
-// Regex patterns for tag detection
-const DATE_ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
-const TIME_SLOT_RE =
-  /^\d{1,2}(:\d{2})?\s*(AM|PM)\s*[-–]\s*\d{1,2}(:\d{2})?\s*(AM|PM)$/i;
-
-// Primary date source: custom.date metafield (reschedule writes here), then delivery.date (order creation), then fallbacks.
-// Every candidate is normalized to ISO (YYYY-MM-DD) before returning so callers always receive a consistent format.
-function getDeliveryDateValue(order: Order): string {
-  const attrs = order.customAttributes || [];
-  const candidates = [
-    order.customDate?.value,
-    order.deliveryDate?.value,
-    findAttrValue(attrs, "Delivery Date", "delivery.date", "sidekick.delivery_date"),
-    (order.tags || []).find((t) => DATE_ISO_RE.test(t.trim()))?.trim(),
-  ];
-  for (const raw of candidates) {
-    if (!raw) continue;
-    const iso = normalizeDateToISO(raw);
-    if (iso) return iso;
-  }
-  return "—";
-}
-
-// Primary time source: custom.time_slot metafield (reschedule writes here), then delivery.time_slot (order creation), then fallbacks
-function getDeliveryTimeValue(order: Order): string {
-  const attrs = order.customAttributes || [];
-  if (order.customTimeSlot?.value) return order.customTimeSlot.value;
-  if (order.deliveryTimeSlot?.value) return order.deliveryTimeSlot.value;
-  const fromAttr = findAttrValue(
-    attrs,
-    "Delivery Time",
-    "delivery.time_slot",
-    "sidekick.delivery_time",
-    "Time Slot",
-    "time_slot",
-    "delivery_time",
-  );
-  if (fromAttr) return fromAttr;
-  const timeTag = (order.tags || []).find((t) => TIME_SLOT_RE.test(t.trim()));
-  if (timeTag) return timeTag.trim();
-  return "—";
-}
-
-// ─── Tag display helpers ────────────────────────────────────────────────────
-
-function isHiddenDateTag(tag: string): boolean {
-  const t = tag.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return true;
-  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(t)) return true;
-  if (/^\d{8}$/.test(t)) return true;
-  if (
-    /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}$/i.test(
-      t,
-    )
-  )
-    return true;
-  if (
-    /^\d{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{4}$/i.test(
-      t,
-    )
-  )
-    return true;
-  return false;
-}
-
-function isHiddenTag(tag: string): boolean {
-  if (isHiddenDateTag(tag)) return true;
-  if (
-    /^\d{1,2}(:\d{2})?\s*(AM|PM)\s*[-–]\s*\d{1,2}(:\d{2})?\s*(AM|PM)$/i.test(
-      tag.trim(),
-    )
-  )
-    return true;
-  return false;
-}
-
-function tagDisplayLabel(tag: string): string {
-  const lower = tag.toLowerCase().trim();
-  if (lower === "ops_md_checked") return "Checked";
-  if (lower === "resched") return "Rescheduled";
-  return tag.trim();
-}
-
-function getMeaningfulTags(tags: string[]): string[] {
-  if (!Array.isArray(tags)) return [];
-  return tags.filter((t) => !isHiddenTag(t));
-}
-
-function getDeliveryRelativeLabel(rawISO: string, todayISO: string): string {
-  if (!rawISO || rawISO === "—") return "";
-  const todayTs = parseDateValue(todayISO);
-  const orderTs = parseDateValue(rawISO);
-  if (!isFinite(orderTs)) return "";
-  const diffDays = Math.round((orderTs - todayTs) / 86400000);
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Tomorrow";
-  if (diffDays > 1) return `In ${diffDays} days`;
-  if (diffDays === -1) return "Yesterday";
-  return `${Math.abs(diffDays)} days ago`;
-}
-
-function isDeliveryOverdue(rawISO: string, todayISO: string): boolean {
-  if (!rawISO || rawISO === "—") return false;
-  const todayTs = parseDateValue(todayISO);
-  const orderTs = parseDateValue(rawISO);
-  return isFinite(todayTs) && isFinite(orderTs) && orderTs < todayTs;
-}
-
 // ─── Sortable column header ──────────────────────────────────────────────────
 
 interface SortableHeaderProps {
@@ -560,262 +257,6 @@ function SortableHeader({
   );
 }
 
-// ─── Custom attribute helpers ─────────────────────────────────────────────────
-
-function getAttr(attrs: CustomAttribute[], ...keys: string[]): string {
-  for (const key of keys) {
-    const found = attrs.find((a) => a.key === key);
-    if (found?.value) return found.value;
-  }
-  return "—";
-}
-
-function findAttrValue(
-  attrs: CustomAttribute[],
-  ...keys: string[]
-): string | null {
-  for (const key of keys) {
-    const found = attrs.find((a) => a.key === key);
-    if (found?.value) return found.value;
-  }
-  return null;
-}
-
-function getCustomerName(order: Order): string {
-  return order.customer
-    ? [order.customer.firstName, order.customer.lastName]
-        .filter(Boolean)
-        .join(" ") || "—"
-    : "—";
-}
-
-function getOrderPhone(order: Order): string {
-  return (
-    order.customer?.defaultPhoneNumber?.phoneNumber ||
-    order.shippingAddress?.phone ||
-    "—"
-  );
-}
-
-function getFullShippingAddress(order: Order): string {
-  const addr = order.shippingAddress;
-  return addr
-    ? [addr.address1, addr.address2].filter(Boolean).join(", ") || "—"
-    : "—";
-}
-
-function getCity(order: Order): string {
-  return order.shippingAddress?.city || "—";
-}
-
-function getInstructionValue(order: Order): string {
-  const attrs: CustomAttribute[] = order.customAttributes || [];
-  return (
-    findAttrValue(
-      attrs,
-      "Instruction",
-      "Delivery Instruction",
-      "Special Instruction",
-      "Special Instructions",
-      "Notes",
-      "Note",
-      "delivery_instruction",
-      "instruction",
-    ) ||
-    order.note ||
-    "—"
-  );
-}
-
-function buildDeliveryInfoText(order: Order): string {
-  const address1 = order.shippingAddress?.address1 ?? "";
-  const city = order.shippingAddress?.city ?? "";
-  const name = getCustomerName(order);
-  const phone = getOrderPhone(order);
-  return [address1, city, name, phone].filter(Boolean).join("\n");
-}
-
-type RescheduleTimelineEvent = {
-  date: string;
-  timeSlot: string;
-  requestedAt: string;
-  status: string;
-};
-
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function getStringField(
-  value: Record<string, unknown>,
-  ...keys: string[]
-): string {
-  for (const key of keys) {
-    const candidate = value[key];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-
-  return "—";
-}
-
-function getRescheduleHistorySource(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (isRecordValue(value) && Array.isArray(value.events)) return value.events;
-  if (isRecordValue(value) && Array.isArray(value.history))
-    return value.history;
-  if (typeof value !== "string" || !value.trim()) return [];
-
-  try {
-    return getRescheduleHistorySource(JSON.parse(value));
-  } catch {
-    return [];
-  }
-}
-
-function getRescheduleTimelineEvents(order: Order): RescheduleTimelineEvent[] {
-  const metafield = order.rescheduleHistory;
-  const rawEvents = [
-    ...getRescheduleHistorySource(metafield?.jsonValue),
-    ...getRescheduleHistorySource(metafield?.value),
-  ];
-  const seen = new Set<string>();
-
-  return rawEvents
-    .flatMap((event): RescheduleTimelineEvent[] => {
-      if (!isRecordValue(event)) return [];
-
-      const timelineEvent = {
-        date: getStringField(
-          event,
-          "date",
-          "toDate",
-          "newDate",
-          "deliveryDate",
-        ),
-        timeSlot: getStringField(
-          event,
-          "timeSlot",
-          "time_slot",
-          "toTimeSlot",
-          "newTimeSlot",
-          "deliveryTimeSlot",
-        ),
-        requestedAt: getStringField(
-          event,
-          "requestedAt",
-          "requested_at",
-          "rescheduledAt",
-          "createdAt",
-          "updatedAt",
-        ),
-        status: getStringField(event, "status", "rescheduleStatus"),
-      };
-
-      if (
-        timelineEvent.date === "—" &&
-        timelineEvent.timeSlot === "—" &&
-        timelineEvent.requestedAt === "—" &&
-        timelineEvent.status === "—"
-      ) {
-        return [];
-      }
-
-      const fingerprint = JSON.stringify(timelineEvent);
-      if (seen.has(fingerprint)) return [];
-      seen.add(fingerprint);
-
-      return [timelineEvent];
-    })
-    .sort((a, b) => {
-      const aTime = Date.parse(a.requestedAt);
-      const bTime = Date.parse(b.requestedAt);
-      if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0;
-      if (Number.isNaN(aTime)) return 1;
-      if (Number.isNaN(bTime)) return -1;
-      return bTime - aTime;
-    });
-}
-
-function hasRescheduleTag(order: Order): boolean {
-  return (order.tags || []).some(
-    (tag) => tag.trim().toLowerCase() === "resched",
-  );
-}
-
-function formatTimelineDelivery(date: string, timeSlot: string): string {
-  const formattedDate =
-    date !== "—" ? formatDeliveryDate(normalizeDateToISO(date) ?? date) : "—";
-
-  if (formattedDate === "—" && timeSlot === "—") return "—";
-  if (formattedDate === "—") return timeSlot;
-  if (timeSlot === "—") return formattedDate;
-  return `${formattedDate} (${timeSlot})`;
-}
-
-function formatTimelineTimestamp(value: string): string {
-  if (value === "—") return "Requested time not recorded";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-
-  return date.toLocaleString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function formatTimelineStatus(value: string): string {
-  return value === "—" ? "Status not recorded" : formatStatusLabel(value);
-}
-
-function getSearchableOrderText(order: Order): string {
-  const fullName = [order.customer?.firstName, order.customer?.lastName]
-    .filter(Boolean)
-    .join(" ");
-  const city = getCity(order);
-  const tags = Array.isArray(order.tags) ? order.tags.join(" ") : "";
-  const itemNames = (order.lineItems?.edges || [])
-    .map((e) => e.node.name)
-    .filter(Boolean)
-    .join(" ");
-  return [
-    order.name,
-    order.customer?.firstName,
-    order.customer?.lastName,
-    fullName,
-    getOrderPhone(order),
-    order.customer?.defaultEmailAddress?.emailAddress,
-    city,
-    tags,
-    itemNames,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
-// ─── Line item helpers ────────────────────────────────────────────────────────
-
-function getFirstItemImageUrl(order: Order): string | undefined {
-  const item = order.lineItems?.edges?.[0]?.node ?? null;
-  return item?.image?.url || item?.product?.featuredImage?.url || undefined;
-}
-
-function getFirstItemAltText(order: Order): string {
-  const item = order.lineItems?.edges?.[0]?.node ?? null;
-  if (!item) return "Product image";
-  return (
-    item.image?.altText ||
-    item.product?.featuredImage?.altText ||
-    `Image of ${item.name}`
-  );
-}
-
 // ─── Runtime safety helpers ───────────────────────────────────────────────────
 
 function getSafeEventValue(e: Event): string {
@@ -851,6 +292,9 @@ type LoaderData = {
   pageInfo: PageInfo | null;
   errors: Array<{ message: string }> | null;
   deliveryDateParam: string | null;
+  searchParam: string;
+  timeWindowParam: string;
+  tabParam: string;
 };
 
 export const loader = async ({
@@ -860,23 +304,59 @@ export const loader = async ({
 }): Promise<Response> => {
   const { admin } = await authenticate.admin(request);
   const url = new URL(request.url);
+
   const rawDeliveryDateParam = url.searchParams.get("deliveryDate");
   const deliveryDateParam = isIsoDateParam(rawDeliveryDateParam)
     ? rawDeliveryDateParam
     : null;
 
+  const searchParam = url.searchParams.get("search")?.trim() ?? "";
+  const timeWindowParam = url.searchParams.get("timeWindow")?.trim() ?? "";
+  const tabParam = url.searchParams.get("tab") ?? "all";
+
   const after = url.searchParams.get("after") || null;
   const before = url.searchParams.get("before") || null;
 
-  const variables = deliveryDateParam
-    ? {
-        first: 250,
-        after: null,
-        last: null,
-        before: null,
-        query: `metafields.custom.date:${deliveryDateParam}`,
-      }
-    : { first: before ? null : 25, after, last: before ? 25 : null, before, query: null };
+  // Build composite Shopify query string from all active filters
+  const queryParts: string[] = [];
+
+  if (deliveryDateParam) {
+    queryParts.push(`metafields.custom.date:${deliveryDateParam}`);
+  }
+  if (searchParam) {
+    queryParts.push(searchParam);
+  }
+  if (timeWindowParam) {
+    queryParts.push(`metafields.custom.time_slot:${timeWindowParam}`);
+  }
+  if (tabParam === "unfulfilled") {
+    queryParts.push("fulfillment_status:unfulfilled");
+  } else if (tabParam === "unpaid") {
+    queryParts.push(
+      "financial_status:pending OR financial_status:authorized OR financial_status:partially_paid",
+    );
+  } else if (tabParam === "today") {
+    const todayISO = new Date().toLocaleDateString("en-CA");
+    queryParts.push(`metafields.custom.date:${todayISO}`);
+  } else if (tabParam === "tomorrow") {
+    const tom = new Date();
+    tom.setDate(tom.getDate() + 1);
+    queryParts.push(`metafields.custom.date:${tom.toLocaleDateString("en-CA")}`);
+  }
+  // "thisWeek" and "all" tabs: no server-side date fragment; client filters thisWeek
+
+  const compositeQuery = queryParts.join(" ") || null;
+
+  // thisWeek tab needs more orders since client must filter by date range
+  const pageSize = tabParam === "thisWeek" ? 250 : 25;
+
+  const variables = {
+    first: before ? null : pageSize,
+    after,
+    last: before ? pageSize : null,
+    before,
+    query: compositeQuery,
+  };
 
   const response = await admin.graphql(GET_ORDERS_QUERY, { variables });
   const body = (await response.json()) as {
@@ -897,6 +377,9 @@ export const loader = async ({
       pageInfo: body.data?.orders?.pageInfo ?? null,
       errors: body.errors ?? null,
       deliveryDateParam,
+      searchParam,
+      timeWindowParam,
+      tabParam,
     } satisfies LoaderData,
     { headers: { "Cache-Control": "no-store" } },
   );
@@ -964,21 +447,25 @@ const TAGS_REMOVE_MUTATION = `
 // Fulfillment-order workflow — used ONLY when the merchant clicks "Mark as fulfilled".
 // Requires read_merchant_managed_fulfillment_orders (query) and
 // write_merchant_managed_fulfillment_orders (mutation). Never added to GET_ORDERS_QUERY.
-const GET_ORDER_FULFILLMENT_ORDERS_QUERY = `
-  query OrderFulfillmentOrders($id: ID!) {
-    order(id: $id) {
-      id
-      name
-      fulfillmentOrders(first: 50) {
-        nodes {
-          id
-          status
-          supportedActions { action }
-        }
+// Builds one aliased query for all selected orders to replace N serial API roundtrips.
+function buildBatchFulfillmentQuery(ids: string[]): string {
+  const fragments = ids
+    .map(
+      (id, i) =>
+        `  o${i}: order(id: "${id}") {
+    id
+    fulfillmentOrders(first: 50) {
+      nodes {
+        id
+        status
+        supportedActions { action }
       }
     }
-  }
-`;
+  }`,
+    )
+    .join("\n");
+  return `query BatchFulfillmentOrders {\n${fragments}\n}`;
+}
 
 const FULFILLMENT_CREATE_MUTATION = `
   mutation FulfillmentCreate($fulfillment: FulfillmentInput!) {
@@ -1345,100 +832,129 @@ export const action = async ({
       }
     }
 
+    // ── Step 1: Batch-fetch fulfillment orders (single API call) ─────────────
+    const SHOPIFY_ORDER_GID_RE = /^gid:\/\/shopify\/Order\/\d+$/;
+    const safeIds = orderIds.filter((id) => SHOPIFY_ORDER_GID_RE.test(id));
     for (const id of orderIds) {
-      let foJson: {
-        data?: {
-          order?: {
-            fulfillmentOrders?: {
-              nodes?: Array<{
-                id: string;
-                status: string;
-                supportedActions?: Array<{ action: string }>;
-              }>;
-            };
-          };
-        };
+      if (!SHOPIFY_ORDER_GID_RE.test(id)) {
+        results.push({ orderId: id, success: false, message: "Invalid order ID." });
+      }
+    }
+
+    type FulfillmentNode = {
+      id: string;
+      status: string;
+      supportedActions?: Array<{ action: string }>;
+    };
+    const fulfillableByOrderId = new Map<string, FulfillmentNode[]>();
+    let batchQueryFailed = false;
+
+    if (safeIds.length > 0) {
+      const batchQuery = buildBatchFulfillmentQuery(safeIds);
+      let batchJson: {
+        data?: Record<string, {
+          id: string;
+          fulfillmentOrders: { nodes: FulfillmentNode[] };
+        } | null>;
         errors?: Array<{ message: string }>;
-      };
+      } = {};
       try {
-        const foRes = await admin.graphql(GET_ORDER_FULFILLMENT_ORDERS_QUERY, {
-          variables: { id },
-        });
-        foJson = await foRes.json();
+        const batchRes = await admin.graphql(batchQuery);
+        batchJson = await batchRes.json();
       } catch (e: unknown) {
+        batchQueryFailed = true;
         const m =
           e instanceof Error ? e.message : "Failed to read fulfillment orders";
-        results.push({ orderId: id, success: false, message: scopeHint(m) });
-        continue;
-      }
-      if (foJson.errors?.length) {
-        const msg = foJson.errors.map((e) => e.message).join("; ");
-        results.push({ orderId: id, success: false, message: scopeHint(msg) });
-        continue;
-      }
-      const nodes = foJson.data?.order?.fulfillmentOrders?.nodes || [];
-      const fulfillable = nodes.filter((n) =>
-        (n.supportedActions || []).some(
-          (a) => a.action === "CREATE_FULFILLMENT",
-        ),
-      );
-      if (fulfillable.length === 0) {
-        results.push({
-          orderId: id,
-          success: false,
-          message: "No fulfillable items remaining.",
-        });
-        continue;
-      }
-
-      const fulfillment: Record<string, unknown> = {
-        lineItemsByFulfillmentOrder: fulfillable.map((fo) => ({
-          fulfillmentOrderId: fo.id,
-        })),
-        notifyCustomer,
-      };
-      if (trackingNumber || trackingUrl) {
-        const trackingInfo: Record<string, string> = {};
-        if (trackingNumber) trackingInfo.number = trackingNumber;
-        if (trackingUrl) trackingInfo.url = trackingUrl;
-        fulfillment.trackingInfo = trackingInfo;
-      }
-
-      const before = results.length;
-      await runOne(
-        id,
-        FULFILLMENT_CREATE_MUTATION,
-        { fulfillment },
-        "fulfillmentCreate",
-        "userErrors",
-      );
-      for (let i = before; i < results.length; i++) {
-        const r = results[i];
-        if (!r.success && r.message) r.message = scopeHint(r.message);
-        if (r.success && photoUploadWarning) {
-          r.message = `Fulfilled. Note: photo upload failed — ${photoUploadWarning}`;
+        for (const id of safeIds) {
+          results.push({ orderId: id, success: false, message: scopeHint(m) });
         }
       }
 
-      if (bouquetPhotoUrl) {
-        try {
-          await admin.graphql(ORDER_UPDATE_METAFIELD_MUTATION, {
-            variables: {
-              input: {
-                id,
-                metafields: [
-                  {
-                    namespace: "custom",
-                    key: "bouquet_photo",
-                    type: "single_line_text_field",
-                    value: bouquetPhotoUrl,
-                  },
-                ],
-              },
-            },
+      if (!batchQueryFailed) {
+        if (batchJson.errors?.length) {
+          batchQueryFailed = true;
+          const msg = batchJson.errors.map((e) => e.message).join("; ");
+          for (const id of safeIds) {
+            results.push({ orderId: id, success: false, message: scopeHint(msg) });
+          }
+        } else {
+          safeIds.forEach((id, i) => {
+            const orderData = batchJson.data?.[`o${i}`];
+            fulfillableByOrderId.set(
+              id,
+              (orderData?.fulfillmentOrders?.nodes ?? []).filter((n) =>
+                (n.supportedActions || []).some(
+                  (a) => a.action === "CREATE_FULFILLMENT",
+                ),
+              ),
+            );
           });
-        } catch {
-          // non-fatal — fulfillment already processed
+        }
+      }
+    }
+
+    // ── Step 2: Create fulfillments (one mutation per order) ─────────────────
+    if (!batchQueryFailed) {
+      for (const id of safeIds) {
+        const fulfillable = fulfillableByOrderId.get(id) ?? [];
+        if (fulfillable.length === 0) {
+          results.push({
+            orderId: id,
+            success: false,
+            message: "No fulfillable items remaining.",
+          });
+          continue;
+        }
+
+        const fulfillment: Record<string, unknown> = {
+          lineItemsByFulfillmentOrder: fulfillable.map((fo) => ({
+            fulfillmentOrderId: fo.id,
+          })),
+          notifyCustomer,
+        };
+        if (trackingNumber || trackingUrl) {
+          const trackingInfo: Record<string, string> = {};
+          if (trackingNumber) trackingInfo.number = trackingNumber;
+          if (trackingUrl) trackingInfo.url = trackingUrl;
+          fulfillment.trackingInfo = trackingInfo;
+        }
+
+        const before = results.length;
+        await runOne(
+          id,
+          FULFILLMENT_CREATE_MUTATION,
+          { fulfillment },
+          "fulfillmentCreate",
+          "userErrors",
+        );
+        for (let i = before; i < results.length; i++) {
+          const r = results[i];
+          if (!r.success && r.message) r.message = scopeHint(r.message);
+          if (r.success && photoUploadWarning) {
+            r.message = `Fulfilled. Note: photo upload failed — ${photoUploadWarning}`;
+          }
+        }
+
+        if (bouquetPhotoUrl) {
+          try {
+            await admin.graphql(ORDER_UPDATE_METAFIELD_MUTATION, {
+              variables: {
+                input: {
+                  id,
+                  metafields: [
+                    {
+                      namespace: "custom",
+                      key: "bouquet_photo",
+                      type: "single_line_text_field",
+                      value: bouquetPhotoUrl,
+                    },
+                  ],
+                },
+              },
+            });
+          } catch {
+            // non-fatal — fulfillment already processed
+          }
         }
       }
     }
@@ -1470,504 +986,6 @@ type ActiveTab =
   | "unfulfilled"
   | "unpaid";
 
-// ─── StatusBadge (plain HTML — for use inside the drawer div overlay) ─────────
-
-function StatusBadge({ tone, label }: { tone: BadgeTone; label: string }) {
-  return (
-    <span className={`ods-badge ods-badge--${tone}`}>
-      {label}
-    </span>
-  );
-}
-
-// ─── OrderDrawer ──────────────────────────────────────────────────────────────
-
-interface OrderDrawerProps {
-  order: Order;
-  onClose: () => void;
-}
-
-function OrderDrawer({ order, onClose }: OrderDrawerProps) {
-  const [copySuccess, setCopySuccess] = useState(false);
-  const [fieldCopied, setFieldCopied] = useState<string | null>(null);
-
-  const orderId = order.id.split("/").pop() || order.id;
-  const customerName = getCustomerName(order);
-  const phone = getOrderPhone(order);
-  const rawDate = getDeliveryDateValue(order);
-  const deliveryDate = rawDate !== "—" ? formatDeliveryDate(rawDate) : "—";
-  const todayISO = toLocalISODate(new Date());
-  const isOpenOrder = isOpenFulfillmentStatus(order.displayFulfillmentStatus);
-  const deliveryRelative =
-    rawDate !== "—" && isOpenOrder
-      ? getDeliveryRelativeLabel(rawDate, todayISO)
-      : "";
-  const deliveryOverdue =
-    rawDate !== "—" && isOpenOrder && isDeliveryOverdue(rawDate, todayISO);
-  const timeWindow = getDeliveryTimeValue(order);
-  const addr = order.shippingAddress;
-  const fullAddress = getFullShippingAddress(order);
-  const city = getCity(order);
-  const attrs = order.customAttributes || [];
-  const originalDeliveryDate = getAttr(attrs, "Delivery Date");
-  const originalDeliveryTime = getAttr(attrs, "Delivery Time");
-  const rescheduleEvents = getRescheduleTimelineEvents(order);
-  const showDeliveryTimeline =
-    rescheduleEvents.length > 0 || hasRescheduleTag(order);
-  const cardMessage = getAttr(attrs, "Card Message", "card_message");
-  const instruction = getInstructionValue(order);
-  const items = order.lineItems?.edges || [];
-  const total = order.currentTotalPriceSet
-    ? formatMoney(
-        order.currentTotalPriceSet.shopMoney.amount,
-        order.currentTotalPriceSet.shopMoney.currencyCode,
-      )
-    : "—";
-  const email = order.customer?.defaultEmailAddress?.emailAddress || "—";
-  const customerId = order.customer?.id?.split("/").pop();
-  const billingAddress = order.billingAddress ?? null;
-  const showSenderInfo =
-    billingAddress != null &&
-    billingAddress.address1 != null &&
-    billingAddress.address1 !== (order.shippingAddress?.address1 ?? "");
-  const shippingAmount = order.totalShippingPriceSet
-    ? parseFloat(order.totalShippingPriceSet.shopMoney.amount)
-    : 0;
-  const totalAmount = order.currentTotalPriceSet
-    ? parseFloat(order.currentTotalPriceSet.shopMoney.amount)
-    : 0;
-  const currencyCode =
-    order.currentTotalPriceSet?.shopMoney.currencyCode ||
-    order.totalShippingPriceSet?.shopMoney.currencyCode ||
-    "USD";
-  const subtotalFormatted =
-    order.currentTotalPriceSet
-      ? formatMoney((totalAmount - shippingAmount).toFixed(2), currencyCode)
-      : "—";
-  const shippingFormatted =
-    order.totalShippingPriceSet
-      ? formatMoney(order.totalShippingPriceSet.shopMoney.amount, currencyCode)
-      : "—";
-  const meaningfulTags = getMeaningfulTags(order.tags || []);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(buildDeliveryInfoText(order));
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2500);
-    } catch {
-      // clipboard unavailable — silently skip
-    }
-  };
-
-  const handleFieldCopy = useCallback(
-    async (fieldKey: string, value: string) => {
-      if (!value || value === "—") return;
-      try {
-        await navigator.clipboard.writeText(value);
-        setFieldCopied(fieldKey);
-        setTimeout(() => setFieldCopied(null), 1500);
-      } catch {
-        // clipboard unavailable — silently skip
-      }
-    },
-    [],
-  );
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-
-    // Lock body scroll while drawer is open
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [onClose]);
-
-  return (
-    <>
-      {/* Backdrop */}
-      <div className="ods-backdrop" onClick={onClose} aria-hidden="true" />
-
-      {/* Panel */}
-      <div
-        className="ods-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Order ${order.name} details`}
-      >
-        {/* ── Header ──────────────────────────────────────────────────── */}
-        <div className="ods-drawer-head">
-          <div className="ods-drawer-head-row">
-            <div>
-              <p className="ods-drawer-order-num">{order.name}</p>
-              <div className="ods-drawer-badges">
-                <StatusBadge
-                  tone={financialStatusTone(order.displayFinancialStatus)}
-                  label={formatStatusLabel(order.displayFinancialStatus)}
-                />
-                <StatusBadge
-                  tone={fulfillmentStatusTone(order.displayFulfillmentStatus)}
-                  label={formatStatusLabel(order.displayFulfillmentStatus)}
-                />
-              </div>
-            </div>
-            <button
-              className="ods-drawer-close"
-              onClick={onClose}
-              aria-label="Close order details"
-            >
-              ×
-            </button>
-          </div>
-          <p className="ods-drawer-customer">{customerName}</p>
-          <p className="ods-drawer-total">{total}</p>
-        </div>
-
-        {/* ── Body ────────────────────────────────────────────────────── */}
-        <div className="ods-drawer-body">
-          {/* Delivery section */}
-          <div className="ods-drawer-section">
-            <p className="ods-section-title">Delivery</p>
-            <dl className="ods-dl">
-              <dt className="ods-dt">Date</dt>
-              <dd className="ods-dd">
-                <span className="ods-drawer-delivery-date">
-                  <span>{deliveryDate}</span>
-                  {deliveryRelative && (
-                    <span
-                      className={`ods-delivery-relative${deliveryOverdue ? " ods-delivery-relative--overdue" : ""}`}
-                    >
-                      {deliveryRelative}
-                    </span>
-                  )}
-                </span>
-              </dd>
-              <dt className="ods-dt">Time window</dt>
-              <dd className="ods-dd">{timeWindow}</dd>
-              <dt className="ods-dt">Address</dt>
-              <dd className="ods-dd ods-dd--long">{fullAddress || "—"}</dd>
-              <dt className="ods-dt">City</dt>
-              <dd className="ods-dd">{city || "—"}</dd>
-              {addr?.province && (
-                <>
-                  <dt className="ods-dt">Province</dt>
-                  <dd className="ods-dd">
-                    <span
-                      className={`ods-copyable${fieldCopied === "province" ? " ods-copyable--copied" : ""}`}
-                      onClick={() => handleFieldCopy("province", addr.province!)}
-                      title="Click to copy"
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => e.key === "Enter" && handleFieldCopy("province", addr.province!)}
-                    >
-                      {addr.province}
-                    </span>
-                  </dd>
-                </>
-              )}
-              <dt className="ods-dt">Card message</dt>
-              <dd className={`ods-dd${cardMessage === "—" ? " ods-dd--muted" : " ods-dd--scrollable"}`}>
-                {cardMessage !== "—" ? (
-                  <span
-                    className={`ods-copyable${fieldCopied === "cardMessage" ? " ods-copyable--copied" : ""}`}
-                    onClick={() => handleFieldCopy("cardMessage", cardMessage)}
-                    title="Click to copy"
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => e.key === "Enter" && handleFieldCopy("cardMessage", cardMessage)}
-                  >
-                    {cardMessage}
-                  </span>
-                ) : cardMessage}
-              </dd>
-              <dt className="ods-dt">Instructions</dt>
-              <dd className={`ods-dd${instruction === "—" ? " ods-dd--muted" : " ods-dd--scrollable"}`}>
-                {instruction !== "—" ? (
-                  <span
-                    className={`ods-copyable${fieldCopied === "instruction" ? " ods-copyable--copied" : ""}`}
-                    onClick={() => handleFieldCopy("instruction", instruction)}
-                    title="Click to copy"
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => e.key === "Enter" && handleFieldCopy("instruction", instruction)}
-                  >
-                    {instruction}
-                  </span>
-                ) : instruction}
-              </dd>
-            </dl>
-            <div className="ods-drawer-actions">
-              <button className="ods-action-link ods-action-link--with-icon" onClick={handleCopy}>
-                {copySuccess ? (
-                  "✓ Copied!"
-                ) : (
-                  <>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
-                      <rect x="7" y="2" width="6" height="3" rx="1" stroke="currentColor" strokeWidth="1.5"/>
-                      <path d="M6 3H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                      <path d="M8 10h4M8 13h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                    </svg>
-                    Copy all delivery info
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-
-          {showDeliveryTimeline && (
-            <div className="ods-drawer-section">
-              <p className="ods-section-title">DELIVERY TIMELINE</p>
-              <dl className="ods-dl">
-                <dt className="ods-dt">Original delivery</dt>
-                <dd className="ods-dd">
-                  {formatTimelineDelivery(
-                    originalDeliveryDate,
-                    originalDeliveryTime,
-                  )}
-                </dd>
-                {rescheduleEvents.length > 0 ? (
-                  <>
-                    <dt className="ods-dt">Count</dt>
-                    <dd className="ods-dd">
-                      Rescheduled {rescheduleEvents.length}x
-                    </dd>
-                    {rescheduleEvents.map((event, index) => (
-                      <Fragment
-                        key={`${event.requestedAt}-${event.date}-${event.timeSlot}-${index}`}
-                      >
-                        <dt className="ods-dt">
-                          {index === 0 ? "Latest" : `Change ${index + 1}`}
-                        </dt>
-                        <dd className="ods-dd">
-                          <span className="ods-drawer-delivery-date">
-                            <span>
-                              {formatTimelineDelivery(
-                                event.date,
-                                event.timeSlot,
-                              )}
-                            </span>
-                            <span className="ods-delivery-relative">
-                              {formatTimelineTimestamp(event.requestedAt)} •{" "}
-                              {formatTimelineStatus(event.status)}
-                            </span>
-                          </span>
-                        </dd>
-                      </Fragment>
-                    ))}
-                  </>
-                ) : (
-                  <>
-                    <dt className="ods-dt">Status</dt>
-                    <dd className="ods-dd">
-                      Rescheduled — history not yet recorded
-                    </dd>
-                  </>
-                )}
-              </dl>
-            </div>
-          )}
-
-          {/* Customer section */}
-          <div className="ods-drawer-section">
-            <p className="ods-section-title">Customer</p>
-            <dl className="ods-dl">
-              <dt className="ods-dt">Name</dt>
-              <dd className="ods-dd">
-                <span
-                  className={`ods-copyable${fieldCopied === "customerName" ? " ods-copyable--copied" : ""}`}
-                  onClick={() => handleFieldCopy("customerName", customerName)}
-                  title="Click to copy"
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => e.key === "Enter" && handleFieldCopy("customerName", customerName)}
-                >
-                  {customerName || "—"}
-                </span>
-              </dd>
-              <dt className="ods-dt">Email</dt>
-              <dd className="ods-dd ods-dd--long">{email}</dd>
-              <dt className="ods-dt">Phone</dt>
-              <dd className="ods-dd">
-                {phone !== "—" ? (
-                  <span
-                    className={`ods-copyable${fieldCopied === "phone" ? " ods-copyable--copied" : ""}`}
-                    onClick={() => handleFieldCopy("phone", phone)}
-                    title="Click to copy"
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => e.key === "Enter" && handleFieldCopy("phone", phone)}
-                  >
-                    {phone}
-                  </span>
-                ) : "—"}
-              </dd>
-            </dl>
-            <div className="ods-drawer-actions">
-              {phone !== "—" && (
-                <a
-                  href={`tel:${phone}`}
-                  className="ods-action-icon"
-                  data-tooltip="Call customer"
-                  aria-label="Call customer"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
-                    <path d="M3 5a2 2 0 0 1 2-2h.5a1 1 0 0 1 .95.68l.8 2.4a1 1 0 0 1-.23 1.02L6 8.12A11.05 11.05 0 0 0 11.88 14l1.02-1.02a1 1 0 0 1 1.02-.23l2.4.8A1 1 0 0 1 17 14.5V15a2 2 0 0 1-2 2h-.5C8.6 17 3 11.4 3 5.5V5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-                  </svg>
-                </a>
-              )}
-              {phone !== "—" && (
-                <a
-                  href={`sms:${phone}`}
-                  className="ods-action-icon"
-                  data-tooltip="Text customer"
-                  aria-label="Text customer"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
-                    <path d="M4 4h12a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7l-4 3V5a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
-                    <path d="M7 8.5h6M7 11h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                  </svg>
-                </a>
-              )}
-              {customerId && (
-                <a
-                  href={`shopify://admin/customers/${customerId}`}
-                  className="ods-action-icon"
-                  data-tooltip="View customer"
-                  aria-label="View customer"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true" focusable="false">
-                    <circle cx="10" cy="7" r="3" stroke="currentColor" strokeWidth="1.5"/>
-                    <path d="M4 17c0-3.31 2.69-6 6-6s6 2.69 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                  </svg>
-                </a>
-              )}
-            </div>
-          </div>
-
-          {/* Sender Info section — only when billing ≠ shipping (gift orders) */}
-          {showSenderInfo && (
-            <div className="ods-drawer-section">
-              <p className="ods-section-title">Sender Info</p>
-              <dl className="ods-dl">
-                {billingAddress!.name && (
-                  <>
-                    <dt className="ods-dt">Sender Name</dt>
-                    <dd className="ods-dd">{billingAddress!.name}</dd>
-                  </>
-                )}
-                {billingAddress!.address1 && (
-                  <>
-                    <dt className="ods-dt">Address</dt>
-                    <dd className="ods-dd ods-dd--long">{billingAddress!.address1}</dd>
-                  </>
-                )}
-                {billingAddress!.phone && (
-                  <>
-                    <dt className="ods-dt">Sender Phone</dt>
-                    <dd className="ods-dd">{billingAddress!.phone}</dd>
-                  </>
-                )}
-              </dl>
-            </div>
-          )}
-
-          {/* Items section */}
-          <div className="ods-drawer-section">
-            <p className="ods-section-title">Items ({items.length})</p>
-            {items.length === 0 ? (
-              <p style={{ fontSize: 13, color: "#6d7175", margin: 0 }}>
-                No items.
-              </p>
-            ) : (
-              <div>
-                {items.map((edge, idx) => {
-                  const item = edge.node;
-                  const imgUrl =
-                    item.image?.url || item.product?.featuredImage?.url;
-                  const imgAlt =
-                    item.image?.altText ||
-                    item.product?.featuredImage?.altText ||
-                    item.name;
-                  return (
-                    <div key={idx} className="ods-item-row">
-                      {imgUrl ? (
-                        <img
-                          className="ods-item-thumb"
-                          src={imgUrl}
-                          alt={imgAlt}
-                        />
-                      ) : (
-                        <div className="ods-item-thumb-placeholder" />
-                      )}
-                      <div className="ods-item-info">
-                        <div className="ods-item-name">{item.name}</div>
-                        {item.sku && (
-                          <div className="ods-item-sku">SKU: {item.sku}</div>
-                        )}
-                      </div>
-                      <div className="ods-item-qty">× {item.quantity}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            {/* Totals */}
-            <div className="ods-totals">
-              <div className="ods-totals-row">
-                <span className="ods-totals-label">Subtotal</span>
-                <span className="ods-totals-value">{subtotalFormatted}</span>
-              </div>
-              <div className="ods-totals-row">
-                <span className="ods-totals-label">Shipping</span>
-                <span className="ods-totals-value">{shippingFormatted}</span>
-              </div>
-              <div className="ods-totals-row ods-totals-row--total">
-                <span className="ods-totals-label">Total</span>
-                <span className="ods-totals-value">{total}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Admin link */}
-          <div className="ods-drawer-section">
-            <div className="ods-drawer-actions">
-              <a
-                href={`shopify://admin/orders/${orderId}`}
-                className="ods-action-link"
-              >
-                Open in Shopify Admin
-              </a>
-            </div>
-          </div>
-
-          {/* Tags section */}
-          <div className="ods-drawer-section">
-            <p className="ods-section-title">Tags</p>
-            {meaningfulTags.length === 0 ? (
-              <p className="ods-tag-empty">No tags</p>
-            ) : (
-              <ul className="ods-tag-list">
-                {meaningfulTags.map((tag) => (
-                  <li key={tag} className="ods-tag-pill">
-                    {tagDisplayLabel(tag)}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
 // ─── useFilteredSelection ─────────────────────────────────────────────────────
 
 function useFilteredSelection(
@@ -1997,6 +1015,11 @@ function Extension() {
   const loading = navigation.state === "loading";
   const deliveryDateFilter = loaderData.deliveryDateParam || "";
 
+  // URL-driven filter params (from loader — always in sync with what the server fetched)
+  const searchParam = loaderData.searchParam;
+  const timeWindowParam = loaderData.timeWindowParam;
+  const tabParam = loaderData.tabParam as ActiveTab;
+
   const [error] = useState<string | null>(
     loaderData.errors
       ? loaderData.errors.map((e) => e.message).join(", ")
@@ -2004,12 +1027,9 @@ function Extension() {
   );
   const [errorDismissed, setErrorDismissed] = useState<boolean>(false);
 
-  // Filter state (client-side only)
-  const [searchTerm, setSearchTerm] = useState<string>("");
-  const [timeWindowFilter, setTimeWindowFilter] = useState<string>("");
-
-  // Tab state
-  const [activeTab, setActiveTab] = useState<ActiveTab>("all");
+  // Local draft for the search input — debounced to URL via useEffect
+  const [searchTerm, setSearchTerm] = useState<string>(searchParam);
+  const searchParamRef = useRef(searchParam);
 
   // Sort state
   const [sortState, setSortState] = useState<SortState>({
@@ -2024,12 +1044,21 @@ function Extension() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const selectedOrder = orders.find((o) => o.id === selectedOrderId) ?? null;
 
+  // Shared tags modal state — single modal instance reused for all rows
+  const [tagsModalOrderId, setTagsModalOrderId] = useState<string | null>(null);
+  const [tagsModalTrigger, setTagsModalTrigger] = useState(0);
+
   // Column visibility state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
     new Set(DEFAULT_VISIBLE_COLUMNS),
   );
 
   const handleCloseDrawer = useCallback(() => setSelectedOrderId(null), []);
+
+  const showTagsModal = useCallback((orderId: string) => {
+    setTagsModalOrderId(orderId);
+    setTagsModalTrigger((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2046,9 +1075,44 @@ function Extension() {
     return () => mediaQuery.removeEventListener("change", handleResize);
   }, []);
 
+  // Clear selection when tab changes (tabParam is URL-driven)
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [activeTab]);
+  }, [tabParam]);
+
+  // Sync local search draft when loader returns a new searchParam (e.g., back navigation)
+  useEffect(() => {
+    searchParamRef.current = searchParam;
+    setSearchTerm(searchParam);
+  }, [searchParam]);
+
+  // Debounce search draft → URL param (fires only when draft differs from last committed value)
+  useEffect(() => {
+    if (searchTerm === searchParamRef.current) return;
+    const timer = setTimeout(() => {
+      searchParamRef.current = searchTerm;
+      const params = new URLSearchParams(searchParams);
+      if (searchTerm.trim()) {
+        params.set("search", searchTerm.trim());
+      } else {
+        params.delete("search");
+      }
+      params.delete("after");
+      params.delete("before");
+      navigate(`?${params.toString()}`, { replace: true });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm, searchParams, navigate]);
+
+  useEffect(() => {
+    if (tagsModalTrigger > 0) {
+      const el = document.getElementById("modal-tags-shared") as
+        | (HTMLElement & { show?: () => void })
+        | null;
+      if (el && typeof el.show === "function") el.show();
+      else el?.setAttribute("open", "");
+    }
+  }, [tagsModalTrigger]);
 
   const subtitleDate = useMemo(
     () =>
@@ -2105,6 +1169,24 @@ function Extension() {
     }));
   }, []);
 
+  // ── Tab handler — navigates to ?tab=VALUE and clears cursors ────────────────
+
+  const handleTabChange = useCallback(
+    (tab: ActiveTab): void => {
+      const params = new URLSearchParams(searchParams);
+      if (tab === "all") {
+        params.delete("tab");
+      } else {
+        params.set("tab", tab);
+      }
+      params.delete("after");
+      params.delete("before");
+      setSelectedIds(new Set());
+      navigate(`?${params.toString()}`, { replace: true });
+    },
+    [searchParams, navigate],
+  );
+
   // ── Filter handlers ─────────────────────────────────────────────────────────
 
   const handleDateChange = (value: string): void => {
@@ -2115,15 +1197,15 @@ function Extension() {
     } else {
       params.delete("deliveryDate");
     }
+    params.delete("after");
+    params.delete("before");
     setSelectedIds(new Set());
     navigate(`?${params.toString()}`, { replace: true });
   };
 
   const handleClearFilters = (): void => {
     setSearchTerm("");
-    setTimeWindowFilter("");
     setSelectedIds(new Set());
-    setActiveTab("all");
     setSortState({ column: null, direction: "asc" });
     navigate("?", { replace: true });
   };
@@ -2169,55 +1251,20 @@ function Extension() {
     navigate(`?${params.toString()}`, { replace: true });
   };
 
-  // ── Client-side filter (existing logic preserved; tab filter added before) ──
+  // ── Client-side filter — only thisWeek needs local date-range filtering;
+  //    all other filters are handled server-side via GraphQL query param ──────
 
   const filteredOrders: Order[] = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
-    const normalizedTimeSlotFilter = normalizeTimeSlot(timeWindowFilter);
-
+    if (tabParam !== "thisWeek") return orders;
     return orders.filter((order) => {
-      // ── Tab filter (new) ──────────────────────────────────────────────
-      if (activeTab === "today") {
-        if (getDeliveryDateValue(order) !== dateRefs.todayISO) return false;
-      } else if (activeTab === "tomorrow") {
-        if (getDeliveryDateValue(order) !== dateRefs.tomorrowISO) return false;
-      } else if (activeTab === "thisWeek") {
-        const d = getDeliveryDateValue(order);
-        if (d === "—" || d < dateRefs.startWeekISO || d > dateRefs.endWeekISO)
-          return false;
-      } else if (activeTab === "unfulfilled") {
-        if (order.displayFulfillmentStatus?.toUpperCase() !== "UNFULFILLED")
-          return false;
-      } else if (activeTab === "unpaid") {
-        const unpaidSet = new Set(["pending", "authorized", "partially_paid"]);
-        if (!unpaidSet.has((order.displayFinancialStatus || "").toLowerCase()))
-          return false;
-      }
-
-      // ── Existing filter logic (unchanged) ──────────────────────────────
-      if (deliveryDateFilter) {
-        if (getDeliveryDateValue(order) !== deliveryDateFilter) return false;
-      }
-      if (normalizedTimeSlotFilter) {
-        const orderTime = getDeliveryTimeValue(order);
-        if (normalizeTimeSlot(orderTime) !== normalizedTimeSlotFilter)
-          return false;
-      }
-      if (normalizedSearch) {
-        if (!getSearchableOrderText(order).includes(normalizedSearch))
-          return false;
-      }
-
-      return true;
+      const d = getDeliveryDateValue(order);
+      return (
+        d !== "—" &&
+        d >= dateRefs.startWeekISO &&
+        d <= dateRefs.endWeekISO
+      );
     });
-  }, [
-    orders,
-    deliveryDateFilter,
-    timeWindowFilter,
-    searchTerm,
-    activeTab,
-    dateRefs,
-  ]);
+  }, [orders, tabParam, dateRefs]);
 
   const displayedOrders: Order[] = useMemo(() => {
     if (!sortState.column) return filteredOrders;
@@ -2482,6 +1529,15 @@ function Extension() {
     else el.removeAttribute("open");
   };
 
+  const showModal = (id: string) => {
+    const el = document.getElementById(id) as
+      | (HTMLElement & { show?: () => void })
+      | null;
+    if (!el) return;
+    if (typeof el.show === "function") el.show();
+    else el.setAttribute("open", "");
+  };
+
   const submitBulk = useCallback(
     (op: BulkActionName, extras?: Record<string, string>) => {
       if (selectedIds.size === 0) return;
@@ -2496,8 +1552,10 @@ function Extension() {
     [fetcher, selectedIds],
   );
 
-  const handleArchive = () => submitBulk("archive");
-  const handleUnarchive = () => submitBulk("unarchive");
+  const handleArchive = () => showModal("modal-archive-orders");
+  const handleUnarchive = () => showModal("modal-unarchive-orders");
+  const handleArchiveConfirm = () => submitBulk("archive");
+  const handleUnarchiveConfirm = () => submitBulk("unarchive");
 
   const handleCancelConfirm = () => {
     submitBulk("cancel", {
@@ -2570,6 +1628,8 @@ function Extension() {
         heading: `${n} ${n === 1 ? "order" : "orders"} ${meta?.verb ?? "updated"}.`,
       });
       setSelectedIds(new Set());
+      hideModal("modal-archive-orders");
+      hideModal("modal-unarchive-orders");
       hideModal("modal-cancel-orders");
       hideModal("modal-add-tags");
       hideModal("modal-remove-tags");
@@ -2600,6 +1660,8 @@ function Extension() {
             : `${meta?.ing ?? "Action"} failed for ${failN} ${failN === 1 ? "order" : "orders"}.`,
         body: lines + more,
       });
+      // Keep only failed orders selected so merchant can retry without re-selecting
+      setSelectedIds(new Set(failed.map((r) => r.orderId)));
     } else if (d.message) {
       setActionBanner({ tone: "critical", heading: d.message });
     }
@@ -2623,10 +1685,10 @@ function Extension() {
   ];
 
   const hasActiveFilters = Boolean(
-    searchTerm.trim() ||
-    timeWindowFilter ||
+    searchParam ||
+    timeWindowParam ||
     deliveryDateFilter ||
-    activeTab !== "all",
+    tabParam !== "all",
   );
   const hasActiveViewControls = Boolean(hasActiveFilters || sortState.column);
 
@@ -2961,6 +2023,79 @@ function Extension() {
         </s-button>
       </s-modal>
 
+      {/* Archive orders confirmation modal */}
+      <s-modal
+        id="modal-archive-orders"
+        heading="Archive selected orders?"
+        size="small"
+      >
+        <s-box padding="base">
+          <s-stack direction="block" gap="base">
+            <s-banner tone="warning">
+              <s-paragraph>
+                {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
+                be archived and hidden from the main orders view. You can
+                unarchive them later.
+              </s-paragraph>
+            </s-banner>
+          </s-stack>
+        </s-box>
+        <s-button
+          slot="secondary-actions"
+          commandFor="modal-archive-orders"
+          command="--hide"
+          disabled={isSubmitting}
+        >
+          Cancel
+        </s-button>
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          disabled={isSubmitting || selectedCount === 0}
+          onClick={handleArchiveConfirm}
+        >
+          {isSubmitting
+            ? "Archiving…"
+            : `Archive ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
+        </s-button>
+      </s-modal>
+
+      {/* Unarchive orders confirmation modal */}
+      <s-modal
+        id="modal-unarchive-orders"
+        heading="Unarchive selected orders?"
+        size="small"
+      >
+        <s-box padding="base">
+          <s-stack direction="block" gap="base">
+            <s-banner tone="info">
+              <s-paragraph>
+                {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
+                be unarchived and returned to the main orders view.
+              </s-paragraph>
+            </s-banner>
+          </s-stack>
+        </s-box>
+        <s-button
+          slot="secondary-actions"
+          commandFor="modal-unarchive-orders"
+          command="--hide"
+          disabled={isSubmitting}
+        >
+          Cancel
+        </s-button>
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          disabled={isSubmitting || selectedCount === 0}
+          onClick={handleUnarchiveConfirm}
+        >
+          {isSubmitting
+            ? "Unarchiving…"
+            : `Unarchive ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
+        </s-button>
+      </s-modal>
+
       {/* Mark as fulfilled modal */}
       <s-modal
         id="modal-mark-fulfilled"
@@ -3178,6 +2313,27 @@ function Extension() {
         </s-button>
       </s-modal>
 
+      {/* Shared row-level tags/attributes modal — one instance for all rows */}
+      <s-modal id="modal-tags-shared" heading="Attributes" size="small">
+        <s-box padding="base">
+          <s-stack direction="inline" gap="small">
+            {tagsModalOrderId &&
+              getMeaningfulTags(
+                (orders.find((o) => o.id === tagsModalOrderId)?.tags) || [],
+              ).map((tag) => (
+                <s-chip key={tag}>{tagDisplayLabel(tag)}</s-chip>
+              ))}
+          </s-stack>
+        </s-box>
+        <s-button
+          slot="primary-action"
+          commandFor="modal-tags-shared"
+          command="--hide"
+        >
+          Close
+        </s-button>
+      </s-modal>
+
       {/* ── Error banner ────────────────────────────────────────────────────── */}
       {error && !errorDismissed && (
         <s-banner
@@ -3261,11 +2417,11 @@ function Extension() {
         </div>
         <div
           className="ods-kpi-card ods-kpi-card--clickable"
-          onClick={() => setActiveTab("unpaid")}
+          onClick={() => handleTabChange("unpaid")}
           role="button"
           tabIndex={0}
           onKeyDown={(e) =>
-            (e.key === "Enter" || e.key === " ") && setActiveTab("unpaid")
+            (e.key === "Enter" || e.key === " ") && handleTabChange("unpaid")
           }
         >
           <p className="ods-kpi-label">Unpaid</p>
@@ -3285,11 +2441,11 @@ function Extension() {
         </div>
         <div
           className="ods-kpi-card ods-kpi-card--clickable"
-          onClick={() => setActiveTab("unfulfilled")}
+          onClick={() => handleTabChange("unfulfilled")}
           role="button"
           tabIndex={0}
           onKeyDown={(e) =>
-            (e.key === "Enter" || e.key === " ") && setActiveTab("unfulfilled")
+            (e.key === "Enter" || e.key === " ") && handleTabChange("unfulfilled")
           }
         >
           <p className="ods-kpi-label">Unfulfilled</p>
@@ -3320,9 +2476,9 @@ function Extension() {
             <button
               key={tab.id}
               role="tab"
-              aria-selected={activeTab === tab.id}
-              className={`ods-tab${activeTab === tab.id ? " ods-tab--active" : ""}`}
-              onClick={() => setActiveTab(tab.id)}
+              aria-selected={tabParam === tab.id}
+              className={`ods-tab${tabParam === tab.id ? " ods-tab--active" : ""}`}
+              onClick={() => handleTabChange(tab.id)}
             >
               {tab.label}
               {tab.count > 0 && (
@@ -3416,10 +2572,19 @@ function Extension() {
                     id="toolbar-time-slot-filter"
                     label="Time slot"
                     labelAccessibilityVisibility="exclusive"
-                    value={timeWindowFilter}
+                    value={timeWindowParam}
                     onChange={(e: Event) => {
-                      setTimeWindowFilter(getSafeEventValue(e));
+                      const val = getSafeEventValue(e);
+                      const params = new URLSearchParams(searchParams);
+                      if (val) {
+                        params.set("timeWindow", val);
+                      } else {
+                        params.delete("timeWindow");
+                      }
+                      params.delete("after");
+                      params.delete("before");
                       setSelectedIds(new Set());
+                      navigate(`?${params.toString()}`, { replace: true });
                     }}
                   >
                     <s-option value="">All time slots</s-option>
@@ -3560,7 +2725,7 @@ function Extension() {
                         </s-text>
                         <s-text color="subdued">
                           {hasActiveFilters
-                            ? "A search, tab, delivery date, or time slot filter may be active. Use Reset to see all loaded orders."
+                            ? "No orders match the current filters. Use Reset to clear all filters."
                             : "Orders will appear here after Shopify returns them."}
                         </s-text>
                       </s-stack>
@@ -3871,44 +3036,16 @@ function Extension() {
                               }
                               const attrCount = meaningful.length;
                               return (
-                                <>
-                                  <s-button
-                                    variant="tertiary"
-                                    id={`btn-tags-${orderId}`}
-                                    commandFor={`modal-tags-${orderId}`}
-                                    command="--show"
-                                  >
-                                    {attrCount}{" "}
-                                    {attrCount === 1
-                                      ? "attribute"
-                                      : "attributes"}
-                                  </s-button>
-                                  <s-modal
-                                    id={`modal-tags-${orderId}`}
-                                    heading="Attributes"
-                                    size="small"
-                                  >
-                                    <s-box padding="base">
-                                      <s-stack direction="inline" gap="small">
-                                        {meaningful.map((tag) => (
-                                          <s-chip
-                                            id={`tag-${orderId}-${tag}`}
-                                            key={tag}
-                                          >
-                                            {tagDisplayLabel(tag)}
-                                          </s-chip>
-                                        ))}
-                                      </s-stack>
-                                    </s-box>
-                                    <s-button
-                                      slot="primary-action"
-                                      commandFor={`modal-tags-${orderId}`}
-                                      command="--hide"
-                                    >
-                                      Close
-                                    </s-button>
-                                  </s-modal>
-                                </>
+                                <s-button
+                                  variant="tertiary"
+                                  id={`btn-tags-${orderId}`}
+                                  onClick={() => showTagsModal(order.id)}
+                                >
+                                  {attrCount}{" "}
+                                  {attrCount === 1
+                                    ? "attribute"
+                                    : "attributes"}
+                                </s-button>
                               );
                             })()}
                           </s-table-cell>
