@@ -527,6 +527,28 @@ const ORDER_UPDATE_METAFIELD_MUTATION = `
   }
 `;
 
+const SET_ORDER_LALAMOVE_METAFIELDS_MUTATION = `
+  mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
+    metafieldsSet(metafields: $metafields) {
+      metafields { key namespace value }
+      userErrors { field message }
+    }
+  }
+`;
+
+const GET_SHOP_LALAMOVE_SETTINGS_QUERY = `
+  query GetShopLalamoveSettings {
+    shop {
+      lalamoveServiceType: metafield(namespace: "lalamove", key: "service_type") { value }
+      lalamoveSenderName: metafield(namespace: "lalamove", key: "sender_name") { value }
+      lalamoveSenderPhone: metafield(namespace: "lalamove", key: "sender_phone") { value }
+      lalamoveSenderAddress: metafield(namespace: "lalamove", key: "sender_address") { value }
+      lalamoveSenderLat: metafield(namespace: "lalamove", key: "sender_lat") { value }
+      lalamoveSenderLng: metafield(namespace: "lalamove", key: "sender_lng") { value }
+    }
+  }
+`;
+
 // Rewrite raw Shopify access-denied / scope errors into something the merchant can act on.
 function scopeHint(msg: string): string {
   if (
@@ -642,6 +664,29 @@ interface BulkActionResponse {
   summary: { ok: number; failed: number };
 }
 
+async function setLalamoveMetafields(
+  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
+  orderId: string,
+  fields: {
+    order_id?: string;
+    status?: string;
+    share_link?: string;
+    driver_name?: string;
+    driver_phone?: string;
+  },
+) {
+  const metafields = Object.entries(fields).map(([key, value]) => ({
+    ownerId: orderId,
+    namespace: "lalamove",
+    key,
+    value: value ?? "",
+    type: "single_line_text_field",
+  }));
+  await admin.graphql(SET_ORDER_LALAMOVE_METAFIELDS_MUTATION, {
+    variables: { metafields },
+  });
+}
+
 // ─── Action handler ───────────────────────────────────────────────────────────
 
 export const action = async ({
@@ -649,7 +694,7 @@ export const action = async ({
 }: {
   request: Request;
 }): Promise<Response> => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   if (request.method.toUpperCase() !== "POST") {
     return Response.json(
       {
@@ -682,6 +727,230 @@ export const action = async ({
     results: [],
     summary: { ok: 0, failed: 0 },
   };
+
+  if (opRaw === "lalamoveGetQuote") {
+    const deliveryAddress = String(fd.get("deliveryAddress") ?? "");
+    const deliveryDate = String(fd.get("deliveryDate") ?? "");
+    const timeSlot = String(fd.get("timeSlot") ?? "");
+    const specialRequestsRaw = String(fd.get("specialRequests") ?? "");
+    const specialRequests = specialRequestsRaw ? specialRequestsRaw.split(",") : [];
+
+    const settingsRes = await admin.graphql(GET_SHOP_LALAMOVE_SETTINGS_QUERY);
+    const settingsBody = (await settingsRes.json()) as {
+      data?: {
+        shop?: {
+          lalamoveServiceType?: { value: string } | null;
+          lalamoveSenderLat?: { value: string } | null;
+          lalamoveSenderLng?: { value: string } | null;
+          lalamoveSenderAddress?: { value: string } | null;
+        };
+      };
+    };
+    const shopSettings = settingsBody.data?.shop;
+    const serviceType = shopSettings?.lalamoveServiceType?.value ?? "MOTORCYCLE";
+    const senderLat = shopSettings?.lalamoveSenderLat?.value ?? "";
+    const senderLng = shopSettings?.lalamoveSenderLng?.value ?? "";
+    const senderAddress = shopSettings?.lalamoveSenderAddress?.value ?? "";
+
+    if (!senderLat || !senderLng) {
+      return Response.json(
+        { ok: false, error: "Pickup coordinates not configured. Go to Schedule Rules → Lalamove Settings." },
+        { status: 400 },
+      );
+    }
+
+    const { getQuotation, geocodeAddress, buildScheduleAt } = await import(
+      "../lib/lalamove.server"
+    );
+
+    let deliveryCoords: { lat: string; lng: string };
+    try {
+      deliveryCoords = await geocodeAddress(deliveryAddress);
+    } catch (e) {
+      return Response.json(
+        { ok: false, error: `Cannot geocode address: ${String(e)}` },
+        { status: 400 },
+      );
+    }
+
+    try {
+      const quotation = await getQuotation({
+        serviceType,
+        language: "en_PH",
+        scheduleAt: buildScheduleAt(deliveryDate, timeSlot),
+        specialRequests: specialRequests.length ? specialRequests : undefined,
+        stops: [
+          { coordinates: { lat: senderLat, lng: senderLng }, address: senderAddress },
+          { coordinates: deliveryCoords, address: deliveryAddress },
+        ],
+      });
+      return Response.json({
+        ok: true,
+        quotationId: quotation.quotationId,
+        price: `${quotation.priceBreakdown.currency} ${quotation.priceBreakdown.total}`,
+        expiresAt: quotation.expiresAt,
+      });
+    } catch (e) {
+      return Response.json(
+        { ok: false, error: `Quotation failed: ${String(e)}` },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (opRaw === "lalamoveDispatch") {
+    const orderId = String(fd.get("orderId") ?? "");
+    const deliveryDate = String(fd.get("deliveryDate") ?? "");
+    const timeSlot = String(fd.get("timeSlot") ?? "");
+    const customerName = String(fd.get("customerName") ?? "");
+    const customerPhone = String(fd.get("customerPhone") ?? "");
+    const deliveryAddress = String(fd.get("deliveryAddress") ?? "");
+    const notesToDriver = String(fd.get("notesToDriver") ?? "");
+    const specialRequestsRaw = String(fd.get("specialRequests") ?? "");
+    const specialRequests = specialRequestsRaw ? specialRequestsRaw.split(",") : [];
+    const shopDomain = session.shop;
+
+    const settingsRes = await admin.graphql(GET_SHOP_LALAMOVE_SETTINGS_QUERY);
+    const settingsBody = (await settingsRes.json()) as {
+      data?: {
+        shop?: {
+          lalamoveServiceType?: { value: string } | null;
+          lalamoveSenderName?: { value: string } | null;
+          lalamoveSenderPhone?: { value: string } | null;
+          lalamoveSenderAddress?: { value: string } | null;
+          lalamoveSenderLat?: { value: string } | null;
+          lalamoveSenderLng?: { value: string } | null;
+        };
+      };
+    };
+    const shopSettings = settingsBody.data?.shop;
+    const serviceType = shopSettings?.lalamoveServiceType?.value ?? "MOTORCYCLE";
+    const senderName = shopSettings?.lalamoveSenderName?.value ?? "";
+    const senderPhone = shopSettings?.lalamoveSenderPhone?.value ?? "";
+    const senderAddress = shopSettings?.lalamoveSenderAddress?.value ?? "";
+    const senderLat = shopSettings?.lalamoveSenderLat?.value ?? "";
+    const senderLng = shopSettings?.lalamoveSenderLng?.value ?? "";
+
+    if (!senderLat || !senderLng) {
+      return Response.json(
+        { ok: false, error: "Lalamove pickup coordinates not configured. Go to Schedule Rules → Lalamove Settings." },
+        { status: 400 },
+      );
+    }
+
+    const { getQuotation, placeOrder, geocodeAddress, buildScheduleAt } =
+      await import("../lib/lalamove.server");
+
+    let deliveryCoords: { lat: string; lng: string };
+    try {
+      deliveryCoords = await geocodeAddress(deliveryAddress);
+    } catch (e) {
+      return Response.json(
+        { ok: false, error: `Could not locate delivery address. Please verify customer address. (${String(e)})` },
+        { status: 400 },
+      );
+    }
+
+    let quotation;
+    try {
+      quotation = await getQuotation({
+        serviceType,
+        language: "en_PH",
+        scheduleAt: buildScheduleAt(deliveryDate, timeSlot),
+        specialRequests: specialRequests.length ? specialRequests : undefined,
+        stops: [
+          { coordinates: { lat: senderLat, lng: senderLng }, address: senderAddress },
+          { coordinates: deliveryCoords, address: deliveryAddress },
+        ],
+      });
+    } catch (e) {
+      return Response.json(
+        { ok: false, error: `Quotation failed: ${String(e)}` },
+        { status: 400 },
+      );
+    }
+
+    const senderStop = quotation.stops[0];
+    const recipientStop = quotation.stops[1];
+
+    let lalamoveOrder;
+    try {
+      lalamoveOrder = await placeOrder({
+        quotationId: quotation.quotationId,
+        sender: { stopId: senderStop.stopId, name: senderName, phone: senderPhone },
+        recipients: [{
+          stopId: recipientStop.stopId,
+          name: customerName,
+          phone: customerPhone,
+          remarks: notesToDriver || undefined,
+        }],
+        metadata: { shopifyOrderId: orderId, shop: shopDomain },
+      });
+    } catch (e) {
+      return Response.json(
+        { ok: false, error: `Order placement failed: ${String(e)}` },
+        { status: 400 },
+      );
+    }
+
+    await setLalamoveMetafields(admin, orderId, {
+      order_id: lalamoveOrder.orderId,
+      status: lalamoveOrder.status,
+      share_link: lalamoveOrder.shareLink,
+    });
+
+    return Response.json({
+      ok: true,
+      lalamoveOrderId: lalamoveOrder.orderId,
+      lalamoveStatus: lalamoveOrder.status,
+      lalamoveShareLink: lalamoveOrder.shareLink,
+      estimatedPrice: `${lalamoveOrder.priceBreakdown.currency} ${lalamoveOrder.priceBreakdown.total}`,
+    });
+  }
+
+  if (opRaw === "lalamoveCancel") {
+    const orderId = String(fd.get("orderId") ?? "");
+    const lalamoveOrderId = String(fd.get("lalamoveOrderId") ?? "");
+    if (!lalamoveOrderId) {
+      return Response.json(
+        { ok: false, error: "No Lalamove order to cancel." },
+        { status: 400 },
+      );
+    }
+    const { cancelLalamoveOrder } = await import("../lib/lalamove.server");
+    try {
+      await cancelLalamoveOrder(lalamoveOrderId);
+    } catch (e) {
+      return Response.json(
+        { ok: false, error: `Cancel failed: ${String(e)}` },
+        { status: 400 },
+      );
+    }
+    await setLalamoveMetafields(admin, orderId, { status: "CANCELED" });
+    return Response.json({ ok: true });
+  }
+
+  if (opRaw === "lalamovePriorityFee") {
+    const lalamoveOrderId = String(fd.get("lalamoveOrderId") ?? "");
+    const priorityFee = String(fd.get("priorityFee") ?? "");
+    const currency = String(fd.get("currency") ?? "PHP");
+    if (!lalamoveOrderId || !priorityFee) {
+      return Response.json(
+        { ok: false, error: "Missing order ID or fee amount." },
+        { status: 400 },
+      );
+    }
+    const { addPriorityFee } = await import("../lib/lalamove.server");
+    try {
+      await addPriorityFee(lalamoveOrderId, priorityFee, currency);
+    } catch (e) {
+      return Response.json(
+        { ok: false, error: `Priority fee failed: ${String(e)}` },
+        { status: 400 },
+      );
+    }
+    return Response.json({ ok: true });
+  }
 
   if (!op) {
     return Response.json(
