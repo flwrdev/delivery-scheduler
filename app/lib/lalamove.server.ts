@@ -43,7 +43,7 @@ async function lalamoveRequest<T>(
   body?: unknown,
 ): Promise<T> {
   const { apiKey, apiSecret, baseUrl } = getLalamoveConfig();
-  const bodyStr = body ? JSON.stringify(body) : "";
+  const bodyStr = body !== undefined ? JSON.stringify({ data: body }) : "";
   const auth = buildAuthHeader(apiKey, apiSecret, method, path, bodyStr);
 
   const res = await fetch(`${baseUrl}${path}`, {
@@ -65,7 +65,8 @@ async function lalamoveRequest<T>(
   }
 
   if (res.status === 204 || method === "DELETE") return undefined as T;
-  return res.json() as Promise<T>;
+  const responseBody = (await res.json()) as { data: T };
+  return responseBody.data;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
