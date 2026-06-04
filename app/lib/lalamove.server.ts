@@ -35,6 +35,41 @@ function buildAuthHeader(
   return `hmac ${apiKey}:${time}:${signature}`;
 }
 
+// ─── Error Parsing ────────────────────────────────────────────────────────────
+
+function parseLalamoveError(status: number, body: string): string {
+  try {
+    const parsed = JSON.parse(body) as {
+      errors?: Array<{ id: string; detail?: string; message?: string }>;
+    };
+    const errors = parsed.errors;
+    if (!errors?.length) return `Request failed (${status})`;
+
+    return errors
+      .map((e) => {
+        if (e.id === "ERR_INVALID_FIELD") {
+          if (e.detail?.includes("/coordinates/lng"))
+            return "Invalid longitude. Please re-save Lalamove Settings with a plain decimal (e.g. 120.9842).";
+          if (e.detail?.includes("/coordinates/lat"))
+            return "Invalid latitude. Please re-save Lalamove Settings with a plain decimal (e.g. 14.5995).";
+          if (e.detail?.includes("/specialRequests"))
+            return "Invalid special request option.";
+          return `Invalid field: ${e.detail ?? e.message ?? e.id}`;
+        }
+        if (e.id === "ERR_INSUFFICIENT_STOPS")
+          return "Missing pickup or delivery location. Check Lalamove Settings.";
+        if (e.id === "ERR_UNAUTHORIZED")
+          return "API authentication failed. Check Lalamove API keys.";
+        if (e.id === "ERR_INVALID_MARKET")
+          return "Invalid market configuration. Check Lalamove Settings.";
+        return e.message ?? e.id;
+      })
+      .join("; ");
+  } catch {
+    return `Request failed [${status}]`;
+  }
+}
+
 // ─── Base Request ─────────────────────────────────────────────────────────────
 
 async function lalamoveRequest<T>(
@@ -59,9 +94,7 @@ async function lalamoveRequest<T>(
 
   if (!res.ok) {
     const errorText = await res.text();
-    throw new Error(
-      `Lalamove ${method} ${path} failed [${res.status}]: ${errorText}`,
-    );
+    throw new Error(parseLalamoveError(res.status, errorText));
   }
 
   if (res.status === 204 || method === "DELETE") return undefined as T;
@@ -189,7 +222,10 @@ export async function geocodeAddress(
   }
 
   const { lat, lng } = data.results[0].geometry.location;
-  return { lat: String(lat), lng: String(lng) };
+  return {
+    lat: parseFloat(String(lat)).toFixed(7),
+    lng: parseFloat(String(lng)).toFixed(7),
+  };
 }
 
 // ─── scheduleAt ───────────────────────────────────────────────────────────────
