@@ -500,14 +500,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (!shopGid)
         return Response.json({ error: "Could not get shop ID" }, { status: 500 });
 
+      const trimmedLat = (s.senderLat ?? "").trim();
+      const trimmedLng = (s.senderLng ?? "").trim();
+      const coordPattern = /^[+-]?(\d{1,3})(\.\d{1,15})?$/;
+      if ((trimmedLat || trimmedLng) && (!coordPattern.test(trimmedLat) || !coordPattern.test(trimmedLng))) {
+        return Response.json(
+          { error: "Sender latitude and longitude must be plain decimal numbers (e.g. 14.5995, 120.9842)" },
+          { status: 400 },
+        );
+      }
+
       const metafields = [
         { ownerId: shopGid, namespace: "lalamove", key: "environment", value: s.environment ?? "sandbox", type: "single_line_text_field" },
         { ownerId: shopGid, namespace: "lalamove", key: "service_type", value: s.serviceType ?? "MOTORCYCLE", type: "single_line_text_field" },
         { ownerId: shopGid, namespace: "lalamove", key: "sender_name", value: s.senderName ?? "", type: "single_line_text_field" },
         { ownerId: shopGid, namespace: "lalamove", key: "sender_phone", value: s.senderPhone ?? "", type: "single_line_text_field" },
         { ownerId: shopGid, namespace: "lalamove", key: "sender_address", value: s.senderAddress ?? "", type: "single_line_text_field" },
-        { ownerId: shopGid, namespace: "lalamove", key: "sender_lat", value: s.senderLat ?? "", type: "single_line_text_field" },
-        { ownerId: shopGid, namespace: "lalamove", key: "sender_lng", value: s.senderLng ?? "", type: "single_line_text_field" },
+        { ownerId: shopGid, namespace: "lalamove", key: "sender_lat", value: trimmedLat, type: "single_line_text_field" },
+        { ownerId: shopGid, namespace: "lalamove", key: "sender_lng", value: trimmedLng, type: "single_line_text_field" },
       ];
 
       const saveRes = await admin.graphql(SET_LALAMOVE_SETTINGS_MUTATION, { variables: { metafields } });

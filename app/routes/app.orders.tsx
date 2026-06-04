@@ -828,8 +828,8 @@ export const action = async ({
     const senderName = shopSettings?.lalamoveSenderName?.value ?? "";
     const senderPhone = shopSettings?.lalamoveSenderPhone?.value ?? "";
     const senderAddress = shopSettings?.lalamoveSenderAddress?.value ?? "";
-    const senderLat = shopSettings?.lalamoveSenderLat?.value ?? "";
-    const senderLng = shopSettings?.lalamoveSenderLng?.value ?? "";
+    const senderLat = (shopSettings?.lalamoveSenderLat?.value ?? "").trim();
+    const senderLng = (shopSettings?.lalamoveSenderLng?.value ?? "").trim();
 
     if (!senderLat || !senderLng) {
       return Response.json(

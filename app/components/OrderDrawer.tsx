@@ -250,8 +250,7 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
         { method: "post" },
       );
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDispatchModal]);
+  }, [showDispatchModal, thermalBag, buyForMe]);
 
   return (
     <>
