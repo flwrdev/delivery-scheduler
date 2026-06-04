@@ -234,8 +234,8 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
       fullDeliveryAddress
     ) {
       const specialRequests = [
-        buyForMe ? "BUY_FOR_ME" : null,
-        thermalBag ? "THERMAL_BAG" : null,
+        buyForMe ? "PURCHASE_SERVICE_1" : null,
+        thermalBag ? "THERMAL_BAG_1" : null,
       ]
         .filter(Boolean)
         .join(",");
@@ -933,8 +933,8 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                       type="hidden"
                       name="specialRequests"
                       value={[
-                        buyForMe ? "BUY_FOR_ME" : null,
-                        thermalBag ? "THERMAL_BAG" : null,
+                        buyForMe ? "PURCHASE_SERVICE_1" : null,
+                        thermalBag ? "THERMAL_BAG_1" : null,
                       ]
                         .filter(Boolean)
                         .join(",")}
