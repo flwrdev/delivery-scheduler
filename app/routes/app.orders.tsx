@@ -748,8 +748,8 @@ export const action = async ({
     };
     const shopSettings = settingsBody.data?.shop;
     const serviceType = shopSettings?.lalamoveServiceType?.value ?? "MOTORCYCLE";
-    const senderLat = shopSettings?.lalamoveSenderLat?.value ?? "";
-    const senderLng = shopSettings?.lalamoveSenderLng?.value ?? "";
+    const senderLat = (shopSettings?.lalamoveSenderLat?.value ?? "").trim();
+    const senderLng = (shopSettings?.lalamoveSenderLng?.value ?? "").trim();
     const senderAddress = shopSettings?.lalamoveSenderAddress?.value ?? "";
 
     if (!senderLat || !senderLng) {
