@@ -173,6 +173,9 @@ export async function geocodeAddress(
 
   const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${key}`;
   const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Google Maps geocoding HTTP ${res.status} for address: ${address}`);
+  }
   const data = (await res.json()) as {
     status: string;
     results: Array<{
@@ -196,6 +199,9 @@ export function buildScheduleAt(
   timeSlot: string,
 ): string {
   const startHour = parseTimeWindowHour(timeSlot); // e.g. "9AM-12PM" → 9
+  if (startHour === 999) {
+    throw new Error(`buildScheduleAt: unrecognized timeSlot "${timeSlot}"`);
+  }
   const [y, mo, d] = deliveryDate.split("-").map(Number);
   const utcMs = Date.UTC(y, mo - 1, d, startHour - 8, 0, 0);
   return new Date(utcMs).toISOString();
