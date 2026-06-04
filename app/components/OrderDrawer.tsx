@@ -68,17 +68,22 @@ type LalamoveStatusValue =
 
 function LalamoveStatusLabel({ status }: { status: LalamoveStatusValue | null }) {
   if (!status) return null;
-  const map: Record<LalamoveStatusValue, { label: string; color: string }> = {
-    ASSIGNING_DRIVER: { label: "Finding driver…", color: "#f59e0b" },
-    ON_GOING: { label: "● On the way", color: "#2563eb" },
-    PICKED_UP: { label: "● Picked up", color: "#2563eb" },
-    COMPLETED: { label: "✓ Delivered", color: "#16a34a" },
-    CANCELED: { label: "✗ Cancelled", color: "#dc2626" },
-    REJECTED: { label: "✗ Rejected", color: "#dc2626" },
-    EXPIRED: { label: "✗ Expired", color: "#dc2626" },
+  const map: Record<LalamoveStatusValue, { label: string; tone: "warning" | "info" | "success" | "critical"; spinner?: boolean }> = {
+    ASSIGNING_DRIVER: { label: "Finding driver…", tone: "warning", spinner: true },
+    ON_GOING:         { label: "● On the way",    tone: "info" },
+    PICKED_UP:        { label: "● Picked up",     tone: "info" },
+    COMPLETED:        { label: "✓ Delivered",     tone: "success" },
+    CANCELED:         { label: "✗ Cancelled",     tone: "critical" },
+    REJECTED:         { label: "✗ Rejected",      tone: "critical" },
+    EXPIRED:          { label: "✗ Expired",       tone: "critical" },
   };
-  const { label, color } = map[status] ?? { label: status, color: "#6b7280" };
-  return <span style={{ color, fontWeight: 600, fontSize: 13 }}>{label}</span>;
+  const { label, tone, spinner } = map[status] ?? { label: status, tone: "info" as const };
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      {spinner && <span className="ods-spinner--amber" />}
+      <span className={`ods-badge ods-badge--${tone}`}>{label}</span>
+    </span>
+  );
 }
 
 // ─── OrderDrawer ──────────────────────────────────────────────────────────────
@@ -781,76 +786,41 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
 
           {/* ── Dispatch Modal ──────────────────────────────────────────── */}
           {showDispatchModal && (
-            <div
-              style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(0,0,0,0.45)",
-                zIndex: 9999,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <div
-                style={{
-                  background: "#fff",
-                  borderRadius: 12,
-                  padding: 28,
-                  width: 420,
-                  maxWidth: "90vw",
-                  boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
-                }}
-              >
-                <p style={{ fontWeight: 700, fontSize: 16, margin: "0 0 16px" }}>
+            <div className="ods-dispatch-modal-overlay">
+              <div className="ods-dispatch-modal">
+                <p style={{ fontWeight: 700, fontSize: 15, margin: "0 0 14px" }}>
                   Dispatch via Lalamove — {orderNumber}
                 </p>
 
-                <p style={{ fontWeight: 600, fontSize: 13, margin: "0 0 10px" }}>
-                  Special Requests
-                </p>
+                <p className="ods-section-title">Special Requests</p>
 
                 {isCOD && (
-                  <label
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      marginBottom: 10,
-                      fontSize: 13,
-                      cursor: "pointer",
-                    }}
-                  >
+                  <label className="ods-check-row" style={{ cursor: "pointer" }}>
                     <input
                       type="checkbox"
                       checked={buyForMe}
                       onChange={(e) => setBuyForMe(e.target.checked)}
                     />
-                    Buy for me (Up to ₱2,000)
+                    <span className="ods-check-label">
+                      <span className="ods-check-text">Buy for me (Up to ₱2,000)</span>
+                      <span className="ods-check-helper">Driver pays COD amount at pickup</span>
+                    </span>
                   </label>
                 )}
 
-                <label
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    marginBottom: 16,
-                    fontSize: 13,
-                    cursor: "pointer",
-                  }}
-                >
+                <label className="ods-check-row" style={{ cursor: "pointer", marginBottom: 14 }}>
                   <input
                     type="checkbox"
                     checked={thermalBag}
                     onChange={(e) => setThermalBag(e.target.checked)}
                   />
-                  Thermal bag
+                  <span className="ods-check-label">
+                    <span className="ods-check-text">Thermal bag</span>
+                    <span className="ods-check-helper">Keeps items cool during transit</span>
+                  </span>
                 </label>
 
-                <p style={{ fontWeight: 600, fontSize: 13, margin: "0 0 6px" }}>
-                  Notes to driver
-                </p>
+                <p className="ods-section-title">Notes to driver</p>
                 <textarea
                   value={driverNotes}
                   onChange={(e) => setDriverNotes(e.target.value)}
@@ -871,47 +841,33 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                   {500 - driverNotes.length} characters left
                 </p>
 
-                {/* Estimated price */}
-                <div
-                  style={{
-                    borderTop: "1px solid #e5e7eb",
-                    paddingTop: 12,
-                    marginBottom: 12,
-                  }}
-                >
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>Estimated price: </span>
+                <div className="ods-price-card">
+                  <span className="ods-price-card__label">Estimated price</span>
                   {quoteFetcher.state !== "idle" ? (
-                    <span style={{ fontSize: 13, color: "#6b7280" }}>Fetching…</span>
+                    <span className="ods-price-card__loading">
+                      <span className="ods-spinner" />
+                      Fetching…
+                    </span>
                   ) : quoteFetcher.data?.price ? (
-                    <span style={{ fontSize: 13, color: "#111827", fontWeight: 700 }}>
-                      {quoteFetcher.data.price}
-                    </span>
+                    <span className="ods-price-card__value">{quoteFetcher.data.price}</span>
                   ) : quoteFetcher.data?.error ? (
-                    <span style={{ fontSize: 13, color: "#dc2626" }}>
-                      {quoteFetcher.data.error}
-                    </span>
+                    <span className="ods-price-card__error">{quoteFetcher.data.error}</span>
                   ) : (
-                    <span style={{ fontSize: 13, color: "#6b7280" }}>—</span>
+                    <span className="ods-price-card__loading">—</span>
                   )}
                 </div>
 
                 {lalamoveFetcher.data?.error && (
-                  <p style={{ color: "#dc2626", fontSize: 13, margin: "0 0 12px" }}>
+                  <p style={{ color: "#dc2626", fontSize: 12, margin: "0 0 10px" }}>
                     {lalamoveFetcher.data.error}
                   </p>
                 )}
 
-                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                   <button
                     type="button"
                     onClick={() => setShowDispatchModal(false)}
-                    style={{
-                      padding: "8px 18px",
-                      border: "1px solid #c9cccf",
-                      borderRadius: 6,
-                      background: "#fff",
-                      cursor: "pointer",
-                    }}
+                    className="ods-btn ods-btn--default"
                   >
                     Cancel
                   </button>
@@ -941,17 +897,11 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                     <button
                       type="submit"
                       disabled={lalamoveFetcher.state !== "idle"}
-                      style={{
-                        padding: "8px 20px",
-                        background: "#ff6600",
-                        color: "#fff",
-                        border: "none",
-                        borderRadius: 6,
-                        cursor: "pointer",
-                        fontWeight: 600,
-                      }}
+                      className="ods-btn ods-btn--orange"
                     >
-                      {lalamoveFetcher.state !== "idle" ? "Dispatching…" : "Confirm Dispatch"}
+                      {lalamoveFetcher.state !== "idle" ? (
+                        <><span className="ods-spinner--btn" /> Booking…</>
+                      ) : "Book"}
                     </button>
                   </lalamoveFetcher.Form>
                 </div>
