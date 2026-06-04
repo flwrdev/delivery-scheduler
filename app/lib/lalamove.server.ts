@@ -13,7 +13,7 @@ function getLalamoveConfig() {
       : process.env.api_secret!,
     baseUrl: isProd
       ? "https://rest.lalamove.com"
-      : "https://sandbox-rest.lalamove.com",
+      : "https://rest.sandbox.lalamove.com",
   };
 }
 
