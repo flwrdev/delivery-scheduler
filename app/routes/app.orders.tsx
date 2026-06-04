@@ -687,6 +687,19 @@ async function setLalamoveMetafields(
   });
 }
 
+// ─── Lalamove constants ───────────────────────────────────────────────────────
+
+const VALID_SPECIAL_REQUESTS = new Set([
+  "PURCHASE_SERVICE_1",
+  "PURCHASE_SERVICE_2",
+  "PURCHASE_SERVICE_3",
+  "PURCHASE_SERVICE_4",
+  "THERMAL_BAG_1",
+  "CASH_ON_DELIVERY",
+  "CASH_ON_DELIVERY_AUTODEDUCT",
+  "QUEUEING_SERVICE",
+]);
+
 // ─── Action handler ───────────────────────────────────────────────────────────
 
 export const action = async ({
@@ -733,7 +746,9 @@ export const action = async ({
     const deliveryDate = String(fd.get("deliveryDate") ?? "");
     const timeSlot = String(fd.get("timeSlot") ?? "");
     const specialRequestsRaw = String(fd.get("specialRequests") ?? "");
-    const specialRequests = specialRequestsRaw ? specialRequestsRaw.split(",") : [];
+    const specialRequests = specialRequestsRaw
+      ? specialRequestsRaw.split(",").filter((v) => VALID_SPECIAL_REQUESTS.has(v))
+      : [];
 
     const settingsRes = await admin.graphql(GET_SHOP_LALAMOVE_SETTINGS_QUERY);
     const settingsBody = (await settingsRes.json()) as {
@@ -807,7 +822,9 @@ export const action = async ({
     const deliveryAddress = String(fd.get("deliveryAddress") ?? "");
     const notesToDriver = String(fd.get("notesToDriver") ?? "");
     const specialRequestsRaw = String(fd.get("specialRequests") ?? "");
-    const specialRequests = specialRequestsRaw ? specialRequestsRaw.split(",") : [];
+    const specialRequests = specialRequestsRaw
+      ? specialRequestsRaw.split(",").filter((v) => VALID_SPECIAL_REQUESTS.has(v))
+      : [];
     const shopDomain = session.shop;
 
     const settingsRes = await admin.graphql(GET_SHOP_LALAMOVE_SETTINGS_QUERY);
