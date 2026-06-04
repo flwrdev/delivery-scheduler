@@ -42,6 +42,7 @@ import {
   useFetcher,
   useNavigation,
 } from "react-router";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import stylesHref from "../styles/orders-dashboard.css?url";
 
@@ -77,7 +78,6 @@ const DEFAULT_VISIBLE_COLUMNS = [
   "deliveryDate",
   "timeWindow",
   "total",
-  "actions",
 ];
 
 const MOBILE_VISIBLE_COLUMNS = [
@@ -87,7 +87,6 @@ const MOBILE_VISIBLE_COLUMNS = [
   "deliveryDate",
   "timeWindow",
   "fulfillment",
-  "actions",
 ];
 
 interface PageInfo {
@@ -130,6 +129,7 @@ const GET_ORDERS_QUERY = `
             id
             firstName
             lastName
+            numberOfOrders
             defaultEmailAddress {
               emailAddress
             }
@@ -182,6 +182,22 @@ const GET_ORDERS_QUERY = `
           rescheduleHistory: metafield(namespace: "delivery", key: "reschedule_history") {
             value
             jsonValue
+          }
+          paymentGatewayNames
+          lalamoveOrderId: metafield(namespace: "lalamove", key: "order_id") {
+            value
+          }
+          lalamoveStatus: metafield(namespace: "lalamove", key: "status") {
+            value
+          }
+          lalamoveShareLink: metafield(namespace: "lalamove", key: "share_link") {
+            value
+          }
+          lalamoveDriverName: metafield(namespace: "lalamove", key: "driver_name") {
+            value
+          }
+          lalamoveDriverPhone: metafield(namespace: "lalamove", key: "driver_phone") {
+            value
           }
           lineItems(first: 10) {
             edges {
@@ -1009,6 +1025,7 @@ function Extension() {
   const navigate = useNavigate();
   const navigation = useNavigation();
   const [searchParams] = useSearchParams();
+  const shopify = useAppBridge();
 
   const orders = loaderData.orders;
   const pageInfo = loaderData.pageInfo;
@@ -1054,6 +1071,12 @@ function Extension() {
   );
 
   const handleCloseDrawer = useCallback(() => setSelectedOrderId(null), []);
+
+  const handleDrawerMarkFulfilled = useCallback(() => {
+    if (!selectedOrderId) return;
+    setSelectedIds(new Set([selectedOrderId]));
+    showModal("modal-mark-fulfilled");
+  }, [selectedOrderId]);
 
   const showTagsModal = useCallback((orderId: string) => {
     setTagsModalOrderId(orderId);
@@ -1204,10 +1227,17 @@ function Extension() {
   };
 
   const handleClearFilters = (): void => {
+    const params = new URLSearchParams(searchParams);
+    params.delete("search");
+    params.delete("tab");
+    params.delete("timeWindow");
+    params.delete("deliveryDate");
+    params.delete("after");
+    params.delete("before");
     setSearchTerm("");
     setSelectedIds(new Set());
     setSortState({ column: null, direction: "asc" });
-    navigate("?", { replace: true });
+    navigate(`?${params.toString()}`, { replace: true });
   };
 
   // ── Row selection handlers ─────────────────────────────────────────────────
@@ -1495,11 +1525,6 @@ function Extension() {
   const fetcher = useFetcher<BulkActionResponse>();
   const isSubmitting: boolean = fetcher.state !== "idle";
 
-  const [actionBanner, setActionBanner] = useState<{
-    tone: "success" | "critical" | "warning";
-    heading: string;
-    body?: string;
-  } | null>(null);
 
   // Cancel modal form state
   const [cancelReason, setCancelReason] = useState<string>("CUSTOMER");
@@ -1623,10 +1648,7 @@ function Extension() {
 
     if (d.ok && d.summary && d.summary.ok > 0) {
       const n = d.summary.ok;
-      setActionBanner({
-        tone: "success",
-        heading: `${n} ${n === 1 ? "order" : "orders"} ${meta?.verb ?? "updated"}.`,
-      });
+      shopify.toast.show(`${n} ${n === 1 ? "order" : "orders"} ${meta?.verb ?? "updated"}.`);
       setSelectedIds(new Set());
       hideModal("modal-archive-orders");
       hideModal("modal-unarchive-orders");
@@ -1652,20 +1674,17 @@ function Extension() {
       const more = failed.length > 3 ? ` (+${failed.length - 3} more)` : "";
       const okN = d.summary.ok;
       const failN = d.summary.failed;
-      setActionBanner({
-        tone: okN > 0 ? "warning" : "critical",
-        heading:
-          okN > 0
-            ? `${okN} succeeded, ${failN} failed`
-            : `${meta?.ing ?? "Action"} failed for ${failN} ${failN === 1 ? "order" : "orders"}.`,
-        body: lines + more,
-      });
+      const msg =
+        okN > 0
+          ? `${okN} succeeded, ${failN} failed. ${lines}${more}`
+          : `${meta?.ing ?? "Action"} failed for ${failN} ${failN === 1 ? "order" : "orders"}. ${lines}${more}`;
+      shopify.toast.show(msg, { isError: true });
       // Keep only failed orders selected so merchant can retry without re-selecting
       setSelectedIds(new Set(failed.map((r) => r.orderId)));
     } else if (d.message) {
-      setActionBanner({ tone: "critical", heading: d.message });
+      shopify.toast.show(d.message, { isError: true });
     }
-  }, [fetcher.data, fetcher.state]);
+  }, [fetcher.data, fetcher.state, shopify]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -1788,16 +1807,6 @@ function Extension() {
                 onChange={(e: Event) =>
                   handleToggleColumn(
                     "name",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-              <s-checkbox
-                label="Actions"
-                checked={visibleColumns.has("actions")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "actions",
                     (e.currentTarget as HTMLInputElement).checked,
                   )
                 }
@@ -2347,19 +2356,6 @@ function Extension() {
         </s-banner>
       )}
 
-      {/* ── Bulk action result banner ───────────────────────────────────────── */}
-      {actionBanner && (
-        <s-banner
-          id="bulk-action-banner"
-          tone={actionBanner.tone}
-          heading={actionBanner.heading}
-          dismissible
-          onDismiss={() => setActionBanner(null)}
-        >
-          {actionBanner.body && <s-paragraph>{actionBanner.body}</s-paragraph>}
-        </s-banner>
-      )}
-
       {/* ── Header actions bar ───────────────────────────────────────────────── */}
       <div className="ods-header-bar">
         <p className="ods-subtitle">
@@ -2373,13 +2369,15 @@ function Extension() {
           >
             Print picklist
           </s-button>
-          <s-button
-            variant="secondary"
-            icon="export"
-            onClick={exportForLalamove}
-          >
-            Export
-          </s-button>
+          {selectedCount === 0 && (
+            <s-button
+              variant="secondary"
+              icon="export"
+              onClick={exportForLalamove}
+            >
+              Export
+            </s-button>
+          )}
           <s-button variant="primary" href="shopify://admin/orders/new">
             Create order
           </s-button>
@@ -2588,10 +2586,10 @@ function Extension() {
                     }}
                   >
                     <s-option value="">All time slots</s-option>
-                    <s-option value="9AM-12PM">9AM-12PM</s-option>
-                    <s-option value="12PM-3PM">12PM-3PM</s-option>
-                    <s-option value="3PM-6PM">3PM-6PM</s-option>
-                    <s-option value="6PM-11PM">6PM-11PM</s-option>
+                    <s-option value="9AM-12PM">9AM–12PM</s-option>
+                    <s-option value="12PM-3PM">12PM–3PM</s-option>
+                    <s-option value="3PM-6PM">3PM–6PM</s-option>
+                    <s-option value="6PM-11PM">6PM–11PM</s-option>
                   </s-select>
                 </div>
                 <div className="ods-toolbar-actions">
@@ -2700,11 +2698,6 @@ function Extension() {
                     Total
                   </s-table-header>
                 )}
-                {visibleColumns.has("actions") && (
-                  <s-table-header id="header-actions" listSlot="labeled">
-                    Actions
-                  </s-table-header>
-                )}
                 {visibleColumns.has("tags") && (
                   <s-table-header id="header-tags" listSlot="labeled">
                     Tags
@@ -2717,17 +2710,25 @@ function Extension() {
                 {!loading && displayedOrders.length === 0 ? (
                   <s-table-row id="empty-row">
                     <s-table-cell id="empty-cell">
-                      <s-stack gap="small" alignItems="center">
-                        <s-text type="strong">
-                          {hasActiveFilters
-                            ? "No orders match this view"
-                            : "No orders found"}
-                        </s-text>
-                        <s-text color="subdued">
-                          {hasActiveFilters
-                            ? "No orders match the current filters. Use Reset to clear all filters."
-                            : "Orders will appear here after Shopify returns them."}
-                        </s-text>
+                      <s-stack gap="base" alignItems="center">
+                        <s-icon type="orders" size="large" tone="subdued" />
+                        <s-stack gap="small" alignItems="center">
+                          <s-text type="strong">
+                            {hasActiveFilters
+                              ? "No orders match this view"
+                              : "No orders found"}
+                          </s-text>
+                          <s-text color="subdued">
+                            {hasActiveFilters
+                              ? "Try adjusting or clearing your filters."
+                              : "Orders will appear here after customers place them."}
+                          </s-text>
+                        </s-stack>
+                        {hasActiveFilters && (
+                          <s-button variant="secondary" onClick={handleClearFilters}>
+                            Clear filters
+                          </s-button>
+                        )}
                       </s-stack>
                     </s-table-cell>
                   </s-table-row>
@@ -2791,6 +2792,7 @@ function Extension() {
                         {/* Order name — opens drawer */}
                         {visibleColumns.has("name") && (
                           <s-table-cell id={`cell-name-${orderId}`}>
+                            <div className="ods-name-cell-wrap">
                             <span className="ods-name-cell">
                               <s-button
                                 id={`btn-name-${orderId}`}
@@ -2855,6 +2857,12 @@ function Extension() {
                                 </span>
                               )}
                             </span>
+                            {order.createdAt && (
+                              <span className="ods-name-date">
+                                {new Date(order.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                              </span>
+                            )}
+                            </div>
                           </s-table-cell>
                         )}
 
@@ -2910,20 +2918,15 @@ function Extension() {
                               id={`btn-customer-${orderId}`}
                               onClick={() => setSelectedOrderId(order.id)}
                             >
-                              <span className="ods-customer-cell">
-                                <span className="ods-customer-name">
-                                  {customerName}
-                                </span>
+                              <s-stack direction="block" gap="small-100">
+                                <s-text type="strong">{customerName}</s-text>
                                 {order.customer?.defaultEmailAddress
                                   ?.emailAddress && (
-                                  <span className="ods-customer-email">
-                                    {
-                                      order.customer.defaultEmailAddress
-                                        .emailAddress
-                                    }
-                                  </span>
+                                  <s-text color="subdued">
+                                    {order.customer.defaultEmailAddress.emailAddress}
+                                  </s-text>
                                 )}
-                              </span>
+                              </s-stack>
                             </s-button>
                           </s-table-cell>
                         )}
@@ -2938,31 +2941,31 @@ function Extension() {
                         {/* Delivery date */}
                         {visibleColumns.has("deliveryDate") && (
                           <s-table-cell id={`cell-delivery-${orderId}`}>
-                            <span className="ods-delivery-cell">
-                              <span
-                                className={`ods-delivery-date-main${rawDeliveryDate === "—" ? " ods-muted" : ""}`}
-                              >
-                                {deliveryDateDisplay}
-                              </span>
-                              {deliveryRelative && (
-                                <span
-                                  className={`ods-delivery-relative${deliveryOverdue ? " ods-delivery-relative--overdue" : ""}`}
-                                >
-                                  {deliveryRelative}
-                                </span>
+                            <s-stack direction="block" gap="small-100">
+                              {rawDeliveryDate !== "—" ? (
+                                <s-text type="strong">{deliveryDateDisplay}</s-text>
+                              ) : (
+                                <s-text color="subdued">{deliveryDateDisplay}</s-text>
                               )}
-                            </span>
+                              {deliveryRelative && (
+                                deliveryOverdue ? (
+                                  <s-badge tone="critical">{deliveryRelative}</s-badge>
+                                ) : (
+                                  <s-badge>{deliveryRelative}</s-badge>
+                                )
+                              )}
+                            </s-stack>
                           </s-table-cell>
                         )}
 
                         {/* Time window */}
                         {visibleColumns.has("timeWindow") && (
                           <s-table-cell id={`cell-time-window-${orderId}`}>
-                            <span
-                              className={`ods-time-window${timeWindow === "—" ? " ods-muted" : ""}`}
-                            >
-                              {timeWindow}
-                            </span>
+                            {timeWindow === "—" ? (
+                              <s-text color="subdued">{timeWindow}</s-text>
+                            ) : (
+                              <s-text>{timeWindow}</s-text>
+                            )}
                           </s-table-cell>
                         )}
 
@@ -3011,19 +3014,6 @@ function Extension() {
                           </s-table-cell>
                         )}
 
-                        {/* Actions — opens drawer */}
-                        {visibleColumns.has("actions") && (
-                          <s-table-cell id={`cell-action-${orderId}`}>
-                            <s-button
-                              id={`btn-view-${orderId}`}
-                              variant="tertiary"
-                              icon="view"
-                              onClick={() => setSelectedOrderId(order.id)}
-                              accessibilityLabel={`View details for order ${order.name}`}
-                            />
-                          </s-table-cell>
-                        )}
-
                         {/* Tags */}
                         {visibleColumns.has("tags") && (
                           <s-table-cell id={`cell-tags-${orderId}`}>
@@ -3034,18 +3024,23 @@ function Extension() {
                               if (meaningful.length === 0) {
                                 return <s-text color="subdued">—</s-text>;
                               }
-                              const attrCount = meaningful.length;
+                              const shown = meaningful.slice(0, 2);
+                              const extra = meaningful.length - shown.length;
                               return (
-                                <s-button
-                                  variant="tertiary"
-                                  id={`btn-tags-${orderId}`}
-                                  onClick={() => showTagsModal(order.id)}
-                                >
-                                  {attrCount}{" "}
-                                  {attrCount === 1
-                                    ? "attribute"
-                                    : "attributes"}
-                                </s-button>
+                                <s-stack direction="inline" gap="small">
+                                  {shown.map((tag) => (
+                                    <s-chip key={tag}>{tagDisplayLabel(tag)}</s-chip>
+                                  ))}
+                                  {extra > 0 && (
+                                    <s-button
+                                      variant="tertiary"
+                                      id={`btn-tags-${orderId}`}
+                                      onClick={() => showTagsModal(order.id)}
+                                    >
+                                      +{extra}
+                                    </s-button>
+                                  )}
+                                </s-stack>
                               );
                             })()}
                           </s-table-cell>
@@ -3063,7 +3058,11 @@ function Extension() {
 
       {/* ── Right-side order detail drawer ──────────────────────────────────── */}
       {selectedOrder && (
-        <OrderDrawer order={selectedOrder} onClose={handleCloseDrawer} />
+        <OrderDrawer
+          order={selectedOrder}
+          onClose={handleCloseDrawer}
+          onMarkFulfilled={handleDrawerMarkFulfilled}
+        />
       )}
     </s-page>
   );
