@@ -2711,7 +2711,7 @@ function Extension() {
                   <s-table-row id="empty-row">
                     <s-table-cell id="empty-cell">
                       <s-stack gap="base" alignItems="center">
-                        <s-icon type="orders" size="large" tone="subdued" />
+                        <s-icon type="order" />
                         <s-stack gap="small" alignItems="center">
                           <s-text type="strong">
                             {hasActiveFilters
