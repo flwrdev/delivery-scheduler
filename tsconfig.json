@@ -1,6 +1,12 @@
 {
   "include": ["env.d.ts", "**/*.ts", "**/*.tsx", ".react-router/types/**/*"],
-  "exclude": ["extensions/**", "tests/**"],
+  "exclude": [
+    "extensions/**",
+    "e2e/**",
+    "test/**",
+    "tests/**",
+    "playwright/**"
+  ],
   "compilerOptions": {
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "strict": true,
@@ -16,7 +22,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "target": "ES2022",
-    "types": ["@react-router/node", "vite/client", "@shopify/polaris-types"],
+    "types": ["@react-router/node", "vite/client", "@shopify/polaris-types", "node"],
     "rootDirs": [".", "./.react-router/types"]
   }
 }
