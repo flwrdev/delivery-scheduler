@@ -46,7 +46,6 @@ import stylesHref from "../styles/orders-dashboard.css?url";
 
 export const links = () => [{ rel: "stylesheet", href: stylesHref }];
 
-
 interface PageInfo {
   hasNextPage: boolean;
   hasPreviousPage: boolean;
