@@ -1312,16 +1312,6 @@ function Extension() {
     }
   }, [tagsModalTrigger]);
 
-  const subtitleDate = useMemo(
-    () =>
-      new Date().toLocaleDateString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      }),
-    [],
-  );
-
   // Stable date references for tab filtering (computed once per mount)
   const dateRefs = useMemo(() => {
     const now = new Date();
@@ -2266,34 +2256,6 @@ function Extension() {
           <s-paragraph>{error}</s-paragraph>
         </s-banner>
       )}
-
-      {/* ── Header actions bar ───────────────────────────────────────────────── */}
-      <div className="ods-header-bar">
-        <p className="ods-subtitle">
-          Plan, prep, and dispatch deliveries for {subtitleDate}.
-        </p>
-        <div className="ods-header-btns">
-          <s-button
-            variant="secondary"
-            icon="print"
-            onClick={() => window.print()}
-          >
-            Print picklist
-          </s-button>
-          {selectedCount === 0 && (
-            <s-button
-              variant="secondary"
-              icon="export"
-              onClick={exportForLalamove}
-            >
-              Export
-            </s-button>
-          )}
-          <s-button variant="primary" href="shopify://admin/orders/new">
-            Create order
-          </s-button>
-        </div>
-      </div>
 
       {/* ── KPI grid ─────────────────────────────────────────────────────────── */}
       <div className="ods-kpi-grid">
