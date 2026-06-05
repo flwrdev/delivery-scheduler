@@ -21,7 +21,6 @@ const GET_LALAMOVE_SETTINGS_QUERY = `
   query GetLalamoveSettings {
     shop {
       id
-      lalamoveEnvironment: metafield(namespace: "lalamove", key: "environment") { value }
       lalamoveServiceType: metafield(namespace: "lalamove", key: "service_type") { value }
       lalamoveSenderName: metafield(namespace: "lalamove", key: "sender_name") { value }
       lalamoveSenderPhone: metafield(namespace: "lalamove", key: "sender_phone") { value }
@@ -42,7 +41,6 @@ const SET_LALAMOVE_SETTINGS_MUTATION = `
 `;
 
 interface LalamoveSettings {
-  environment: string;
   serviceType: string;
   senderName: string;
   senderPhone: string;
@@ -52,7 +50,6 @@ interface LalamoveSettings {
 }
 
 const DEFAULT_LALAMOVE_SETTINGS: LalamoveSettings = {
-  environment: "sandbox",
   serviceType: "MOTORCYCLE",
   senderName: "",
   senderPhone: "",
@@ -440,7 +437,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     data?: {
       shop?: {
         id?: string;
-        lalamoveEnvironment?: { value: string } | null;
         lalamoveServiceType?: { value: string } | null;
         lalamoveSenderName?: { value: string } | null;
         lalamoveSenderPhone?: { value: string } | null;
@@ -452,7 +448,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   };
   const shopData = lalamoveBody.data?.shop;
   const lalamoveSettings: LalamoveSettings = {
-    environment: shopData?.lalamoveEnvironment?.value ?? "sandbox",
     serviceType: shopData?.lalamoveServiceType?.value ?? "MOTORCYCLE",
     senderName: shopData?.lalamoveSenderName?.value ?? "",
     senderPhone: shopData?.lalamoveSenderPhone?.value ?? "",
@@ -511,7 +506,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       const metafields = [
-        { ownerId: shopGid, namespace: "lalamove", key: "environment", value: s.environment ?? "sandbox", type: "single_line_text_field" },
         { ownerId: shopGid, namespace: "lalamove", key: "service_type", value: s.serviceType ?? "MOTORCYCLE", type: "single_line_text_field" },
         { ownerId: shopGid, namespace: "lalamove", key: "sender_name", value: s.senderName ?? "", type: "single_line_text_field" },
         { ownerId: shopGid, namespace: "lalamove", key: "sender_phone", value: s.senderPhone ?? "", type: "single_line_text_field" },
@@ -1342,17 +1336,6 @@ export default function ScheduleRulesPage() {
             {/* ── Lalamove Delivery Settings ──────────────────────────── */}
             <s-section heading="Lalamove Delivery Settings">
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                <div>
-                  <label style={{ display: "block", marginBottom: 4, fontWeight: 500 }}>Environment</label>
-                  <select
-                    value={lalamoveForm.environment}
-                    onChange={(e) => setLalamoveForm((f) => ({ ...f, environment: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 12px", borderRadius: 6, border: "1px solid #c9cccf" }}
-                  >
-                    <option value="sandbox">Sandbox (Testing)</option>
-                    <option value="production">Production (Live)</option>
-                  </select>
-                </div>
                 <div>
                   <label style={{ display: "block", marginBottom: 4, fontWeight: 500 }}>Service Type</label>
                   <input
