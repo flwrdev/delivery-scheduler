@@ -588,19 +588,10 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
             {!lalamoveOrderId && (
               <button
                 type="button"
-                className="ods-action-link"
-                style={{
-                  background: "#ff6600",
-                  color: "#fff",
-                  padding: "7px 16px",
-                  borderRadius: 6,
-                  border: "none",
-                  cursor: "pointer",
-                  fontWeight: 600,
-                }}
+                className="ods-btn ods-btn--orange"
                 onClick={() => setShowDispatchModal(true)}
               >
-                Dispatch via Lalamove
+                Book
               </button>
             )}
 
@@ -608,32 +599,32 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
             {lalamoveOrderId && lalamoveStatus === "ASSIGNING_DRIVER" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <LalamoveStatusLabel status="ASSIGNING_DRIVER" />
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <input
                     type="number"
-                    placeholder="Priority fee amount"
+                    placeholder="₱ Priority fee"
                     value={priorityFeeInput}
                     onChange={(e) => setPriorityFeeInput(e.target.value)}
-                    style={{
-                      width: 140,
-                      padding: "6px 10px",
-                      borderRadius: 6,
-                      border: "1px solid #c9cccf",
-                      fontSize: 13,
-                    }}
+                    className="ods-input-sm"
                   />
                   <priorityFetcher.Form method="post">
                     <input type="hidden" name="_action" value="lalamovePriorityFee" />
                     <input type="hidden" name="lalamoveOrderId" value={lalamoveOrderId} />
                     <input type="hidden" name="priorityFee" value={priorityFeeInput} />
-                    <input type="hidden" name="currency" value={orderCurrency} />
                     <button
                       type="submit"
                       disabled={!priorityFeeInput || priorityFetcher.state !== "idle"}
-                      className="ods-action-link"
-                      style={{ padding: "6px 12px" }}
+                      className="ods-icon-btn"
+                      title="Add priority fee"
+                      aria-label="Add priority fee"
                     >
-                      {priorityFetcher.state !== "idle" ? "Adding…" : "Add Priority Fee"}
+                      {priorityFetcher.state !== "idle" ? (
+                        <span className="ods-spinner" />
+                      ) : (
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                        </svg>
+                      )}
                     </button>
                   </priorityFetcher.Form>
                 </div>
@@ -649,17 +640,9 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                   <button
                     type="submit"
                     disabled={cancelFetcher.state !== "idle"}
-                    style={{
-                      padding: "6px 14px",
-                      background: "#dc2626",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: 6,
-                      cursor: "pointer",
-                      fontSize: 13,
-                    }}
+                    className="ods-btn ods-btn--critical-plain"
                   >
-                    {cancelFetcher.state !== "idle" ? "Cancelling…" : "Cancel Delivery"}
+                    {cancelFetcher.state !== "idle" ? "Cancelling…" : "Cancel delivery"}
                   </button>
                 </cancelFetcher.Form>
                 {cancelFetcher.data?.error && (
@@ -673,30 +656,32 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
             {/* State 3 — ON_GOING / PICKED_UP */}
             {lalamoveOrderId &&
               (lalamoveStatus === "ON_GOING" || lalamoveStatus === "PICKED_UP") && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <LalamoveStatusLabel status={lalamoveStatus} />
                   {driverName && (
-                    <span style={{ fontSize: 13 }}>
-                      Driver: <strong>{driverName}</strong>
-                      {driverPhone && ` · ${driverPhone}`}
-                    </span>
+                    <div className="ods-driver-card">
+                      <div className="ods-driver-card__name">{driverName}</div>
+                      {driverPhone && (
+                        <div className="ods-driver-card__phone">{driverPhone}</div>
+                      )}
+                    </div>
                   )}
                   {shareLink && (
-                    <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ display: "flex", gap: 6 }}>
                       <button
                         type="button"
-                        className="ods-action-link"
+                        className="ods-btn ods-btn--default"
                         onClick={() => navigator.clipboard.writeText(shareLink)}
                       >
-                        Copy tracking link
+                        Copy link
                       </button>
                       <a
                         href={shareLink}
                         target="_blank"
                         rel="noreferrer"
-                        className="ods-action-link"
+                        className="ods-btn ods-btn--default"
                       >
-                        Open
+                        Open ↗
                       </a>
                     </div>
                   )}
@@ -707,17 +692,9 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                     <button
                       type="submit"
                       disabled={cancelFetcher.state !== "idle"}
-                      style={{
-                        padding: "6px 14px",
-                        background: "#dc2626",
-                        color: "#fff",
-                        border: "none",
-                        borderRadius: 6,
-                        cursor: "pointer",
-                        fontSize: 13,
-                      }}
+                      className="ods-btn ods-btn--critical-plain"
                     >
-                      {cancelFetcher.state !== "idle" ? "Cancelling…" : "Cancel Delivery"}
+                      {cancelFetcher.state !== "idle" ? "Cancelling…" : "Cancel delivery"}
                     </button>
                   </cancelFetcher.Form>
                 </div>
@@ -725,32 +702,29 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
 
             {/* State 4 — COMPLETED */}
             {lalamoveOrderId && lalamoveStatus === "COMPLETED" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <LalamoveStatusLabel status="COMPLETED" />
-                <span style={{ fontSize: 13 }}>
-                  Order: <strong>{orderNumber}</strong>
-                </span>
                 {driverName && (
-                  <span style={{ fontSize: 13 }}>
-                    Driver: <strong>{driverName}</strong>
-                  </span>
+                  <div className="ods-driver-card">
+                    <div className="ods-driver-card__name">{driverName}</div>
+                  </div>
                 )}
                 {shareLink && (
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 6 }}>
                     <button
                       type="button"
-                      className="ods-action-link"
+                      className="ods-btn ods-btn--default"
                       onClick={() => navigator.clipboard.writeText(shareLink)}
                     >
-                      Copy tracking link
+                      Copy link
                     </button>
                     <a
                       href={shareLink}
                       target="_blank"
                       rel="noreferrer"
-                      className="ods-action-link"
+                      className="ods-btn ods-btn--default"
                     >
-                      Open
+                      Open ↗
                     </a>
                   </div>
                 )}
@@ -766,19 +740,10 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                   <LalamoveStatusLabel status={lalamoveStatus} />
                   <button
                     type="button"
-                    className="ods-action-link"
-                    style={{
-                      background: "#ff6600",
-                      color: "#fff",
-                      padding: "7px 16px",
-                      borderRadius: 6,
-                      border: "none",
-                      cursor: "pointer",
-                      fontWeight: 600,
-                    }}
+                    className="ods-btn ods-btn--orange"
                     onClick={() => setShowDispatchModal(true)}
                   >
-                    Dispatch via Lalamove
+                    Book
                   </button>
                 </div>
               )}
