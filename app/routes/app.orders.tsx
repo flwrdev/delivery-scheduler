@@ -48,25 +48,6 @@ import stylesHref from "../styles/orders-dashboard.css?url";
 
 export const links = () => [{ rel: "stylesheet", href: stylesHref }];
 
-// ─── Sorting ─────────────────────────────────────────────────────────────────
-
-type SortableColumn = "city" | "timeWindow" | "deliveryDate" | "fulfillment";
-type SortDirection = "asc" | "desc";
-
-interface SortState {
-  column: SortableColumn | null;
-  direction: SortDirection;
-}
-
-const FULFILLMENT_ORDER: Record<string, number> = {
-  UNFULFILLED: 0,
-  ON_HOLD: 1,
-  SCHEDULED: 2,
-  IN_PROGRESS: 3,
-  PARTIALLY_FULFILLED: 4,
-  FULFILLED: 5,
-  RESTOCKED: 6,
-};
 
 const DEFAULT_VISIBLE_COLUMNS = [
   "name",
@@ -231,47 +212,6 @@ const GET_ORDERS_QUERY = `
   }
 `;
 
-// ─── Sortable column header ──────────────────────────────────────────────────
-
-interface SortableHeaderProps {
-  id: string;
-  column: SortableColumn;
-  label: string;
-  sortState: SortState;
-  onSort: (col: SortableColumn) => void;
-  listSlot?: TableListSlot;
-}
-
-type TableListSlot = "primary" | "secondary" | "kicker" | "inline" | "labeled";
-
-function SortableHeader({
-  id,
-  column,
-  label,
-  sortState,
-  onSort,
-  listSlot,
-}: SortableHeaderProps) {
-  const isActive: boolean = sortState.column === column;
-  const iconType = isActive
-    ? sortState.direction === "asc"
-      ? "sort-ascending"
-      : "sort-descending"
-    : "sort";
-  return (
-    <s-table-header id={id} listSlot={listSlot}>
-      <s-button
-        id={`sort-btn-${column}`}
-        variant="tertiary"
-        icon={iconType}
-        onClick={() => onSort(column)}
-        accessibilityLabel={`Sort by ${label}`}
-      >
-        {label}
-      </s-button>
-    </s-table-header>
-  );
-}
 
 // ─── Runtime safety helpers ───────────────────────────────────────────────────
 
@@ -950,7 +890,6 @@ export const action = async ({
   if (opRaw === "lalamovePriorityFee") {
     const lalamoveOrderId = String(fd.get("lalamoveOrderId") ?? "");
     const priorityFee = String(fd.get("priorityFee") ?? "");
-    const currency = String(fd.get("currency") ?? "PHP");
     if (!lalamoveOrderId || !priorityFee) {
       return Response.json(
         { ok: false, error: "Missing order ID or fee amount." },
@@ -959,7 +898,7 @@ export const action = async ({
     }
     const { addPriorityFee } = await import("../lib/lalamove.server");
     try {
-      await addPriorityFee(lalamoveOrderId, priorityFee, currency);
+      await addPriorityFee(lalamoveOrderId, priorityFee);
     } catch (e) {
       return Response.json(
         { ok: false, error: `Priority fee failed: ${String(e)}` },
@@ -1334,12 +1273,6 @@ function Extension() {
   const [searchTerm, setSearchTerm] = useState<string>(searchParam);
   const searchParamRef = useRef(searchParam);
 
-  // Sort state
-  const [sortState, setSortState] = useState<SortState>({
-    column: null,
-    direction: "asc",
-  });
-
   // Row selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -1468,16 +1401,6 @@ function Extension() {
     setSearchTerm(getSafeEventValue(e));
   };
 
-  // ── Sort handler ───────────────────────────────────────────────────────────
-
-  const handleSort = useCallback((col: SortableColumn): void => {
-    setSortState((prev) => ({
-      column: col,
-      direction:
-        prev.column === col && prev.direction === "asc" ? "desc" : "asc",
-    }));
-  }, []);
-
   // ── Tab handler — navigates to ?tab=VALUE and clears cursors ────────────────
 
   const handleTabChange = useCallback(
@@ -1522,7 +1445,6 @@ function Extension() {
     params.delete("before");
     setSearchTerm("");
     setSelectedIds(new Set());
-    setSortState({ column: null, direction: "asc" });
     navigate(`?${params.toString()}`, { replace: true });
   };
 
@@ -1582,41 +1504,7 @@ function Extension() {
     });
   }, [orders, tabParam, dateRefs]);
 
-  const displayedOrders: Order[] = useMemo(() => {
-    if (!sortState.column) return filteredOrders;
-    return [...filteredOrders].sort((a, b) => {
-      let cmp = 0;
-      switch (sortState.column) {
-        case "timeWindow": {
-          const ta = getDeliveryTimeValue(a);
-          const tb = getDeliveryTimeValue(b);
-          cmp = parseTimeWindowHour(ta) - parseTimeWindowHour(tb);
-          break;
-        }
-        case "deliveryDate": {
-          const da = parseDateValue(getDeliveryDateValue(a));
-          const db = parseDateValue(getDeliveryDateValue(b));
-          cmp = da - db;
-          break;
-        }
-        case "fulfillment": {
-          const fa =
-            FULFILLMENT_ORDER[a.displayFulfillmentStatus?.toUpperCase()] ?? 99;
-          const fb =
-            FULFILLMENT_ORDER[b.displayFulfillmentStatus?.toUpperCase()] ?? 99;
-          cmp = fa - fb;
-          break;
-        }
-        case "city": {
-          const ca = getCity(a).toLowerCase();
-          const cb = getCity(b).toLowerCase();
-          cmp = ca.localeCompare(cb);
-          break;
-        }
-      }
-      return sortState.direction === "asc" ? cmp : -cmp;
-    });
-  }, [filteredOrders, sortState]);
+  const displayedOrders: Order[] = filteredOrders;
 
   useFilteredSelection(displayedOrders, setSelectedIds);
 
@@ -1974,12 +1862,6 @@ function Extension() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  const sortLabel: string = sortState.column
-    ? `${sortState.column === "timeWindow" ? "Time window" : sortState.column === "deliveryDate" ? "Delivery date" : sortState.column === "fulfillment" ? "Fulfillment" : "City"} ${
-        sortState.direction === "asc" ? "↑" : "↓"
-      }`
-    : "Sort";
-
   const tabDefs: { id: ActiveTab; label: string; count: number }[] = [
     { id: "all", label: "All", count: orders.length },
     { id: "today", label: "Today", count: tabCounts.today },
@@ -1995,7 +1877,7 @@ function Extension() {
     deliveryDateFilter ||
     tabParam !== "all",
   );
-  const hasActiveViewControls = Boolean(hasActiveFilters || sortState.column);
+  const hasActiveViewControls = hasActiveFilters;
 
   return (
     <s-page
@@ -2004,78 +1886,6 @@ function Extension() {
       inlineSize="large"
     >
       {/* ── Global modals ──────────────────────────────────────────────────── */}
-
-      {/* Sort menu */}
-      <s-menu id="sort-menu" accessibilityLabel="Sort orders">
-        <s-button
-          icon={
-            sortState.column === "deliveryDate"
-              ? sortState.direction === "asc"
-                ? "sort-ascending"
-                : "sort-descending"
-              : "sort"
-          }
-          onClick={() => handleSort("deliveryDate")}
-        >
-          Delivery date
-          {sortState.column === "deliveryDate"
-            ? sortState.direction === "asc"
-              ? " ↑"
-              : " ↓"
-            : ""}
-        </s-button>
-        <s-button
-          icon={
-            sortState.column === "timeWindow"
-              ? sortState.direction === "asc"
-                ? "sort-ascending"
-                : "sort-descending"
-              : "sort"
-          }
-          onClick={() => handleSort("timeWindow")}
-        >
-          Time window
-          {sortState.column === "timeWindow"
-            ? sortState.direction === "asc"
-              ? " ↑"
-              : " ↓"
-            : ""}
-        </s-button>
-        <s-button
-          icon={
-            sortState.column === "fulfillment"
-              ? sortState.direction === "asc"
-                ? "sort-ascending"
-                : "sort-descending"
-              : "sort"
-          }
-          onClick={() => handleSort("fulfillment")}
-        >
-          Fulfillment
-          {sortState.column === "fulfillment"
-            ? sortState.direction === "asc"
-              ? " ↑"
-              : " ↓"
-            : ""}
-        </s-button>
-        <s-button
-          icon={
-            sortState.column === "city"
-              ? sortState.direction === "asc"
-                ? "sort-ascending"
-                : "sort-descending"
-              : "sort"
-          }
-          onClick={() => handleSort("city")}
-        >
-          City
-          {sortState.column === "city"
-            ? sortState.direction === "asc"
-              ? " ↑"
-              : " ↓"
-            : ""}
-        </s-button>
-      </s-menu>
 
       {/* Columns config modal */}
       <s-modal
@@ -2888,14 +2698,6 @@ function Extension() {
                   </s-button>
                   <s-button
                     variant="secondary"
-                    icon={sortState.column ? "sort-ascending" : "sort"}
-                    commandFor="sort-menu"
-                    accessibilityLabel="Sort orders"
-                  >
-                    {sortLabel}
-                  </s-button>
-                  <s-button
-                    variant="secondary"
                     commandFor="modal-columns"
                     accessibilityLabel="Configure columns"
                   >
@@ -2935,34 +2737,13 @@ function Extension() {
                   </s-table-header>
                 )}
                 {visibleColumns.has("city") && (
-                  <SortableHeader
-                    id="header-city"
-                    column="city"
-                    label="City"
-                    sortState={sortState}
-                    onSort={handleSort}
-                    listSlot="labeled"
-                  />
+                  <s-table-header id="header-city" listSlot="labeled">City</s-table-header>
                 )}
                 {visibleColumns.has("deliveryDate") && (
-                  <SortableHeader
-                    id="header-delivery-date"
-                    column="deliveryDate"
-                    label="Delivery date"
-                    sortState={sortState}
-                    onSort={handleSort}
-                    listSlot="labeled"
-                  />
+                  <s-table-header id="header-delivery-date" listSlot="labeled">Delivery date</s-table-header>
                 )}
                 {visibleColumns.has("timeWindow") && (
-                  <SortableHeader
-                    id="header-time-window"
-                    column="timeWindow"
-                    label="Time window"
-                    sortState={sortState}
-                    onSort={handleSort}
-                    listSlot="labeled"
-                  />
+                  <s-table-header id="header-time-window" listSlot="labeled">Time window</s-table-header>
                 )}
                 {visibleColumns.has("payment") && (
                   <s-table-header id="header-payment" listSlot="labeled">
@@ -2970,14 +2751,7 @@ function Extension() {
                   </s-table-header>
                 )}
                 {visibleColumns.has("fulfillment") && (
-                  <SortableHeader
-                    id="header-fulfillment"
-                    column="fulfillment"
-                    label="Fulfillment"
-                    sortState={sortState}
-                    onSort={handleSort}
-                    listSlot="labeled"
-                  />
+                  <s-table-header id="header-fulfillment" listSlot="labeled">Fulfillment</s-table-header>
                 )}
                 {visibleColumns.has("total") && (
                   <s-table-header id="header-total" listSlot="labeled">
