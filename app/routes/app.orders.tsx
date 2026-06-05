@@ -46,26 +46,6 @@ import stylesHref from "../styles/orders-dashboard.css?url";
 
 export const links = () => [{ rel: "stylesheet", href: stylesHref }];
 
-const DEFAULT_VISIBLE_COLUMNS = [
-  "name",
-  "items",
-  "customer",
-  "city",
-  "payment",
-  "fulfillment",
-  "deliveryDate",
-  "timeWindow",
-  "total",
-];
-
-const MOBILE_VISIBLE_COLUMNS = [
-  "name",
-  "customer",
-  "city",
-  "deliveryDate",
-  "timeWindow",
-  "fulfillment",
-];
 
 interface PageInfo {
   hasNextPage: boolean;
@@ -1281,11 +1261,6 @@ function Extension() {
   const [tagsModalOrderId, setTagsModalOrderId] = useState<string | null>(null);
   const [tagsModalTrigger, setTagsModalTrigger] = useState(0);
 
-  // Column visibility state
-  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
-    new Set(DEFAULT_VISIBLE_COLUMNS),
-  );
-
   const handleCloseDrawer = useCallback(() => setSelectedOrderId(null), []);
 
   const handleDrawerMarkFulfilled = useCallback(() => {
@@ -1297,21 +1272,6 @@ function Extension() {
   const showTagsModal = useCallback((orderId: string) => {
     setTagsModalOrderId(orderId);
     setTagsModalTrigger((n) => n + 1);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mediaQuery = window.matchMedia("(max-width: 640px)");
-    const handleResize = (e: MediaQueryListEvent | MediaQueryList) => {
-      if (e.matches) {
-        setVisibleColumns(new Set(MOBILE_VISIBLE_COLUMNS));
-      } else {
-        setVisibleColumns(new Set(DEFAULT_VISIBLE_COLUMNS));
-      }
-    };
-    handleResize(mediaQuery); // Run immediately
-    mediaQuery.addEventListener("change", handleResize); // Listen for resizes
-    return () => mediaQuery.removeEventListener("change", handleResize);
   }, []);
 
   // Clear selection when tab changes (tabParam is URL-driven)
@@ -1382,15 +1342,6 @@ function Extension() {
       endWeekISO: toLocalISODate(sunday),
     };
   }, []);
-
-  const handleToggleColumn = (colId: string, checked: boolean) => {
-    setVisibleColumns((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(colId);
-      else next.delete(colId);
-      return next;
-    });
-  };
 
   // ── Search handler ─────────────────────────────────────────────────────────
 
@@ -1882,137 +1833,6 @@ function Extension() {
       inlineSize="large"
     >
       {/* ── Global modals ──────────────────────────────────────────────────── */}
-
-      {/* Columns config modal */}
-      <s-modal
-        id="modal-columns"
-        heading="Configure Table Columns"
-        size="large"
-      >
-        <s-box padding="base">
-          <s-stack direction="inline" gap="large">
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">General</s-text>
-              <s-checkbox
-                label="Order name"
-                checked={visibleColumns.has("name")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "name",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-            </s-stack>
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">Customer</s-text>
-              <s-checkbox
-                label="Customer"
-                checked={visibleColumns.has("customer")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "customer",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-              <s-checkbox
-                label="City"
-                checked={visibleColumns.has("city")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "city",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-            </s-stack>
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">Status</s-text>
-              <s-checkbox
-                label="Payment status"
-                checked={visibleColumns.has("payment")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "payment",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-              <s-checkbox
-                label="Fulfillment status"
-                checked={visibleColumns.has("fulfillment")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "fulfillment",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-            </s-stack>
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">Details</s-text>
-              <s-checkbox
-                label="Items"
-                checked={visibleColumns.has("items")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "items",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-              <s-checkbox
-                label="Delivery date"
-                checked={visibleColumns.has("deliveryDate")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "deliveryDate",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-              <s-checkbox
-                label="Time window"
-                checked={visibleColumns.has("timeWindow")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "timeWindow",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-              <s-checkbox
-                label="Total"
-                checked={visibleColumns.has("total")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "total",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-              <s-checkbox
-                label="Tags / Attributes"
-                checked={visibleColumns.has("tags")}
-                onChange={(e: Event) =>
-                  handleToggleColumn(
-                    "tags",
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-              />
-            </s-stack>
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="primary-action"
-          commandFor="modal-columns"
-          command="--hide"
-        >
-          Done
-        </s-button>
-      </s-modal>
 
       {/* Bulk actions menu */}
       <s-menu id="bulk-actions-menu" accessibilityLabel="Bulk actions">
@@ -2692,13 +2512,6 @@ function Extension() {
                   >
                     Reset
                   </s-button>
-                  <s-button
-                    variant="secondary"
-                    commandFor="modal-columns"
-                    accessibilityLabel="Configure columns"
-                  >
-                    Columns
-                  </s-button>
                 </div>
               </div>
 
@@ -2717,48 +2530,28 @@ function Extension() {
                     }
                   />
                 </s-table-header>
-                {visibleColumns.has("name") && (
-                  <s-table-header id="header-order" listSlot="primary">
-                    Order
-                  </s-table-header>
-                )}
-                {visibleColumns.has("items") && (
-                  <s-table-header id="header-item" listSlot="labeled">
-                    Items
-                  </s-table-header>
-                )}
-                {visibleColumns.has("customer") && (
-                  <s-table-header id="header-customer" listSlot="secondary">
-                    Customer
-                  </s-table-header>
-                )}
-                {visibleColumns.has("city") && (
-                  <s-table-header id="header-city" listSlot="labeled">City</s-table-header>
-                )}
-                {visibleColumns.has("deliveryDate") && (
-                  <s-table-header id="header-delivery-date" listSlot="labeled">Delivery date</s-table-header>
-                )}
-                {visibleColumns.has("timeWindow") && (
-                  <s-table-header id="header-time-window" listSlot="labeled">Time window</s-table-header>
-                )}
-                {visibleColumns.has("payment") && (
-                  <s-table-header id="header-payment" listSlot="labeled">
-                    Payment
-                  </s-table-header>
-                )}
-                {visibleColumns.has("fulfillment") && (
-                  <s-table-header id="header-fulfillment" listSlot="labeled">Fulfillment</s-table-header>
-                )}
-                {visibleColumns.has("total") && (
-                  <s-table-header id="header-total" listSlot="labeled">
-                    Total
-                  </s-table-header>
-                )}
-                {visibleColumns.has("tags") && (
-                  <s-table-header id="header-tags" listSlot="labeled">
-                    Tags
-                  </s-table-header>
-                )}
+                <s-table-header id="header-order" listSlot="primary">
+                  Order
+                </s-table-header>
+                <s-table-header id="header-item" listSlot="labeled">
+                  Items
+                </s-table-header>
+                <s-table-header id="header-customer" listSlot="secondary">
+                  Customer
+                </s-table-header>
+                <s-table-header id="header-city" listSlot="labeled">City</s-table-header>
+                <s-table-header id="header-delivery-date" listSlot="labeled">Delivery date</s-table-header>
+                <s-table-header id="header-time-window" listSlot="labeled">Time window</s-table-header>
+                <s-table-header id="header-payment" listSlot="labeled">
+                  Payment
+                </s-table-header>
+                <s-table-header id="header-fulfillment" listSlot="labeled">Fulfillment</s-table-header>
+                <s-table-header id="header-total" listSlot="labeled">
+                  Total
+                </s-table-header>
+                <s-table-header id="header-tags" listSlot="labeled">
+                  Tags
+                </s-table-header>
               </s-table-header-row>
 
               {/* Table body */}
@@ -2846,261 +2639,241 @@ function Extension() {
                         </s-table-cell>
 
                         {/* Order name — opens drawer */}
-                        {visibleColumns.has("name") && (
-                          <s-table-cell id={`cell-name-${orderId}`}>
-                            <div className="ods-name-cell-wrap">
-                            <span className="ods-name-cell">
-                              <s-button
-                                id={`btn-name-${orderId}`}
-                                variant="tertiary"
-                                onClick={() => setSelectedOrderId(order.id)}
-                                accessibilityLabel={`View order ${order.name} details`}
+                        <s-table-cell id={`cell-name-${orderId}`}>
+                          <div className="ods-name-cell-wrap">
+                          <span className="ods-name-cell">
+                            <s-button
+                              id={`btn-name-${orderId}`}
+                              variant="tertiary"
+                              onClick={() => setSelectedOrderId(order.id)}
+                              accessibilityLabel={`View order ${order.name} details`}
+                            >
+                              <s-text type="strong">{order.name}</s-text>
+                            </s-button>
+                            {instructionText !== "—" && (
+                              <span
+                                className="ods-note-icon"
+                                title={instructionText}
+                                aria-label={`Note: ${instructionText}`}
+                                role="img"
                               >
-                                <s-text type="strong">{order.name}</s-text>
-                              </s-button>
-                              {instructionText !== "—" && (
-                                <span
-                                  className="ods-note-icon"
-                                  title={instructionText}
-                                  aria-label={`Note: ${instructionText}`}
-                                  role="img"
+                                <svg
+                                  width="13"
+                                  height="13"
+                                  viewBox="0 0 14 14"
+                                  fill="none"
+                                  aria-hidden="true"
+                                  xmlns="http://www.w3.org/2000/svg"
                                 >
-                                  <svg
-                                    width="13"
-                                    height="13"
-                                    viewBox="0 0 14 14"
-                                    fill="none"
-                                    aria-hidden="true"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                  >
-                                    <rect
-                                      x="1"
-                                      y="1"
-                                      width="12"
-                                      height="12"
-                                      rx="2"
-                                      stroke="currentColor"
-                                      strokeWidth="1.4"
-                                    />
-                                    <line
-                                      x1="3.5"
-                                      y1="4.5"
-                                      x2="10.5"
-                                      y2="4.5"
-                                      stroke="currentColor"
-                                      strokeWidth="1.2"
-                                      strokeLinecap="round"
-                                    />
-                                    <line
-                                      x1="3.5"
-                                      y1="7"
-                                      x2="10.5"
-                                      y2="7"
-                                      stroke="currentColor"
-                                      strokeWidth="1.2"
-                                      strokeLinecap="round"
-                                    />
-                                    <line
-                                      x1="3.5"
-                                      y1="9.5"
-                                      x2="7.5"
-                                      y2="9.5"
-                                      stroke="currentColor"
-                                      strokeWidth="1.2"
-                                      strokeLinecap="round"
-                                    />
-                                  </svg>
-                                </span>
-                              )}
-                            </span>
-                            {order.createdAt && (
-                              <span className="ods-name-date">
-                                {new Date(order.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                                  <rect
+                                    x="1"
+                                    y="1"
+                                    width="12"
+                                    height="12"
+                                    rx="2"
+                                    stroke="currentColor"
+                                    strokeWidth="1.4"
+                                  />
+                                  <line
+                                    x1="3.5"
+                                    y1="4.5"
+                                    x2="10.5"
+                                    y2="4.5"
+                                    stroke="currentColor"
+                                    strokeWidth="1.2"
+                                    strokeLinecap="round"
+                                  />
+                                  <line
+                                    x1="3.5"
+                                    y1="7"
+                                    x2="10.5"
+                                    y2="7"
+                                    stroke="currentColor"
+                                    strokeWidth="1.2"
+                                    strokeLinecap="round"
+                                  />
+                                  <line
+                                    x1="3.5"
+                                    y1="9.5"
+                                    x2="7.5"
+                                    y2="9.5"
+                                    stroke="currentColor"
+                                    strokeWidth="1.2"
+                                    strokeLinecap="round"
+                                  />
+                                </svg>
                               </span>
                             )}
-                            </div>
-                          </s-table-cell>
-                        )}
+                          </span>
+                          {order.createdAt && (
+                            <span className="ods-name-date">
+                              {new Date(order.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                            </span>
+                          )}
+                          </div>
+                        </s-table-cell>
 
                         {/* Items — thumbnail + summary */}
-                        {visibleColumns.has("items") && (
-                          <s-table-cell id={`cell-item-${orderId}`}>
-                            {(() => {
-                              const items = order.lineItems?.edges || [];
-                              const itemCount = items.length;
-                              const totalQty = items.reduce(
-                                (sum, item) => sum + (item.node.quantity || 0),
-                                0,
-                              );
-                              const hasMore = itemCount >= 10;
-                              const displayText =
-                                itemCount === 0
-                                  ? "—"
-                                  : itemCount === 1
-                                    ? `×${totalQty}`
-                                    : hasMore
-                                      ? "10+ items"
-                                      : `${itemCount} items`;
-                              return (
-                                <s-button
-                                  variant="tertiary"
-                                  id={`btn-item-${orderId}`}
-                                  onClick={() => setSelectedOrderId(order.id)}
+                        <s-table-cell id={`cell-item-${orderId}`}>
+                          {(() => {
+                            const items = order.lineItems?.edges || [];
+                            const itemCount = items.length;
+                            const totalQty = items.reduce(
+                              (sum, item) => sum + (item.node.quantity || 0),
+                              0,
+                            );
+                            const hasMore = itemCount >= 10;
+                            const displayText =
+                              itemCount === 0
+                                ? "—"
+                                : itemCount === 1
+                                  ? `×${totalQty}`
+                                  : hasMore
+                                    ? "10+ items"
+                                    : `${itemCount} items`;
+                            return (
+                              <s-button
+                                variant="tertiary"
+                                id={`btn-item-${orderId}`}
+                                onClick={() => setSelectedOrderId(order.id)}
+                              >
+                                <s-stack
+                                  direction="inline"
+                                  gap="small"
+                                  alignItems="center"
                                 >
-                                  <s-stack
-                                    direction="inline"
-                                    gap="small"
-                                    alignItems="center"
-                                  >
-                                    <s-thumbnail
-                                      id={`thumbnail-item-${orderId}`}
-                                      src={getFirstItemImageUrl(order)}
-                                      alt={getFirstItemAltText(order)}
-                                      size="small-200"
-                                    />
-                                    <s-text>{displayText}</s-text>
-                                  </s-stack>
-                                </s-button>
-                              );
-                            })()}
-                          </s-table-cell>
-                        )}
+                                  <s-thumbnail
+                                    id={`thumbnail-item-${orderId}`}
+                                    src={getFirstItemImageUrl(order)}
+                                    alt={getFirstItemAltText(order)}
+                                    size="small-200"
+                                  />
+                                  <s-text>{displayText}</s-text>
+                                </s-stack>
+                              </s-button>
+                            );
+                          })()}
+                        </s-table-cell>
 
                         {/* Customer */}
-                        {visibleColumns.has("customer") && (
-                          <s-table-cell id={`cell-customer-${orderId}`}>
-                            <s-button
-                              variant="tertiary"
-                              id={`btn-customer-${orderId}`}
-                              onClick={() => setSelectedOrderId(order.id)}
-                            >
-                              <s-stack direction="block" gap="small-100">
-                                <s-text type="strong">{customerName}</s-text>
-                                {order.customer?.defaultEmailAddress
-                                  ?.emailAddress && (
-                                  <s-text color="subdued">
-                                    {order.customer.defaultEmailAddress.emailAddress}
-                                  </s-text>
-                                )}
-                              </s-stack>
-                            </s-button>
-                          </s-table-cell>
-                        )}
-
-                        {/* City */}
-                        {visibleColumns.has("city") && (
-                          <s-table-cell id={`cell-city-${orderId}`}>
-                            <s-text>{getCity(order)}</s-text>
-                          </s-table-cell>
-                        )}
-
-                        {/* Delivery date */}
-                        {visibleColumns.has("deliveryDate") && (
-                          <s-table-cell id={`cell-delivery-${orderId}`}>
+                        <s-table-cell id={`cell-customer-${orderId}`}>
+                          <s-button
+                            variant="tertiary"
+                            id={`btn-customer-${orderId}`}
+                            onClick={() => setSelectedOrderId(order.id)}
+                          >
                             <s-stack direction="block" gap="small-100">
-                              {rawDeliveryDate !== "—" ? (
-                                <s-text type="strong">{deliveryDateDisplay}</s-text>
-                              ) : (
-                                <s-text color="subdued">{deliveryDateDisplay}</s-text>
-                              )}
-                              {deliveryRelative && (
-                                deliveryOverdue ? (
-                                  <s-badge tone="critical">{deliveryRelative}</s-badge>
-                                ) : (
-                                  <s-badge>{deliveryRelative}</s-badge>
-                                )
+                              <s-text type="strong">{customerName}</s-text>
+                              {order.customer?.defaultEmailAddress
+                                ?.emailAddress && (
+                                <s-text color="subdued">
+                                  {order.customer.defaultEmailAddress.emailAddress}
+                                </s-text>
                               )}
                             </s-stack>
-                          </s-table-cell>
-                        )}
+                          </s-button>
+                        </s-table-cell>
+
+                        {/* City */}
+                        <s-table-cell id={`cell-city-${orderId}`}>
+                          <s-text>{getCity(order)}</s-text>
+                        </s-table-cell>
+
+                        {/* Delivery date */}
+                        <s-table-cell id={`cell-delivery-${orderId}`}>
+                          <s-stack direction="block" gap="small-100">
+                            {rawDeliveryDate !== "—" ? (
+                              <s-text type="strong">{deliveryDateDisplay}</s-text>
+                            ) : (
+                              <s-text color="subdued">{deliveryDateDisplay}</s-text>
+                            )}
+                            {deliveryRelative && (
+                              deliveryOverdue ? (
+                                <s-badge tone="critical">{deliveryRelative}</s-badge>
+                              ) : (
+                                <s-badge>{deliveryRelative}</s-badge>
+                              )
+                            )}
+                          </s-stack>
+                        </s-table-cell>
 
                         {/* Time window */}
-                        {visibleColumns.has("timeWindow") && (
-                          <s-table-cell id={`cell-time-window-${orderId}`}>
-                            {timeWindow === "—" ? (
-                              <s-text color="subdued">{timeWindow}</s-text>
-                            ) : (
-                              <s-text>{timeWindow}</s-text>
-                            )}
-                          </s-table-cell>
-                        )}
+                        <s-table-cell id={`cell-time-window-${orderId}`}>
+                          {timeWindow === "—" ? (
+                            <s-text color="subdued">{timeWindow}</s-text>
+                          ) : (
+                            <s-text>{timeWindow}</s-text>
+                          )}
+                        </s-table-cell>
 
                         {/* Payment */}
-                        {visibleColumns.has("payment") && (
-                          <s-table-cell id={`cell-payment-${orderId}`}>
-                            <span
-                              className={`ods-status-cell${paymentNeedsAttention ? " ods-status-cell--attention" : ""}`}
+                        <s-table-cell id={`cell-payment-${orderId}`}>
+                          <span
+                            className={`ods-status-cell${paymentNeedsAttention ? " ods-status-cell--attention" : ""}`}
+                          >
+                            <s-badge
+                              tone={financialStatusTone(
+                                order.displayFinancialStatus,
+                              )}
                             >
-                              <s-badge
-                                tone={financialStatusTone(
-                                  order.displayFinancialStatus,
-                                )}
-                              >
-                                {formatStatusLabel(
-                                  order.displayFinancialStatus,
-                                )}
-                              </s-badge>
-                            </span>
-                          </s-table-cell>
-                        )}
+                              {formatStatusLabel(
+                                order.displayFinancialStatus,
+                              )}
+                            </s-badge>
+                          </span>
+                        </s-table-cell>
 
                         {/* Fulfillment */}
-                        {visibleColumns.has("fulfillment") && (
-                          <s-table-cell id={`cell-fulfillment-${orderId}`}>
-                            <span
-                              className={`ods-status-cell${fulfillmentNeedsAttention ? " ods-status-cell--attention" : ""}`}
+                        <s-table-cell id={`cell-fulfillment-${orderId}`}>
+                          <span
+                            className={`ods-status-cell${fulfillmentNeedsAttention ? " ods-status-cell--attention" : ""}`}
+                          >
+                            <s-badge
+                              tone={fulfillmentStatusTone(
+                                order.displayFulfillmentStatus,
+                              )}
                             >
-                              <s-badge
-                                tone={fulfillmentStatusTone(
-                                  order.displayFulfillmentStatus,
-                                )}
-                              >
-                                {formatStatusLabel(
-                                  order.displayFulfillmentStatus,
-                                )}
-                              </s-badge>
-                            </span>
-                          </s-table-cell>
-                        )}
+                              {formatStatusLabel(
+                                order.displayFulfillmentStatus,
+                              )}
+                            </s-badge>
+                          </span>
+                        </s-table-cell>
 
                         {/* Total */}
-                        {visibleColumns.has("total") && (
-                          <s-table-cell id={`cell-total-${orderId}`}>
-                            <s-text>{total}</s-text>
-                          </s-table-cell>
-                        )}
+                        <s-table-cell id={`cell-total-${orderId}`}>
+                          <s-text>{total}</s-text>
+                        </s-table-cell>
 
                         {/* Tags */}
-                        {visibleColumns.has("tags") && (
-                          <s-table-cell id={`cell-tags-${orderId}`}>
-                            {(() => {
-                              const meaningful = getMeaningfulTags(
-                                order.tags || [],
-                              );
-                              if (meaningful.length === 0) {
-                                return <s-text color="subdued">—</s-text>;
-                              }
-                              const shown = meaningful.slice(0, 2);
-                              const extra = meaningful.length - shown.length;
-                              return (
-                                <s-stack direction="inline" gap="small">
-                                  {shown.map((tag) => (
-                                    <s-chip key={tag}>{tagDisplayLabel(tag)}</s-chip>
-                                  ))}
-                                  {extra > 0 && (
-                                    <s-button
-                                      variant="tertiary"
-                                      id={`btn-tags-${orderId}`}
-                                      onClick={() => showTagsModal(order.id)}
-                                    >
-                                      +{extra}
-                                    </s-button>
-                                  )}
-                                </s-stack>
-                              );
-                            })()}
-                          </s-table-cell>
-                        )}
+                        <s-table-cell id={`cell-tags-${orderId}`}>
+                          {(() => {
+                            const meaningful = getMeaningfulTags(
+                              order.tags || [],
+                            );
+                            if (meaningful.length === 0) {
+                              return <s-text color="subdued">—</s-text>;
+                            }
+                            const shown = meaningful.slice(0, 2);
+                            const extra = meaningful.length - shown.length;
+                            return (
+                              <s-stack direction="inline" gap="small">
+                                {shown.map((tag) => (
+                                  <s-chip key={tag}>{tagDisplayLabel(tag)}</s-chip>
+                                ))}
+                                {extra > 0 && (
+                                  <s-button
+                                    variant="tertiary"
+                                    id={`btn-tags-${orderId}`}
+                                    onClick={() => showTagsModal(order.id)}
+                                  >
+                                    +{extra}
+                                  </s-button>
+                                )}
+                              </s-stack>
+                            );
+                          })()}
+                        </s-table-cell>
                       </s-table-row>
                     );
                   })
