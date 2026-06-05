@@ -4,8 +4,6 @@ import {
   type Order,
   type CustomAttribute,
   type BadgeTone,
-  parseTimeWindowHour,
-  parseDateValue,
   toLocalISODate,
   normalizeDateToISO,
   normalizeTimeSlot,
@@ -47,7 +45,6 @@ import { authenticate } from "../shopify.server";
 import stylesHref from "../styles/orders-dashboard.css?url";
 
 export const links = () => [{ rel: "stylesheet", href: stylesHref }];
-
 
 const DEFAULT_VISIBLE_COLUMNS = [
   "name",
@@ -211,7 +208,6 @@ const GET_ORDERS_QUERY = `
     }
   }
 `;
-
 
 // ─── Runtime safety helpers ───────────────────────────────────────────────────
 
@@ -890,6 +886,7 @@ export const action = async ({
   if (opRaw === "lalamovePriorityFee") {
     const lalamoveOrderId = String(fd.get("lalamoveOrderId") ?? "");
     const priorityFee = String(fd.get("priorityFee") ?? "");
+    const currency = String(fd.get("currency") ?? "PHP");
     if (!lalamoveOrderId || !priorityFee) {
       return Response.json(
         { ok: false, error: "Missing order ID or fee amount." },
@@ -898,7 +895,7 @@ export const action = async ({
     }
     const { addPriorityFee } = await import("../lib/lalamove.server");
     try {
-      await addPriorityFee(lalamoveOrderId, priorityFee);
+      await addPriorityFee(lalamoveOrderId, priorityFee, currency);
     } catch (e) {
       return Response.json(
         { ok: false, error: `Priority fee failed: ${String(e)}` },
@@ -1698,7 +1695,6 @@ function Extension() {
 
   const fetcher = useFetcher<BulkActionResponse>();
   const isSubmitting: boolean = fetcher.state !== "idle";
-
 
   // Cancel modal form state
   const [cancelReason, setCancelReason] = useState<string>("CUSTOMER");
