@@ -7,7 +7,6 @@
   overflow-x: clip;
 }
 
-#modal-columns,
 #modal-cancel-orders,
 #modal-mark-fulfilled,
 #modal-add-tags,
@@ -17,40 +16,6 @@
 }
 s-modal {
   max-inline-size: 96vw;
-}
-
-/* ── Header actions bar ────────────────────────────────────────────────── */
-.ods-header-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--p-space-2, 8px) var(--p-space-4, 16px);
-  border-bottom: 1px solid var(--p-color-border, #e1e3e5);
-  background: var(--p-color-bg-surface, #fff);
-  gap: var(--p-space-3, 12px);
-  flex-wrap: wrap;
-}
-.ods-subtitle {
-  font-size: var(--p-font-size-100, 14px);
-  color: var(--p-color-text-secondary, #6d7175);
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.ods-header-btns {
-  display: flex;
-  gap: var(--p-space-2, 8px);
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-@media (max-width: 520px) {
-  .ods-header-bar {
-    align-items: stretch;
-  }
-  .ods-header-btns,
-  .ods-header-btns > s-button {
-    width: 100%;
-  }
 }
 
 /* ── KPI grid ───────────────────────────────────────────────────────────── */
@@ -976,7 +941,6 @@ button.ods-action-link:hover {
 @media print {
   .ods-backdrop,
   .ods-drawer,
-  .ods-header-btns,
   .ods-selection-bar,
   .ods-tabs,
   .ods-toolbar,
