@@ -231,7 +231,19 @@ type LoaderData = {
   searchParam: string;
   timeWindowParam: string;
   tabParam: string;
+  lalamoveSender: { name: string; phone: string; address: string } | null;
 };
+
+// Pickup (sender) info for the Lalamove dispatch panel — shop-level metafields.
+const GET_LALAMOVE_SENDER_QUERY = `
+  query GetLalamoveSender {
+    shop {
+      lalamoveSenderName: metafield(namespace: "lalamove", key: "sender_name") { value }
+      lalamoveSenderPhone: metafield(namespace: "lalamove", key: "sender_phone") { value }
+      lalamoveSenderAddress: metafield(namespace: "lalamove", key: "sender_address") { value }
+    }
+  }
+`;
 
 export const loader = async ({
   request,
@@ -305,6 +317,25 @@ export const loader = async ({
     errors?: Array<{ message: string }>;
   };
 
+  const senderRes = await admin.graphql(GET_LALAMOVE_SENDER_QUERY);
+  const senderBody = (await senderRes.json()) as {
+    data?: {
+      shop?: {
+        lalamoveSenderName?: { value: string } | null;
+        lalamoveSenderPhone?: { value: string } | null;
+        lalamoveSenderAddress?: { value: string } | null;
+      };
+    };
+  };
+  const senderShop = senderBody.data?.shop;
+  const lalamoveSender = senderShop?.lalamoveSenderAddress?.value
+    ? {
+        name: senderShop.lalamoveSenderName?.value ?? "",
+        phone: senderShop.lalamoveSenderPhone?.value ?? "",
+        address: senderShop.lalamoveSenderAddress?.value ?? "",
+      }
+    : null;
+
   return Response.json(
     {
       orders:
@@ -316,6 +347,7 @@ export const loader = async ({
       searchParam,
       timeWindowParam,
       tabParam,
+      lalamoveSender,
     } satisfies LoaderData,
     { headers: { "Cache-Control": "no-store" } },
   );
@@ -2879,6 +2911,7 @@ function Extension() {
         <Suspense fallback={null}>
           <OrderDrawer
             order={selectedOrder}
+            lalamoveSender={loaderData.lalamoveSender}
             onClose={handleCloseDrawer}
             onMarkFulfilled={handleDrawerMarkFulfilled}
           />
