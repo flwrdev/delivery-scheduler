@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import {
@@ -205,6 +205,7 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
   const [thermalBag, setThermalBag] = useState(false);
   const [driverNotes, setDriverNotes] = useState("");
   const [priorityFeeInput, setPriorityFeeInput] = useState("");
+  const dispatchModalRef = useRef<HTMLDivElement>(null);
 
   const isCOD = isLalamoveCOD(order);
   const lalamoveOrderId = getLalamoveOrderId(order);
@@ -231,19 +232,23 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
 
   useEffect(() => {
     if (
-      showDispatchModal &&
-      rawDeliveryDate &&
-      rawDeliveryDate !== "—" &&
-      rawTimeSlot &&
-      rawTimeSlot !== "—" &&
-      fullDeliveryAddress
+      !showDispatchModal ||
+      !rawDeliveryDate ||
+      rawDeliveryDate === "—" ||
+      !rawTimeSlot ||
+      rawTimeSlot === "—" ||
+      !fullDeliveryAddress
     ) {
-      const specialRequests = [
-        buyForMe ? "PURCHASE_SERVICE_1" : null,
-        thermalBag ? "THERMAL_BAG_1" : null,
-      ]
-        .filter(Boolean)
-        .join(",");
+      return;
+    }
+    const specialRequests = [
+      buyForMe ? "PURCHASE_SERVICE_1" : null,
+      thermalBag ? "THERMAL_BAG_1" : null,
+    ]
+      .filter(Boolean)
+      .join(",");
+    // Debounce so rapid checkbox toggles fire only one quote request (the last).
+    const timer = setTimeout(() => {
       quoteFetcher.submit(
         {
           _action: "lalamoveGetQuote",
@@ -254,8 +259,54 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
         },
         { method: "post" },
       );
-    }
+    }, 300);
+    return () => clearTimeout(timer);
   }, [showDispatchModal, thermalBag, buyForMe]);
+
+  // Focus trap for the dispatch modal: keep Tab within the modal, focus the
+  // first control on open, restore focus on close, and let Escape close only
+  // the modal (not the whole drawer).
+  useEffect(() => {
+    if (!showDispatchModal) return;
+    const modal = dispatchModalRef.current;
+    if (!modal) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+
+    const getFocusable = () =>
+      Array.from(
+        modal.querySelectorAll<HTMLElement>(
+          'button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => !el.hasAttribute("disabled"));
+
+    (getFocusable()[0] ?? modal).focus();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setShowDispatchModal(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = getFocusable();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    modal.addEventListener("keydown", handleKeyDown);
+    return () => {
+      modal.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused?.focus?.();
+    };
+  }, [showDispatchModal]);
 
   return (
     <>
@@ -752,7 +803,14 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
           {/* ── Dispatch Modal ──────────────────────────────────────────── */}
           {showDispatchModal && (
             <div className="ods-dispatch-modal-overlay">
-              <div className="ods-dispatch-modal">
+              <div
+                className="ods-dispatch-modal"
+                ref={dispatchModalRef}
+                role="dialog"
+                aria-modal="true"
+                aria-label={`Dispatch via Lalamove for order ${orderNumber}`}
+                tabIndex={-1}
+              >
                 <p style={{ fontWeight: 700, fontSize: 15, margin: "0 0 14px" }}>
                   Dispatch via Lalamove — {orderNumber}
                 </p>

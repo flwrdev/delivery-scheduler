@@ -1,16 +1,13 @@
 import { jwtVerify } from "jose";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
+import { RESCHEDULED_ORDER_TAG } from "../lib/constants";
 import {
   buildDeliveryTags,
   canRescheduleDelivery,
-  isCartEligibleForMothersDay,
   isDeliveryScheduleTag,
-  isMothersDayRushDate,
-  MOTHERS_DAY_RESCHEDULE_ERROR_MESSAGE,
   validateDeliverySelection,
 } from "../lib/delivery-availability";
-import { loadOrderMothersDayValidationItems } from "../services/mothers-day-validation.server";
 import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
 import { unauthenticated } from "../shopify.server";
 
@@ -29,6 +26,12 @@ const ORDER_CUSTOMER_QUERY = `#graphql
         value
       }
       currentDeliveryDate: metafield(namespace: "custom", key: "date") {
+        value
+      }
+      currentDeliveryTimeSlot: metafield(namespace: "custom", key: "time_slot") {
+        value
+      }
+      rescheduleHistory: metafield(namespace: "delivery", key: "reschedule_history") {
         value
       }
       customer {
@@ -108,7 +111,6 @@ const RECHECK_ORDER_STATE_QUERY = `#graphql
 
 const DELIVERY_DATE_ATTRIBUTE_KEY = "Delivery Date";
 const DELIVERY_TIME_ATTRIBUTE_KEY = "Delivery Time";
-const RESCHEDULED_ORDER_TAG = "resched";
 const CUSTOMER_RESCHEDULE_ALREADY_RESCHEDULED_MESSAGE =
   "This order has already been rescheduled once. Please contact us if you need further assistance.";
 const CUSTOMER_RESCHEDULE_CLOSED_MESSAGE =
@@ -190,6 +192,45 @@ function getCurrentDeliveryDate(order: {
     order.customAttributes,
     DELIVERY_DATE_ATTRIBUTE_KEY,
   );
+}
+
+function getCurrentDeliveryTimeSlot(order: {
+  currentDeliveryTimeSlot?: { value?: string | null } | null;
+  customAttributes?: OrderCustomAttribute[] | null;
+}): string | null {
+  const metafieldValue = order.currentDeliveryTimeSlot?.value;
+  if (isNonEmptyString(metafieldValue)) {
+    return metafieldValue;
+  }
+
+  return getCustomAttributeValue(
+    order.customAttributes,
+    DELIVERY_TIME_ATTRIBUTE_KEY,
+  );
+}
+
+type RescheduleHistoryEvent = {
+  fromDate: string;
+  fromTimeSlot: string;
+  toDate: string;
+  toTimeSlot: string;
+  requestedAt: string;
+  status: "confirmed";
+  source: "customer";
+};
+
+function parseRescheduleHistory(
+  value: string | null | undefined,
+): RescheduleHistoryEvent[] {
+  if (!isNonEmptyString(value)) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? (parsed as RescheduleHistoryEvent[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function isCurrentDeliveryDateTooCloseOrPast(
@@ -531,6 +572,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           displayFulfillmentStatus?: string | null;
           customAttributes?: OrderCustomAttribute[] | null;
           currentDeliveryDate?: { value?: string | null } | null;
+          currentDeliveryTimeSlot?: { value?: string | null } | null;
+          rescheduleHistory?: { value?: string | null } | null;
           customer?: { id?: string | null } | null;
         } | null;
       };
@@ -612,9 +655,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         request,
         {
           ok: false,
-          error: isMothersDayRushDate(date)
-            ? MOTHERS_DAY_RESCHEDULE_ERROR_MESSAGE
-            : validation.message,
+          error: validation.message,
           code: validation.code,
           minDate: validation.minDate,
           maxDate: validation.maxDate,
@@ -625,24 +666,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         },
         422,
       );
-    }
-
-    if (isMothersDayRushDate(date)) {
-      const validationItems = await loadOrderMothersDayValidationItems(
-        admin,
-        orderGid,
-      );
-      if (!isCartEligibleForMothersDay(validationItems)) {
-        return jsonResponse(
-          request,
-          {
-            ok: false,
-            error: MOTHERS_DAY_RESCHEDULE_ERROR_MESSAGE,
-            code: "mothers_day_product_ineligible",
-          },
-          422,
-        );
-      }
     }
 
     // Re-read the two fields that can change while this request was validating.
@@ -694,6 +717,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const rescheduledAt = new Date().toISOString();
+    // Snapshot the pre-overwrite delivery selection and existing history so we can
+    // append a new event after the overwrite succeeds without losing prior reschedules.
+    const fromDate = currentDeliveryDate ?? "";
+    const fromTimeSlot = getCurrentDeliveryTimeSlot(order) ?? "";
+    const existingRescheduleHistory = parseRescheduleHistory(
+      order.rescheduleHistory?.value,
+    );
+
     // Persist the confirmed selection onto order metafields so every downstream admin
     // and customer-account surface can read the same delivery source of truth.
     const metafields = [
@@ -765,6 +796,70 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           error: userErrors[0].message ?? "Failed to save reschedule request",
         },
         422,
+      );
+    }
+
+    // Append a new event to delivery.reschedule_history so the full audit trail of
+    // customer-initiated reschedules survives across multiple writes. The metafield
+    // value is fully replaced on each write, so we read-append-write here.
+    const newHistoryEvent: RescheduleHistoryEvent = {
+      fromDate,
+      fromTimeSlot,
+      toDate: date,
+      toTimeSlot: timeSlot,
+      requestedAt: rescheduledAt,
+      status: "confirmed",
+      source: "customer",
+    };
+    const updatedRescheduleHistory = [
+      ...existingRescheduleHistory,
+      newHistoryEvent,
+    ];
+
+    let rescheduleHistorySyncFailed = false;
+    try {
+      const historyResponse = await admin.graphql(
+        SET_RESCHEDULE_METAFIELDS_MUTATION,
+        {
+          variables: {
+            metafields: [
+              {
+                ownerId: orderGid,
+                namespace: "delivery",
+                key: "reschedule_history",
+                value: JSON.stringify(updatedRescheduleHistory),
+                type: "json",
+              },
+            ],
+          },
+        },
+      );
+      const historyResult = (await historyResponse.json()) as {
+        data?: {
+          metafieldsSet?: {
+            userErrors: Array<{
+              field: string[];
+              message: string;
+              code: string;
+            }>;
+          };
+        };
+        errors?: Array<{ message: string }>;
+      };
+      const historyUserErrors =
+        historyResult.data?.metafieldsSet?.userErrors ?? [];
+      if (historyResult.errors?.length || historyUserErrors.length > 0) {
+        rescheduleHistorySyncFailed = true;
+        console.warn(
+          "[customer-account reschedule] reschedule_history write errors:",
+          historyResult.errors ?? historyUserErrors,
+        );
+      }
+    } catch (historyError) {
+      rescheduleHistorySyncFailed = true;
+      console.warn(
+        "[customer-account reschedule] reschedule_history write threw:",
+        historyError,
       );
     }
 
@@ -861,6 +956,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       newTimeSlot: timeSlot,
       deliveryAttributeSync: attributeSyncFailed ? "failed" : "updated",
       deliveryTagSync: tagSyncFailed ? "failed" : "updated",
+      rescheduleHistorySync: rescheduleHistorySyncFailed ? "failed" : "updated",
     });
   } catch (error) {
     console.error(

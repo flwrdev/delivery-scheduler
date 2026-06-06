@@ -1,13 +1,10 @@
 import type { ActionFunctionArgs } from "react-router";
 
+import { RESCHEDULED_ORDER_TAG } from "../lib/constants";
 import {
   canRescheduleDelivery,
-  isCartEligibleForMothersDay,
-  isMothersDayRushDate,
-  MOTHERS_DAY_RESCHEDULE_ERROR_MESSAGE,
   validateDeliverySelection,
 } from "../lib/delivery-availability";
-import { loadOrderMothersDayValidationItems } from "../services/mothers-day-validation.server";
 import {
   buildNextDeliveryCustomAttributes,
   syncOrderDeliveryScheduleTag,
@@ -93,7 +90,6 @@ type OrderUpdateResponse = {
 
 const CUSTOMER_ACCOUNT_ORIGINS = new Set(["https://account.flowercart.store"]);
 const DELIVERY_DATE_ATTRIBUTE_KEY = "Delivery Date";
-const RESCHEDULED_ORDER_TAG = "resched";
 const RESCHEDULE_ALREADY_RESCHEDULED_MESSAGE =
   "This order has already been rescheduled once. Please contact us if you need further assistance.";
 const RESCHEDULE_CLOSED_MESSAGE =
@@ -316,13 +312,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   );
   const validation = validateDeliverySelection(scheduleRules, date, timeSlot);
   if (!validation.ok) {
-    return jsonError(
-      isMothersDayRushDate(date)
-        ? MOTHERS_DAY_RESCHEDULE_ERROR_MESSAGE
-        : validation.message,
-      422,
-      request,
-    );
+    return jsonError(validation.message, 422, request);
   }
 
   const currentDeliveryDate = getCurrentDeliveryDate(orderState);
@@ -332,16 +322,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     !canRescheduleDelivery(currentDeliveryDate, new Date(), scheduleRules.timezone)
   ) {
     return jsonError(RESCHEDULE_CLOSED_MESSAGE, 422, request);
-  }
-
-  if (isMothersDayRushDate(date)) {
-    const validationItems = await loadOrderMothersDayValidationItems(
-      admin,
-      orderGid,
-    );
-    if (!isCartEligibleForMothersDay(validationItems)) {
-      return jsonError(MOTHERS_DAY_RESCHEDULE_ERROR_MESSAGE, 422, request);
-    }
   }
 
   // Re-read the two fields that can change while this request was validating.
