@@ -37,7 +37,7 @@ function buildAuthHeader(
 
 // ─── Error Parsing ────────────────────────────────────────────────────────────
 
-function parseLalamoveError(status: number, body: string): string {
+export function parseLalamoveError(status: number, body: string): string {
   try {
     const parsed = JSON.parse(body) as {
       errors?: Array<{ id: string; detail?: string; message?: string }>;
@@ -68,6 +68,32 @@ function parseLalamoveError(status: number, body: string): string {
   } catch {
     return `Request failed [${status}]`;
   }
+}
+
+// ─── Coordinate sanitization ──────────────────────────────────────────────────
+// Lalamove's coordinate regex requires a plain decimal string — no scientific
+// notation, no excess precision. `String(0.0000123)` yields "1.23e-5", and raw
+// values pasted into Lalamove Settings may carry whitespace or be malformed.
+// `sanitizeCoordinate` parses, range-checks, and formats to a stable 6-decimal
+// plain-decimal string (~11cm precision — well within Lalamove's 15-decimal max).
+
+export function sanitizeCoordinate(
+  value: string | number,
+  field: "latitude" | "longitude",
+): string {
+  const n =
+    typeof value === "number" ? value : parseFloat(String(value).trim());
+  if (!Number.isFinite(n)) {
+    const example = field === "latitude" ? "14.5995" : "120.9842";
+    throw new Error(
+      `Invalid ${field}: "${value}". Re-save Lalamove Settings with a plain decimal (e.g. ${example}).`,
+    );
+  }
+  const limit = field === "latitude" ? 90 : 180;
+  if (Math.abs(n) > limit) {
+    throw new Error(`Invalid ${field}: ${n} is out of range (±${limit}).`);
+  }
+  return n.toFixed(6);
 }
 
 // ─── Base Request ─────────────────────────────────────────────────────────────
@@ -223,8 +249,8 @@ export async function geocodeAddress(
 
   const { lat, lng } = data.results[0].geometry.location;
   return {
-    lat: parseFloat(String(lat)).toFixed(7),
-    lng: parseFloat(String(lng)).toFixed(7),
+    lat: sanitizeCoordinate(lat, "latitude"),
+    lng: sanitizeCoordinate(lng, "longitude"),
   };
 }
 

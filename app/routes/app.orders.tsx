@@ -1,5 +1,10 @@
-import { useState, useCallback, useMemo, useEffect, useRef, type ChangeEvent } from "react";
-import { OrderDrawer } from "../components/OrderDrawer";
+import { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense, type ChangeEvent } from "react";
+
+// Lazy-loaded: the drawer (and its Lalamove dispatch form) only mounts when a
+// merchant opens an order, so it ships as a separate chunk off the initial bundle.
+const OrderDrawer = lazy(() =>
+  import("../components/OrderDrawer").then((m) => ({ default: m.OrderDrawer })),
+);
 import {
   type Order,
   type CustomAttribute,
@@ -689,16 +694,27 @@ export const action = async ({
       );
     }
 
-    const { getQuotation, geocodeAddress, buildScheduleAt } = await import(
-      "../lib/lalamove.server"
-    );
+    const { getQuotation, geocodeAddress, buildScheduleAt, sanitizeCoordinate } =
+      await import("../lib/lalamove.server");
+
+    let senderLatSafe: string;
+    let senderLngSafe: string;
+    try {
+      senderLatSafe = sanitizeCoordinate(senderLat, "latitude");
+      senderLngSafe = sanitizeCoordinate(senderLng, "longitude");
+    } catch (e) {
+      return Response.json(
+        { ok: false, error: e instanceof Error ? e.message : "Invalid pickup coordinates." },
+        { status: 400 },
+      );
+    }
 
     let deliveryCoords: { lat: string; lng: string };
     try {
       deliveryCoords = await geocodeAddress(deliveryAddress);
-    } catch (e) {
+    } catch {
       return Response.json(
-        { ok: false, error: `Cannot geocode address: ${String(e)}` },
+        { ok: false, error: "Could not locate the delivery address. Please verify the customer's address." },
         { status: 400 },
       );
     }
@@ -710,7 +726,7 @@ export const action = async ({
         scheduleAt: buildScheduleAt(deliveryDate, timeSlot),
         specialRequests: specialRequests.length ? specialRequests : undefined,
         stops: [
-          { coordinates: { lat: senderLat, lng: senderLng }, address: senderAddress },
+          { coordinates: { lat: senderLatSafe, lng: senderLngSafe }, address: senderAddress },
           { coordinates: deliveryCoords, address: deliveryAddress },
         ],
       });
@@ -722,7 +738,7 @@ export const action = async ({
       });
     } catch (e) {
       return Response.json(
-        { ok: false, error: `Quotation failed: ${String(e)}` },
+        { ok: false, error: e instanceof Error ? e.message : "Quotation failed. Please try again." },
         { status: 400 },
       );
     }
@@ -770,15 +786,27 @@ export const action = async ({
       );
     }
 
-    const { getQuotation, placeOrder, geocodeAddress, buildScheduleAt } =
+    const { getQuotation, placeOrder, geocodeAddress, buildScheduleAt, sanitizeCoordinate } =
       await import("../lib/lalamove.server");
+
+    let senderLatSafe: string;
+    let senderLngSafe: string;
+    try {
+      senderLatSafe = sanitizeCoordinate(senderLat, "latitude");
+      senderLngSafe = sanitizeCoordinate(senderLng, "longitude");
+    } catch (e) {
+      return Response.json(
+        { ok: false, error: e instanceof Error ? e.message : "Invalid pickup coordinates." },
+        { status: 400 },
+      );
+    }
 
     let deliveryCoords: { lat: string; lng: string };
     try {
       deliveryCoords = await geocodeAddress(deliveryAddress);
-    } catch (e) {
+    } catch {
       return Response.json(
-        { ok: false, error: `Could not locate delivery address. Please verify customer address. (${String(e)})` },
+        { ok: false, error: "Could not locate the delivery address. Please verify the customer's address." },
         { status: 400 },
       );
     }
@@ -791,13 +819,13 @@ export const action = async ({
         scheduleAt: buildScheduleAt(deliveryDate, timeSlot),
         specialRequests: specialRequests.length ? specialRequests : undefined,
         stops: [
-          { coordinates: { lat: senderLat, lng: senderLng }, address: senderAddress },
+          { coordinates: { lat: senderLatSafe, lng: senderLngSafe }, address: senderAddress },
           { coordinates: deliveryCoords, address: deliveryAddress },
         ],
       });
     } catch (e) {
       return Response.json(
-        { ok: false, error: `Quotation failed: ${String(e)}` },
+        { ok: false, error: e instanceof Error ? e.message : "Quotation failed. Please try again." },
         { status: 400 },
       );
     }
@@ -820,7 +848,7 @@ export const action = async ({
       });
     } catch (e) {
       return Response.json(
-        { ok: false, error: `Order placement failed: ${String(e)}` },
+        { ok: false, error: e instanceof Error ? e.message : "Order placement failed. Please try again." },
         { status: 400 },
       );
     }
@@ -854,7 +882,7 @@ export const action = async ({
       await cancelLalamoveOrder(lalamoveOrderId);
     } catch (e) {
       return Response.json(
-        { ok: false, error: `Cancel failed: ${String(e)}` },
+        { ok: false, error: e instanceof Error ? e.message : "Cancel failed. Please try again." },
         { status: 400 },
       );
     }
@@ -877,7 +905,7 @@ export const action = async ({
       await addPriorityFee(lalamoveOrderId, priorityFee, currency);
     } catch (e) {
       return Response.json(
-        { ok: false, error: `Priority fee failed: ${String(e)}` },
+        { ok: false, error: e instanceof Error ? e.message : "Priority fee failed. Please try again." },
         { status: 400 },
       );
     }
@@ -2848,11 +2876,13 @@ function Extension() {
 
       {/* ── Right-side order detail drawer ──────────────────────────────────── */}
       {selectedOrder && (
-        <OrderDrawer
-          order={selectedOrder}
-          onClose={handleCloseDrawer}
-          onMarkFulfilled={handleDrawerMarkFulfilled}
-        />
+        <Suspense fallback={null}>
+          <OrderDrawer
+            order={selectedOrder}
+            onClose={handleCloseDrawer}
+            onMarkFulfilled={handleDrawerMarkFulfilled}
+          />
+        </Suspense>
       )}
     </s-page>
   );
