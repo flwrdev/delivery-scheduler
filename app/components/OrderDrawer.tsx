@@ -198,6 +198,7 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
     error?: string;
     price?: string;
     quotationId?: string;
+    expiresAt?: string;
   }>();
 
   const [showDispatchModal, setShowDispatchModal] = useState(false);
@@ -872,7 +873,18 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                       Fetching…
                     </span>
                   ) : quoteFetcher.data?.price ? (
-                    <span className="ods-price-card__value">{quoteFetcher.data.price}</span>
+                    <span className="ods-price-card__value">
+                      {quoteFetcher.data.price}
+                      {quoteFetcher.data.expiresAt && (
+                        <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: "#6b7280" }}>
+                          Valid until{" "}
+                          {new Date(quoteFetcher.data.expiresAt).toLocaleTimeString("en-US", {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      )}
+                    </span>
                   ) : quoteFetcher.data?.error ? (
                     <span className="ods-price-card__error">{quoteFetcher.data.error}</span>
                   ) : (
