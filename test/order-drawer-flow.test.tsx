@@ -115,6 +115,17 @@ describe("OrderDrawer — quote refresh + dispatch flow", () => {
     expect(lastQuoteCall()?.specialRequests).toBe("THERMAL_BAG_1");
   });
 
+  it("maps 'Extra waiting time' to the QUEUEING_SERVICE enum in the quote", () => {
+    openDispatchModal();
+    act(() => vi.advanceTimersByTime(300)); // initial quote
+    submitSpy.mockClear();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /extra waiting/i }));
+    act(() => vi.advanceTimersByTime(300));
+
+    expect(lastQuoteCall()?.specialRequests).toBe("QUEUEING_SERVICE");
+  });
+
   it("debounces rapid toggles into a single quote request (the last state wins)", () => {
     openDispatchModal();
     act(() => vi.advanceTimersByTime(300)); // initial quote

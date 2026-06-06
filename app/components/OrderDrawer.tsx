@@ -90,11 +90,12 @@ function LalamoveStatusLabel({ status }: { status: LalamoveStatusValue | null })
 
 export interface OrderDrawerProps {
   order: Order;
+  lalamoveSender?: { name: string; phone: string; address: string } | null;
   onClose: () => void;
   onMarkFulfilled?: () => void;
 }
 
-export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProps) {
+export function OrderDrawer({ order, lalamoveSender, onClose, onMarkFulfilled }: OrderDrawerProps) {
   const { copied, fieldCopied, copyText, copyField } = useCopyToClipboard();
   const tagFetcher = useFetcher<{ ok: boolean; message?: string; summary?: { ok: number; failed: number } }>();
   const [tagInput, setTagInput] = useState("");
@@ -131,13 +132,6 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
         order.currentTotalPriceSet.shopMoney.currencyCode,
       )
     : "—";
-  const email = order.customer?.defaultEmailAddress?.emailAddress || "—";
-  const customerId = order.customer?.id?.split("/").pop();
-  const billingAddress = order.billingAddress ?? null;
-  const showSenderInfo =
-    billingAddress != null &&
-    billingAddress.address1 != null &&
-    billingAddress.address1 !== (order.shippingAddress?.address1 ?? "");
   const shippingAmount = order.totalShippingPriceSet
     ? parseFloat(order.totalShippingPriceSet.shopMoney.amount)
     : 0;
@@ -204,6 +198,7 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
   const [showDispatchModal, setShowDispatchModal] = useState(false);
   const [buyForMe, setBuyForMe] = useState(false);
   const [thermalBag, setThermalBag] = useState(false);
+  const [queueingService, setQueueingService] = useState(false);
   const [driverNotes, setDriverNotes] = useState("");
   const [priorityFeeInput, setPriorityFeeInput] = useState("");
   const dispatchModalRef = useRef<HTMLDivElement>(null);
@@ -220,6 +215,16 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
   const orderTotal = order.currentTotalPriceSet?.shopMoney?.amount ?? "";
   const orderCurrency = order.currentTotalPriceSet?.shopMoney?.currencyCode ?? "PHP";
   const orderNumber = order.name ?? `#${orderId}`;
+
+  // Single source of truth for special requests — used by both the quote
+  // request and the dispatch form so the quoted price always matches dispatch.
+  const specialRequests = [
+    buyForMe ? "PURCHASE_SERVICE_1" : null,
+    thermalBag ? "THERMAL_BAG_1" : null,
+    queueingService ? "QUEUEING_SERVICE" : null,
+  ]
+    .filter(Boolean)
+    .join(",");
 
   useEffect(() => {
     if (buyForMe) {
@@ -242,12 +247,6 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
     ) {
       return;
     }
-    const specialRequests = [
-      buyForMe ? "PURCHASE_SERVICE_1" : null,
-      thermalBag ? "THERMAL_BAG_1" : null,
-    ]
-      .filter(Boolean)
-      .join(",");
     // Debounce so rapid checkbox toggles fire only one quote request (the last).
     const timer = setTimeout(() => {
       quoteFetcher.submit(
@@ -262,7 +261,7 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
       );
     }, 300);
     return () => clearTimeout(timer);
-  }, [showDispatchModal, thermalBag, buyForMe]);
+  }, [showDispatchModal, specialRequests, rawDeliveryDate, rawTimeSlot, fullDeliveryAddress]);
 
   // Focus trap for the dispatch modal: keep Tab within the modal, focus the
   // first control on open, restore focus on close, and let Escape close only
@@ -499,76 +498,6 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                     <dd className="ods-dd">
                       Rescheduled — history not yet recorded
                     </dd>
-                  </>
-                )}
-              </dl>
-            </div>
-          )}
-
-          {/* Customer section */}
-          <div className="ods-drawer-section">
-            <p className="ods-section-title">Customer</p>
-            <dl className="ods-dl">
-              <dt className="ods-dt">Name</dt>
-              <dd className="ods-dd">
-                <span
-                  className={`ods-copyable${fieldCopied === "customerName" ? " ods-copyable--copied" : ""}`}
-                  onClick={() => copyField("customerName", customerName)}
-                  title="Click to copy"
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => e.key === "Enter" && copyField("customerName", customerName)}
-                >
-                  {customerName || "—"}
-                  <svg className="ods-copy-hint-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
-                </span>
-              </dd>
-              <dt className="ods-dt">Email</dt>
-              <dd className="ods-dd ods-dd--long">
-                {email !== "—" ? (
-                  <a href={`mailto:${email}`} className="ods-kpi-value--link">{email}</a>
-                ) : "—"}
-              </dd>
-              <dt className="ods-dt">Phone</dt>
-              <dd className="ods-dd">
-                {phone !== "—" ? (
-                  <span
-                    className={`ods-copyable${fieldCopied === "phone" ? " ods-copyable--copied" : ""}`}
-                    onClick={() => copyField("phone", phone)}
-                    title="Click to copy"
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => e.key === "Enter" && copyField("phone", phone)}
-                  >
-                    {phone}
-                    <svg className="ods-copy-hint-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
-                  </span>
-                ) : "—"}
-              </dd>
-            </dl>
-          </div>
-
-          {/* Sender Info section — only when billing ≠ shipping (gift orders) */}
-          {showSenderInfo && (
-            <div className="ods-drawer-section">
-              <p className="ods-section-title">Sender Info</p>
-              <dl className="ods-dl">
-                {billingAddress!.name && (
-                  <>
-                    <dt className="ods-dt">Sender Name</dt>
-                    <dd className="ods-dd">{billingAddress!.name}</dd>
-                  </>
-                )}
-                {billingAddress!.address1 && (
-                  <>
-                    <dt className="ods-dt">Address</dt>
-                    <dd className="ods-dd ods-dd--long">{billingAddress!.address1}</dd>
-                  </>
-                )}
-                {billingAddress!.phone && (
-                  <>
-                    <dt className="ods-dt">Sender Phone</dt>
-                    <dd className="ods-dd">{billingAddress!.phone}</dd>
                   </>
                 )}
               </dl>
@@ -812,39 +741,84 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                 aria-label={`Dispatch via Lalamove for order ${orderNumber}`}
                 tabIndex={-1}
               >
-                <p style={{ fontWeight: 700, fontSize: 15, margin: "0 0 14px" }}>
-                  Dispatch via Lalamove — {orderNumber}
+                <div className="ods-lld-header">
+                  <span className="ods-lld-logo" aria-hidden="true">L</span>
+                  <div>
+                    <p className="ods-lld-title">LALAMOVE DISPATCH</p>
+                    <p className="ods-lld-subtitle">Instant Routing Center · {orderNumber}</p>
+                  </div>
+                </div>
+
+                {/* Route */}
+                <p className="ods-lld-label">ROUTE</p>
+                <div className="ods-route-card">
+                  <div className="ods-route-stop">
+                    <span className="ods-route-dot ods-route-dot--pickup">1</span>
+                    <div className="ods-route-info">
+                      <div className="ods-route-line">
+                        <span className="ods-route-name">{lalamoveSender?.name || "Pickup point"}</span>
+                        <span className="ods-route-badge ods-route-badge--sender">Sender</span>
+                      </div>
+                      <div className="ods-route-addr">
+                        {lalamoveSender?.address || "Set pickup address in Lalamove Settings"}
+                      </div>
+                      {lalamoveSender?.phone && (
+                        <div className="ods-route-phone">{lalamoveSender.phone}</div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="ods-route-stop">
+                    <span className="ods-route-dot ods-route-dot--dropoff" aria-hidden="true" />
+                    <div className="ods-route-info">
+                      <div className="ods-route-line">
+                        <span className="ods-route-name">{customerName}</span>
+                        <span className="ods-route-badge ods-route-badge--receiver">Receiver</span>
+                      </div>
+                      <div className="ods-route-addr">{fullDeliveryAddress || "—"}</div>
+                      {phone !== "—" && <div className="ods-route-phone">{phone}</div>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Additional services */}
+                <p className="ods-lld-label">
+                  ADDITIONAL SERVICES <span className="ods-lld-label-note">Optional fees</span>
                 </p>
-
-                <p className="ods-section-title">Special Requests</p>
-
                 {isCOD && (
-                  <label className="ods-check-row" style={{ cursor: "pointer" }}>
+                  <label className="ods-service-row">
                     <input
                       type="checkbox"
                       checked={buyForMe}
                       onChange={(e) => setBuyForMe(e.target.checked)}
                     />
-                    <span className="ods-check-label">
-                      <span className="ods-check-text">Buy for me (Up to ₱2,000)</span>
-                      <span className="ods-check-helper">Driver pays COD amount at pickup</span>
+                    <span className="ods-service-text">
+                      Buy for me <span className="ods-service-sub">(Up to ₱2,000)</span>
                     </span>
+                    <span className="ods-service-fee">+₱50</span>
                   </label>
                 )}
-
-                <label className="ods-check-row" style={{ cursor: "pointer", marginBottom: 14 }}>
+                <label className="ods-service-row">
+                  <input
+                    type="checkbox"
+                    checked={queueingService}
+                    onChange={(e) => setQueueingService(e.target.checked)}
+                  />
+                  <span className="ods-service-text">
+                    Extra waiting time <span className="ods-service-sub">(queueing service)</span>
+                  </span>
+                  <span className="ods-service-fee">+₱40</span>
+                </label>
+                <label className="ods-service-row">
                   <input
                     type="checkbox"
                     checked={thermalBag}
                     onChange={(e) => setThermalBag(e.target.checked)}
                   />
-                  <span className="ods-check-label">
-                    <span className="ods-check-text">Thermal bag</span>
-                    <span className="ods-check-helper">Keeps items cool during transit</span>
-                  </span>
+                  <span className="ods-service-text">Thermal bag</span>
+                  <span className="ods-service-fee">+₱20</span>
                 </label>
 
-                <p className="ods-section-title">Notes to driver</p>
+                <p className="ods-lld-label">NOTES TO DRIVER</p>
                 <textarea
                   value={driverNotes}
                   onChange={(e) => setDriverNotes(e.target.value)}
@@ -865,40 +839,44 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                   {500 - driverNotes.length} characters left
                 </p>
 
-                <div className="ods-price-card">
-                  <span className="ods-price-card__label">Estimated price</span>
+                <div className="ods-invoice-card">
+                  <p className="ods-invoice-title">ESTIMATED INVOICE BREAKDOWN</p>
                   {quoteFetcher.state !== "idle" ? (
-                    <span className="ods-price-card__loading">
+                    <div className="ods-invoice-row ods-invoice-row--muted">
                       <span className="ods-spinner" />
-                      Fetching…
-                    </span>
+                      <span>Fetching estimate…</span>
+                    </div>
                   ) : quoteFetcher.data?.price ? (
-                    <span className="ods-price-card__value">
-                      {quoteFetcher.data.price}
+                    <>
+                      <div className="ods-invoice-row ods-invoice-row--total">
+                        <span>Total Price Estimate</span>
+                        <span className="ods-invoice-total">{quoteFetcher.data.price}</span>
+                      </div>
                       {quoteFetcher.data.expiresAt && (
-                        <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: "#6b7280" }}>
+                        <p className="ods-invoice-expiry">
                           Valid until{" "}
                           {new Date(quoteFetcher.data.expiresAt).toLocaleTimeString("en-US", {
                             hour: "numeric",
                             minute: "2-digit",
                           })}
-                        </span>
+                        </p>
                       )}
-                    </span>
+                    </>
                   ) : quoteFetcher.data?.error ? (
-                    <span className="ods-price-card__error">{quoteFetcher.data.error}</span>
+                    <div className="ods-invoice-error">{quoteFetcher.data.error}</div>
                   ) : (
-                    <span className="ods-price-card__loading">—</span>
+                    <div className="ods-invoice-row ods-invoice-row--muted">
+                      <span>Total Price Estimate</span>
+                      <span>—</span>
+                    </div>
                   )}
                 </div>
 
                 {lalamoveFetcher.data?.error && (
-                  <p style={{ color: "#dc2626", fontSize: 12, margin: "0 0 10px" }}>
-                    {lalamoveFetcher.data.error}
-                  </p>
+                  <p className="ods-lld-error">{lalamoveFetcher.data.error}</p>
                 )}
 
-                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <div className="ods-lld-actions">
                   <button
                     type="button"
                     onClick={() => setShowDispatchModal(false)}
@@ -909,7 +887,7 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                   <lalamoveFetcher.Form
                     method="post"
                     onSubmit={() => setShowDispatchModal(false)}
-                    style={{ margin: 0 }}
+                    style={{ margin: 0, flex: 1 }}
                   >
                     <input type="hidden" name="_action" value="lalamoveDispatch" />
                     <input type="hidden" name="orderId" value={order.id} />
@@ -919,24 +897,15 @@ export function OrderDrawer({ order, onClose, onMarkFulfilled }: OrderDrawerProp
                     <input type="hidden" name="customerPhone" value={phone} />
                     <input type="hidden" name="deliveryAddress" value={fullDeliveryAddress} />
                     <input type="hidden" name="notesToDriver" value={driverNotes} />
-                    <input
-                      type="hidden"
-                      name="specialRequests"
-                      value={[
-                        buyForMe ? "PURCHASE_SERVICE_1" : null,
-                        thermalBag ? "THERMAL_BAG_1" : null,
-                      ]
-                        .filter(Boolean)
-                        .join(",")}
-                    />
+                    <input type="hidden" name="specialRequests" value={specialRequests} />
                     <button
                       type="submit"
                       disabled={lalamoveFetcher.state !== "idle"}
-                      className="ods-btn ods-btn--orange"
+                      className="ods-btn ods-btn--orange ods-lld-dispatch-btn"
                     >
                       {lalamoveFetcher.state !== "idle" ? (
-                        <><span className="ods-spinner--btn" /> Booking…</>
-                      ) : "Book"}
+                        <><span className="ods-spinner--btn" /> Dispatching…</>
+                      ) : "🛵  Dispatch Lalamove Driver"}
                     </button>
                   </lalamoveFetcher.Form>
                 </div>
