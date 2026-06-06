@@ -1322,12 +1322,6 @@ function Extension() {
 
   const handleCloseDrawer = useCallback(() => setSelectedOrderId(null), []);
 
-  const handleDrawerMarkFulfilled = useCallback(() => {
-    if (!selectedOrderId) return;
-    setSelectedIds(new Set([selectedOrderId]));
-    showModal("modal-mark-fulfilled");
-  }, [selectedOrderId]);
-
   const showTagsModal = useCallback((orderId: string) => {
     setTagsModalOrderId(orderId);
     setTagsModalTrigger((n) => n + 1);
@@ -2913,7 +2907,6 @@ function Extension() {
             order={selectedOrder}
             lalamoveSender={loaderData.lalamoveSender}
             onClose={handleCloseDrawer}
-            onMarkFulfilled={handleDrawerMarkFulfilled}
           />
         </Suspense>
       )}

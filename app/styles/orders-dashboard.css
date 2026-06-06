@@ -1032,6 +1032,10 @@ button.ods-action-link:hover {
 .ods-btn--default:hover:not(:disabled) {
   background: var(--p-color-bg-surface-hover, #f1f2f3);
 }
+.ods-btn--block {
+  width: 100%;
+  justify-content: center;
+}
 .ods-btn--orange {
   background: #ff6600;
   border-color: #ff6600;

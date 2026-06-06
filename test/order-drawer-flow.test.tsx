@@ -68,7 +68,7 @@ function makeOrder(): Order {
 function openDispatchModal() {
   render(<OrderDrawer order={makeOrder()} onClose={() => {}} />);
   // State 1 (no Lalamove order yet) shows a single "Book" button that opens the modal.
-  fireEvent.click(screen.getByRole("button", { name: "Book" }));
+  fireEvent.click(screen.getByRole("button", { name: /book lalamove/i }));
 }
 
 function lastQuoteCall() {
@@ -145,7 +145,7 @@ describe("OrderDrawer — quote refresh + dispatch flow", () => {
     const { container } = render(
       <OrderDrawer order={makeOrder()} onClose={() => {}} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Book" }));
+    fireEvent.click(screen.getByRole("button", { name: /book lalamove/i }));
     act(() => vi.advanceTimersByTime(300));
 
     fireEvent.click(screen.getByRole("checkbox", { name: /thermal bag/i }));

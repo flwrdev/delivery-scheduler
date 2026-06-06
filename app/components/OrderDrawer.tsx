@@ -92,10 +92,9 @@ export interface OrderDrawerProps {
   order: Order;
   lalamoveSender?: { name: string; phone: string; address: string } | null;
   onClose: () => void;
-  onMarkFulfilled?: () => void;
 }
 
-export function OrderDrawer({ order, lalamoveSender, onClose, onMarkFulfilled }: OrderDrawerProps) {
+export function OrderDrawer({ order, lalamoveSender, onClose }: OrderDrawerProps) {
   const { copied, fieldCopied, copyText, copyField } = useCopyToClipboard();
   const tagFetcher = useFetcher<{ ok: boolean; message?: string; summary?: { ok: number; failed: number } }>();
   const [tagInput, setTagInput] = useState("");
@@ -569,10 +568,10 @@ export function OrderDrawer({ order, lalamoveSender, onClose, onMarkFulfilled }:
             {!lalamoveOrderId && (
               <button
                 type="button"
-                className="ods-btn ods-btn--orange"
+                className="ods-btn ods-btn--orange ods-btn--block"
                 onClick={() => setShowDispatchModal(true)}
               >
-                Book
+                🛵  Book Lalamove
               </button>
             )}
 
@@ -587,6 +586,7 @@ export function OrderDrawer({ order, lalamoveSender, onClose, onMarkFulfilled }:
                     value={priorityFeeInput}
                     onChange={(e) => setPriorityFeeInput(e.target.value)}
                     className="ods-input-sm"
+                    style={{ flex: 1 }}
                   />
                   <priorityFetcher.Form method="post">
                     <input type="hidden" name="_action" value="lalamovePriorityFee" />
@@ -621,7 +621,7 @@ export function OrderDrawer({ order, lalamoveSender, onClose, onMarkFulfilled }:
                   <button
                     type="submit"
                     disabled={cancelFetcher.state !== "idle"}
-                    className="ods-btn ods-btn--critical-plain"
+                    className="ods-btn ods-btn--critical-plain ods-btn--block"
                   >
                     {cancelFetcher.state !== "idle" ? "Cancelling…" : "Cancel delivery"}
                   </button>
@@ -673,7 +673,7 @@ export function OrderDrawer({ order, lalamoveSender, onClose, onMarkFulfilled }:
                     <button
                       type="submit"
                       disabled={cancelFetcher.state !== "idle"}
-                      className="ods-btn ods-btn--critical-plain"
+                      className="ods-btn ods-btn--critical-plain ods-btn--block"
                     >
                       {cancelFetcher.state !== "idle" ? "Cancelling…" : "Cancel delivery"}
                     </button>
@@ -913,14 +913,9 @@ export function OrderDrawer({ order, lalamoveSender, onClose, onMarkFulfilled }:
             </div>
           )}
 
-          {/* Admin link + fulfillment CTA */}
+          {/* Admin link */}
           <div className="ods-drawer-section">
             <div className="ods-drawer-actions">
-              {isOpenOrder && onMarkFulfilled && (
-                <button className="ods-action-link" onClick={onMarkFulfilled}>
-                  Mark as Fulfilled
-                </button>
-              )}
               <a
                 href={`shopify://admin/orders/${orderId}`}
                 className="ods-action-link"
