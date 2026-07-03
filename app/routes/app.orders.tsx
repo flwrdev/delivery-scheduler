@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense, type ChangeEvent } from "react";
 
-// Lazy-loaded: the drawer (and its Lalamove dispatch form) only mounts when a
-// merchant opens an order, so it ships as a separate chunk off the initial bundle.
+// Lazy-loaded: the drawer only mounts when a merchant opens an order, so it
+// ships as a separate chunk off the initial bundle.
 const OrderDrawer = lazy(() =>
   import("../components/OrderDrawer").then((m) => ({ default: m.OrderDrawer })),
 );
@@ -31,7 +31,6 @@ import {
   getDeliveryDateValue,
   getDeliveryTimeValue,
   getCustomerName,
-  getOrderPhone,
   getCity,
   getInstructionValue,
   getSearchableOrderText,
@@ -145,22 +144,6 @@ const GET_ORDERS_QUERY = `
             value
             jsonValue
           }
-          paymentGatewayNames
-          lalamoveOrderId: metafield(namespace: "lalamove", key: "order_id") {
-            value
-          }
-          lalamoveStatus: metafield(namespace: "lalamove", key: "status") {
-            value
-          }
-          lalamoveShareLink: metafield(namespace: "lalamove", key: "share_link") {
-            value
-          }
-          lalamoveDriverName: metafield(namespace: "lalamove", key: "driver_name") {
-            value
-          }
-          lalamoveDriverPhone: metafield(namespace: "lalamove", key: "driver_phone") {
-            value
-          }
           lineItems(first: 10) {
             edges {
               node {
@@ -231,19 +214,7 @@ type LoaderData = {
   searchParam: string;
   timeWindowParam: string;
   tabParam: string;
-  lalamoveSender: { name: string; phone: string; address: string } | null;
 };
-
-// Pickup (sender) info for the Lalamove dispatch panel — shop-level metafields.
-const GET_LALAMOVE_SENDER_QUERY = `
-  query GetLalamoveSender {
-    shop {
-      lalamoveSenderName: metafield(namespace: "lalamove", key: "sender_name") { value }
-      lalamoveSenderPhone: metafield(namespace: "lalamove", key: "sender_phone") { value }
-      lalamoveSenderAddress: metafield(namespace: "lalamove", key: "sender_address") { value }
-    }
-  }
-`;
 
 export const loader = async ({
   request,
@@ -317,25 +288,6 @@ export const loader = async ({
     errors?: Array<{ message: string }>;
   };
 
-  const senderRes = await admin.graphql(GET_LALAMOVE_SENDER_QUERY);
-  const senderBody = (await senderRes.json()) as {
-    data?: {
-      shop?: {
-        lalamoveSenderName?: { value: string } | null;
-        lalamoveSenderPhone?: { value: string } | null;
-        lalamoveSenderAddress?: { value: string } | null;
-      };
-    };
-  };
-  const senderShop = senderBody.data?.shop;
-  const lalamoveSender = senderShop?.lalamoveSenderAddress?.value
-    ? {
-        name: senderShop.lalamoveSenderName?.value ?? "",
-        phone: senderShop.lalamoveSenderPhone?.value ?? "",
-        address: senderShop.lalamoveSenderAddress?.value ?? "",
-      }
-    : null;
-
   return Response.json(
     {
       orders:
@@ -347,7 +299,6 @@ export const loader = async ({
       searchParam,
       timeWindowParam,
       tabParam,
-      lalamoveSender,
     } satisfies LoaderData,
     { headers: { "Cache-Control": "no-store" } },
   );
@@ -479,28 +430,6 @@ const ORDER_UPDATE_METAFIELD_MUTATION = `
   }
 `;
 
-const SET_ORDER_LALAMOVE_METAFIELDS_MUTATION = `
-  mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
-    metafieldsSet(metafields: $metafields) {
-      metafields { key namespace value }
-      userErrors { field message }
-    }
-  }
-`;
-
-const GET_SHOP_LALAMOVE_SETTINGS_QUERY = `
-  query GetShopLalamoveSettings {
-    shop {
-      lalamoveServiceType: metafield(namespace: "lalamove", key: "service_type") { value }
-      lalamoveSenderName: metafield(namespace: "lalamove", key: "sender_name") { value }
-      lalamoveSenderPhone: metafield(namespace: "lalamove", key: "sender_phone") { value }
-      lalamoveSenderAddress: metafield(namespace: "lalamove", key: "sender_address") { value }
-      lalamoveSenderLat: metafield(namespace: "lalamove", key: "sender_lat") { value }
-      lalamoveSenderLng: metafield(namespace: "lalamove", key: "sender_lng") { value }
-    }
-  }
-`;
-
 // Rewrite raw Shopify access-denied / scope errors into something the merchant can act on.
 function scopeHint(msg: string): string {
   if (
@@ -616,42 +545,6 @@ interface BulkActionResponse {
   summary: { ok: number; failed: number };
 }
 
-async function setLalamoveMetafields(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-  orderId: string,
-  fields: {
-    order_id?: string;
-    status?: string;
-    share_link?: string;
-    driver_name?: string;
-    driver_phone?: string;
-  },
-) {
-  const metafields = Object.entries(fields).map(([key, value]) => ({
-    ownerId: orderId,
-    namespace: "lalamove",
-    key,
-    value: value ?? "",
-    type: "single_line_text_field",
-  }));
-  await admin.graphql(SET_ORDER_LALAMOVE_METAFIELDS_MUTATION, {
-    variables: { metafields },
-  });
-}
-
-// ─── Lalamove constants ───────────────────────────────────────────────────────
-
-const VALID_SPECIAL_REQUESTS = new Set([
-  "PURCHASE_SERVICE_1",
-  "PURCHASE_SERVICE_2",
-  "PURCHASE_SERVICE_3",
-  "PURCHASE_SERVICE_4",
-  "THERMAL_BAG_1",
-  "CASH_ON_DELIVERY",
-  "CASH_ON_DELIVERY_AUTODEDUCT",
-  "QUEUEING_SERVICE",
-]);
-
 // ─── Action handler ───────────────────────────────────────────────────────────
 
 export const action = async ({
@@ -659,7 +552,7 @@ export const action = async ({
 }: {
   request: Request;
 }): Promise<Response> => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   if (request.method.toUpperCase() !== "POST") {
     return Response.json(
       {
@@ -692,257 +585,6 @@ export const action = async ({
     results: [],
     summary: { ok: 0, failed: 0 },
   };
-
-  if (opRaw === "lalamoveGetQuote") {
-    const deliveryAddress = String(fd.get("deliveryAddress") ?? "");
-    const deliveryDate = String(fd.get("deliveryDate") ?? "");
-    const timeSlot = String(fd.get("timeSlot") ?? "");
-    const specialRequestsRaw = String(fd.get("specialRequests") ?? "");
-    const specialRequests = specialRequestsRaw
-      ? specialRequestsRaw.split(",").filter((v) => VALID_SPECIAL_REQUESTS.has(v))
-      : [];
-
-    const settingsRes = await admin.graphql(GET_SHOP_LALAMOVE_SETTINGS_QUERY);
-    const settingsBody = (await settingsRes.json()) as {
-      data?: {
-        shop?: {
-          lalamoveServiceType?: { value: string } | null;
-          lalamoveSenderLat?: { value: string } | null;
-          lalamoveSenderLng?: { value: string } | null;
-          lalamoveSenderAddress?: { value: string } | null;
-        };
-      };
-    };
-    const shopSettings = settingsBody.data?.shop;
-    const serviceType = shopSettings?.lalamoveServiceType?.value ?? "MOTORCYCLE";
-    const senderLat = (shopSettings?.lalamoveSenderLat?.value ?? "").trim();
-    const senderLng = (shopSettings?.lalamoveSenderLng?.value ?? "").trim();
-    const senderAddress = shopSettings?.lalamoveSenderAddress?.value ?? "";
-
-    if (!senderLat || !senderLng) {
-      return Response.json(
-        { ok: false, error: "Pickup coordinates not configured. Go to Schedule Rules → Lalamove Settings." },
-        { status: 400 },
-      );
-    }
-
-    const { getQuotation, geocodeAddress, buildScheduleAt, sanitizeCoordinate } =
-      await import("../lib/lalamove.server");
-
-    let senderLatSafe: string;
-    let senderLngSafe: string;
-    try {
-      senderLatSafe = sanitizeCoordinate(senderLat, "latitude");
-      senderLngSafe = sanitizeCoordinate(senderLng, "longitude");
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Invalid pickup coordinates." },
-        { status: 400 },
-      );
-    }
-
-    let deliveryCoords: { lat: string; lng: string };
-    try {
-      deliveryCoords = await geocodeAddress(deliveryAddress);
-    } catch {
-      return Response.json(
-        { ok: false, error: "Could not locate the delivery address. Please verify the customer's address." },
-        { status: 400 },
-      );
-    }
-
-    try {
-      const quotation = await getQuotation({
-        serviceType,
-        language: "en_PH",
-        scheduleAt: buildScheduleAt(deliveryDate, timeSlot),
-        specialRequests: specialRequests.length ? specialRequests : undefined,
-        stops: [
-          { coordinates: { lat: senderLatSafe, lng: senderLngSafe }, address: senderAddress },
-          { coordinates: deliveryCoords, address: deliveryAddress },
-        ],
-      });
-      return Response.json({
-        ok: true,
-        quotationId: quotation.quotationId,
-        price: `${quotation.priceBreakdown.currency} ${quotation.priceBreakdown.total}`,
-        expiresAt: quotation.expiresAt,
-      });
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Quotation failed. Please try again." },
-        { status: 400 },
-      );
-    }
-  }
-
-  if (opRaw === "lalamoveDispatch") {
-    const orderId = String(fd.get("orderId") ?? "");
-    const deliveryDate = String(fd.get("deliveryDate") ?? "");
-    const timeSlot = String(fd.get("timeSlot") ?? "");
-    const customerName = String(fd.get("customerName") ?? "");
-    const customerPhone = String(fd.get("customerPhone") ?? "");
-    const deliveryAddress = String(fd.get("deliveryAddress") ?? "");
-    const notesToDriver = String(fd.get("notesToDriver") ?? "");
-    const specialRequestsRaw = String(fd.get("specialRequests") ?? "");
-    const specialRequests = specialRequestsRaw
-      ? specialRequestsRaw.split(",").filter((v) => VALID_SPECIAL_REQUESTS.has(v))
-      : [];
-    const shopDomain = session.shop;
-
-    const settingsRes = await admin.graphql(GET_SHOP_LALAMOVE_SETTINGS_QUERY);
-    const settingsBody = (await settingsRes.json()) as {
-      data?: {
-        shop?: {
-          lalamoveServiceType?: { value: string } | null;
-          lalamoveSenderName?: { value: string } | null;
-          lalamoveSenderPhone?: { value: string } | null;
-          lalamoveSenderAddress?: { value: string } | null;
-          lalamoveSenderLat?: { value: string } | null;
-          lalamoveSenderLng?: { value: string } | null;
-        };
-      };
-    };
-    const shopSettings = settingsBody.data?.shop;
-    const serviceType = shopSettings?.lalamoveServiceType?.value ?? "MOTORCYCLE";
-    const senderName = shopSettings?.lalamoveSenderName?.value ?? "";
-    const senderPhone = shopSettings?.lalamoveSenderPhone?.value ?? "";
-    const senderAddress = shopSettings?.lalamoveSenderAddress?.value ?? "";
-    const senderLat = (shopSettings?.lalamoveSenderLat?.value ?? "").trim();
-    const senderLng = (shopSettings?.lalamoveSenderLng?.value ?? "").trim();
-
-    if (!senderLat || !senderLng) {
-      return Response.json(
-        { ok: false, error: "Lalamove pickup coordinates not configured. Go to Schedule Rules → Lalamove Settings." },
-        { status: 400 },
-      );
-    }
-
-    const { getQuotation, placeOrder, geocodeAddress, buildScheduleAt, sanitizeCoordinate } =
-      await import("../lib/lalamove.server");
-
-    let senderLatSafe: string;
-    let senderLngSafe: string;
-    try {
-      senderLatSafe = sanitizeCoordinate(senderLat, "latitude");
-      senderLngSafe = sanitizeCoordinate(senderLng, "longitude");
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Invalid pickup coordinates." },
-        { status: 400 },
-      );
-    }
-
-    let deliveryCoords: { lat: string; lng: string };
-    try {
-      deliveryCoords = await geocodeAddress(deliveryAddress);
-    } catch {
-      return Response.json(
-        { ok: false, error: "Could not locate the delivery address. Please verify the customer's address." },
-        { status: 400 },
-      );
-    }
-
-    let quotation;
-    try {
-      quotation = await getQuotation({
-        serviceType,
-        language: "en_PH",
-        scheduleAt: buildScheduleAt(deliveryDate, timeSlot),
-        specialRequests: specialRequests.length ? specialRequests : undefined,
-        stops: [
-          { coordinates: { lat: senderLatSafe, lng: senderLngSafe }, address: senderAddress },
-          { coordinates: deliveryCoords, address: deliveryAddress },
-        ],
-      });
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Quotation failed. Please try again." },
-        { status: 400 },
-      );
-    }
-
-    const senderStop = quotation.stops[0];
-    const recipientStop = quotation.stops[1];
-
-    let lalamoveOrder;
-    try {
-      lalamoveOrder = await placeOrder({
-        quotationId: quotation.quotationId,
-        sender: { stopId: senderStop.stopId, name: senderName, phone: senderPhone },
-        recipients: [{
-          stopId: recipientStop.stopId,
-          name: customerName,
-          phone: customerPhone,
-          remarks: notesToDriver || undefined,
-        }],
-        metadata: { shopifyOrderId: orderId, shop: shopDomain },
-      });
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Order placement failed. Please try again." },
-        { status: 400 },
-      );
-    }
-
-    await setLalamoveMetafields(admin, orderId, {
-      order_id: lalamoveOrder.orderId,
-      status: lalamoveOrder.status,
-      share_link: lalamoveOrder.shareLink,
-    });
-
-    return Response.json({
-      ok: true,
-      lalamoveOrderId: lalamoveOrder.orderId,
-      lalamoveStatus: lalamoveOrder.status,
-      lalamoveShareLink: lalamoveOrder.shareLink,
-      estimatedPrice: `${lalamoveOrder.priceBreakdown.currency} ${lalamoveOrder.priceBreakdown.total}`,
-    });
-  }
-
-  if (opRaw === "lalamoveCancel") {
-    const orderId = String(fd.get("orderId") ?? "");
-    const lalamoveOrderId = String(fd.get("lalamoveOrderId") ?? "");
-    if (!lalamoveOrderId) {
-      return Response.json(
-        { ok: false, error: "No Lalamove order to cancel." },
-        { status: 400 },
-      );
-    }
-    const { cancelLalamoveOrder } = await import("../lib/lalamove.server");
-    try {
-      await cancelLalamoveOrder(lalamoveOrderId);
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Cancel failed. Please try again." },
-        { status: 400 },
-      );
-    }
-    await setLalamoveMetafields(admin, orderId, { status: "CANCELED" });
-    return Response.json({ ok: true });
-  }
-
-  if (opRaw === "lalamovePriorityFee") {
-    const lalamoveOrderId = String(fd.get("lalamoveOrderId") ?? "");
-    const priorityFee = String(fd.get("priorityFee") ?? "");
-    const currency = String(fd.get("currency") ?? "PHP");
-    if (!lalamoveOrderId || !priorityFee) {
-      return Response.json(
-        { ok: false, error: "Missing order ID or fee amount." },
-        { status: 400 },
-      );
-    }
-    const { addPriorityFee } = await import("../lib/lalamove.server");
-    try {
-      await addPriorityFee(lalamoveOrderId, priorityFee, currency);
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Priority fee failed. Please try again." },
-        { status: 400 },
-      );
-    }
-    return Response.json({ ok: true });
-  }
 
   if (!op) {
     return Response.json(
@@ -1647,43 +1289,6 @@ function Extension() {
     };
   }, [orders, dateRefs]);
 
-  // ── Export for Lalamove ──────────────────────────────────────────────────────
-
-  const exportForLalamove = (): void => {
-    const selectedOrders = displayedOrders.filter((o) => selectedIds.has(o.id));
-    const headers = [
-      '"1. Address"',
-      '"2. Name"',
-      '"3. Phone"',
-      '"4. Block/floor"',
-    ];
-    const rows = selectedOrders.map((order) => {
-      const addr = order.shippingAddress;
-      const address = addr?.address1 || "";
-      const name = getCustomerName(order);
-      const phone = getOrderPhone(order);
-      const blockFloor = [addr?.address2, addr?.city]
-        .filter(Boolean)
-        .join(", ");
-      return [
-        `"${address.replace(/"/g, '""')}"`,
-        `"${name.replace(/"/g, '""')}"`,
-        `"${phone.replace(/"/g, '""')}"`,
-        `"${blockFloor.replace(/"/g, '""')}"`,
-      ].join(",");
-    });
-    const csv = [headers.join(","), ...rows].join("\n");
-    const today = toLocalISODate(new Date());
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `lalamove-${today}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
 
   // ── Bulk actions (archive / unarchive / cancel / tags) ─────────────────────
 
@@ -2434,13 +2039,6 @@ function Extension() {
                 {isSubmitting ? "Working…" : "Bulk actions"}
               </s-button>
               <s-button
-                variant="secondary"
-                onClick={exportForLalamove}
-                disabled={isSubmitting}
-              >
-                Export for Lalamove
-              </s-button>
-              <s-button
                 variant="tertiary"
                 onClick={handleClearSelection}
                 disabled={isSubmitting}
@@ -2905,7 +2503,6 @@ function Extension() {
         <Suspense fallback={null}>
           <OrderDrawer
             order={selectedOrder}
-            lalamoveSender={loaderData.lalamoveSender}
             onClose={handleCloseDrawer}
           />
         </Suspense>

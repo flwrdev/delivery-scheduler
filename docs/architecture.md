@@ -1,6 +1,6 @@
 # Delivery Scheduler — Architecture (only what exists)
 
-**Last full re-verification:** 2026-06-07
+**Last full re-verification:** 2026-07-04
 **Canonical truth:** this doc. Any conflict with `../../docs/delivery-operations-architecture.md` (older, drifted) is resolved in favor of this file — see [§ Superseded documents](#superseded-documents).
 **Workflow:** before editing any file under `delivery-scheduler/app/`, `extensions/`, `prisma/`, or `shopify.app.toml`, read this doc first; after the edit, update the relevant section + add a new verification log entry dated today. The project skill `delivery-scheduler-architecture` (in `.claude/skills/`) enforces this loop for future Claude Code agents.
 
@@ -21,6 +21,8 @@ Lahat ng nodes/edges sa baba ay may corresponding file or config.
 | 2026-06-07 | Order drawer UI redesign (no write-path / contract change): restyled the `/app/orders` Lalamove dispatch modal to a Lalamove-style panel (Route pickup/drop-off card, Additional Services with fees, Estimated Invoice Breakdown, "Dispatch Lalamove Driver" CTA); removed the Customer + Sender Info display sections from the drawer; added "Extra waiting time" service mapped to the existing `QUEUEING_SERVICE` enum (already whitelisted — no new special-request value). `app/routes/app.orders.tsx` loader gained a **read-only** `shop` metafield query (`lalamove.sender_name/phone/address`) to render the pickup card; no new mutation, metafield write, tag, or webhook. | `npm test` 23/23 green; `npm run typecheck` clean. Confirmed `VALID_SPECIAL_REQUESTS` already contained `QUEUEING_SERVICE` (no whitelist change). Verified no `metafieldsSet`/`tagsAdd`/`orderUpdate` added — §2 write-paths table unchanged. New loader query is a read against `shop` metafields only. |
 | 2026-06-16 | Added `GET /apps/schedule-rules/products` App Proxy route (new file: `app/routes/apps.schedule-rules.products.ts`) — **read-only** collection product pagination endpoint. Accepts `collection` (handle), `cursor` (GraphQL endCursor), `limit` (default 8, max 24) query params. Calls Shopify Admin GraphQL `collection.products(first, after)` and returns `{ products, nextCursor, hasNextPage }`. No Postgres writes; no order/metafield/tag mutations; no new access scopes required (uses existing `write_products` scope which covers reads). Theme side: added Load More button + `data-next-cursor`/`data-has-next-page` attributes in `Dawn-theme/sections/main-collection-product-grid.liquid`; added `Dawn-theme/assets/collection-load-more.js` (vanilla JS, no framework, fetches via App Proxy, appends `<li>` cards to existing `#product-grid`). §2 write-paths table unchanged. | New route confirmed read-only: only Admin GraphQL `query CollectionProducts` — no mutations, no `metafieldsSet`, no tag writes. `authenticate.public.appProxy` used (same as existing `apps.schedule-rules.ts`). Proxy coverage: existing `[app_proxy] url = ".../apps/schedule-rules"` already forwards all sub-paths including `/products`. |
 | 2026-07-02 | `apps.schedule-rules.products.ts` reworked to remove its session-storage (Neon/Prisma) dependency, fixing a double cold-start (Cloud Run scale-to-zero + Neon Free auto-suspend both waking on first hit). This route now: (1) verifies the App Proxy `signature` manually via new `app/lib/verify-app-proxy.server.ts` (`verifyAppProxySignature` — HMAC-SHA256 over sorted `key=value` query params excluding `signature`, keyed with `SHOPIFY_API_SECRET`, plus a 5-minute timestamp freshness check) instead of calling `authenticate.public.appProxy` (which always resolves an offline session from Prisma/Neon per Shopify's own docs, even though this route never needed a merchant session); (2) calls the **Storefront API** directly via `fetch` with a new private access token (`SHOPIFY_STOREFRONT_ACCESS_TOKEN`, manual one-time setup — see `docs/cloud-run-neon.md` §6) instead of the Admin API. Response contract (`{ products, nextCursor, hasNextPage }` and each product's shape) is unchanged — `assets/global.js`'s `collection-show-more` custom element in the separate theme repo needs no changes. Filtering logic simplified: the old manual `isBuyable()` check (`status === "ACTIVE"` + `tracksInventory`/`totalInventory`) was removed because the Storefront API only ever returns products published + purchasable on the calling sales channel — `availableForSale` is now read directly off the Storefront `Product` object instead of being derived. §2 write-paths table unchanged (still read-only, still no order/metafield/tag mutation). | `npm run typecheck` clean. Confirmed via Shopify dev-docs MCP: app proxy signature algorithm (sort remaining query keys, concatenate `key=value` with no separator, HMAC-SHA256 hex digest, shared secret = same `SHOPIFY_API_SECRET` used elsewhere in `app/shopify.server.js`) against `https://shopify.dev/docs/apps/build/online-store/app-proxies/authenticate-app-proxies`; Storefront `Product.availableForSale` (direct Boolean field) and `Product.compareAtPriceRange.minVariantPrice` (same `ProductPriceRange` type as `priceRange`, unlike Admin's separate `ProductCompareAtPriceRange.minVariantCompareAtPrice`) confirmed via `validate_graphql_codeblocks` against the Storefront 2026-04 schema. No fallback to the Admin API path — if `SHOPIFY_STOREFRONT_ACCESS_TOKEN` is unset the route returns `502`. `SHOPIFY_STOREFRONT_ACCESS_TOKEN` is configured in both local `.env` and the Cloud Run secret. Added `test/verify-app-proxy.server.test.ts` (8 tests: valid signature, multi-value params, wrong secret, tampered param, missing signature, non-hex signature, stale timestamp, future timestamp) — `npm test` 31/31 green. |
+
+| 2026-07-04 | **Custom Lalamove integration fully removed** — the store now books couriers via the **official Shopify Lalamove app**, so this app's bespoke dispatch/tracking/quote code was deleted. Removed wholesale: `app/lib/lalamove.server.ts`, `app/routes/webhooks.lalamove.ts`, `app/routes/webhooks.orders.cancelled.ts`, `test/lalamove.server.test.ts`, `test/order-drawer-flow.test.tsx`, and the three `docs/superpowers/**` Lalamove plan/spec docs. Surgically excised Lalamove code from `app.orders.tsx` (GraphQL `lalamove.*` aliases, sender loader query, dispatch/quote/cancel/priority-fee action branches, `setLalamoveMetafields`, `Export for Lalamove` CSV, `<OrderDrawer>` sender prop), `OrderDrawer.tsx` (dispatch UI + `LalamoveStatusLabel` + all fetchers/state/effects), `order-utils.ts` (`Order` Lalamove fields + `getLalamove*`/`isLalamoveCOD` helpers), `app.schedule-rules/route.tsx` (Lalamove Settings query/mutation/action/UI + `registerLalamoveWebhook`), and `orders-dashboard.css` (the `Lalamove UX Polish` block). Config: removed the `orders/cancelled` webhook subscription from `shopify.app.toml` and the Lalamove/Google-Maps secrets from `.env`. **Preserved untouched:** all delivery scheduling/rescheduling/capacity/validation, `webhooks.orders.create.ts`, the manual `markFulfilled` bulk action (its own `fulfillmentCreate`, distinct from the removed callback one), all access scopes, all 5 extensions, and `app.reschedule_*` metafield defs. Removed §"Lalamove callback endpoint", §"Lalamove dispatch write paths", the `MF_lalamove_*` erDiagram rows, and the Lalamove diagram nodes/edges below. | `npm run typecheck` clean, `npm run lint` clean, `npm test` green (Lalamove suites deleted). `grep -ri lalamove app/ extensions/ shopify.app.toml` returns zero hits. Access scopes deliberately left intact — `read/write_fulfillments` + merchant-managed-fulfillment scopes are used by the manual `markFulfilled` action, not Lalamove-only; removing them would force merchant re-consent. ⚠️ Leaked prod Lalamove + Google Maps keys previously committed to `.env` were deleted from the file but MUST be rotated/revoked at their providers. |
 
 Update this log whenever architecture behavior, write paths, or extension wiring change.
 
@@ -82,17 +84,12 @@ Boilerplate scaffold para sa OAuth at non-embedded login. Hindi business logic.
 | Topic               | File                                                                           |
 | ------------------- | ------------------------------------------------------------------------------ |
 | `orders/create`     | [webhooks.orders.create.ts](../app/routes/webhooks.orders.create.ts)           |
-| `orders/cancelled`  | [webhooks.orders.cancelled.ts](../app/routes/webhooks.orders.cancelled.ts)     |
 | `app/uninstalled`   | [webhooks.app.uninstalled.jsx](../app/routes/webhooks.app.uninstalled.jsx)     |
 | `app/scopes_update` | [webhooks.app.scopes_update.jsx](../app/routes/webhooks.app.scopes_update.jsx) |
 
 API version sa `shopify.app.toml` is `2026-04`.
 
-### Lalamove callback endpoint (not a Shopify webhook)
-
-| Path                   | File                                                                     | Notes                                                                                                               |
-| ---------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `POST /webhooks/lalamove` | [webhooks.lalamove.ts](../app/routes/webhooks.lalamove.ts)          | Receives event payloads directly from Lalamove (not registered in `shopify.app.toml`). Handles `DRIVER_ASSIGNED`, `ORDER_STATUS_CHANGED`, `POD_STATUS_CHANGED`. **Write path** — sets `lalamove.*` metafields on the order and calls `fulfillmentCreate` on `DRIVER_ASSIGNED`. |
+> **Courier dispatch note:** Last-mile courier booking is handled by the **official Shopify Lalamove app**, not this app. The former custom Lalamove callback endpoint (`webhooks.lalamove.ts`) and the `orders/cancelled` webhook (which existed only to cancel a Lalamove order) were removed 2026-07-04 — see the verification log.
 
 ### Services / lib
 
@@ -101,7 +98,6 @@ API version sa `shopify.app.toml` is `2026-04`.
 | Validation engine                 | [app/lib/delivery-availability.ts](../app/lib/delivery-availability.ts)                                               |
 | Shared constants (reschedule tag) | [app/lib/constants.ts](../app/lib/constants.ts) — single source of `RESCHEDULED_ORDER_TAG`                            |
 | Embedded URL path builder         | [app/lib/embedded-route.js](../app/lib/embedded-route.js)                                                             |
-| Lalamove API client               | [app/lib/lalamove.server.ts](../app/lib/lalamove.server.ts)                                                           |
 | Order utility helpers             | [app/lib/order-utils.ts](../app/lib/order-utils.ts)                                                                   |
 | Rules loader + booked-count merge | [app/services/schedule-rules.server.ts](../app/services/schedule-rules.server.ts)                                     |
 | Order metafield + tag sync        | [app/services/order-delivery-metafields.server.ts](../app/services/order-delivery-metafields.server.ts)               |
@@ -157,8 +153,6 @@ flowchart TB
         CA_OD["POST /public/customer-account/order-delivery"]:::be
         CA_RE["POST /public/customer-account/reschedule<br/>(active customer write path)"]:::be
         WH_OC["POST /webhooks/orders/create<br/>(order-create delivery sync)"]:::be
-        WH_OCA["POST /webhooks/orders/cancelled<br/>(cancels Lalamove order)"]:::be
-        WH_LAL["POST /webhooks/lalamove<br/>(Lalamove callback — writes lalamove.* metafields,<br/>fulfillmentCreate on DRIVER_ASSIGNED)"]:::be
         ENG["lib/delivery-availability<br/>validateDeliverySelection,<br/>cutoff/prep/disabled/capacity"]:::be
         SR["services/schedule-rules.server<br/>getScheduleRules(+BookedCounts)"]:::be
         ODM["services/order-delivery-metafields.server<br/>syncOrderDeliveryMetafields,<br/>syncOrderDeliveryScheduleTag"]:::be
@@ -170,7 +164,7 @@ flowchart TB
 
     subgraph SHOP["Shopify Platform — Admin GraphQL (2026-04)"]
         SADM["Admin GraphQL API"]:::sh
-        SMETA["Order metafields:<br/>custom.date, custom.time_slot,<br/>$app.reschedule_status,<br/>$app.reschedule_requested_at,<br/>delivery.reschedule_history,<br/>delivery.* / sidekick.* (legacy mirrors),<br/>lalamove.status, lalamove.driver_name,<br/>lalamove.driver_phone, lalamove.share_link,<br/>lalamove.order_id"]:::sh
+        SMETA["Order metafields:<br/>custom.date, custom.time_slot,<br/>$app.reschedule_status,<br/>$app.reschedule_requested_at,<br/>delivery.reschedule_history,<br/>delivery.* / sidekick.* (legacy mirrors)"]:::sh
         STAGS["Order tags: YYYY-MM-DD, slot label, 'resched'"]:::sh
         SCATTR["Order customAttributes: 'Delivery Date', 'Delivery Time'"]:::sh
     end
@@ -207,10 +201,6 @@ flowchart TB
     CA_RE --> SADM
     WH_OC --> ENG
     WH_OC --> ODM
-
-    %% Lalamove callback writes
-    WH_LAL --> SADM
-    WH_OCA --> SADM
 
     %% Services → data
     SR --> T_CFG
@@ -263,18 +253,9 @@ None of these mutations are part of the delivery sync contract — none write `c
 
 However, because the tag input is freeform, a merchant *can* manually add or remove a string that matches `DELIVERY_SCHEDULE_TAG_PATTERN` (e.g. `2026-05-23` or `9AM-12PM`). The system does not validate or enforce this — if it happens, downstream readers (`order-delivery-block`, scheduler queries) will see the manually-typed tag the same way they see auto-synced delivery tags. Treat this as a manual-override side channel, not a supported delivery write path.
 
-### Lalamove dispatch write paths
+### Courier dispatch write paths — none (removed 2026-07-04)
 
-Two routes write to the `lalamove.*` metafield namespace on Shopify orders. These are **not** delivery schedule writes — they record last-mile dispatch state.
-
-| Trigger / route | File | Writes |
-| --- | --- | --- |
-| Lalamove callback (`DRIVER_ASSIGNED`) | [webhooks.lalamove.ts](../app/routes/webhooks.lalamove.ts) | `lalamove.status = "ON_GOING"`, `lalamove.driver_name`, `lalamove.driver_phone` (via `metafieldsSet`); `fulfillmentCreate` with tracking URL from `lalamove.share_link` metafield |
-| Lalamove callback (`ORDER_STATUS_CHANGED`) | [webhooks.lalamove.ts](../app/routes/webhooks.lalamove.ts) | `lalamove.status = <new status>` (via `metafieldsSet`) |
-| Lalamove callback (`POD_STATUS_CHANGED`) | [webhooks.lalamove.ts](../app/routes/webhooks.lalamove.ts) | `lalamove.status = "COMPLETED"` (via `metafieldsSet`) |
-| `orders/cancelled` Shopify webhook | [webhooks.orders.cancelled.ts](../app/routes/webhooks.orders.cancelled.ts) | `lalamove.status = "CANCELED"` (via `metafieldsSet`); also calls `cancelLalamoveOrder()` in Lalamove API if status is `ASSIGNING_DRIVER` or `ON_GOING` |
-
-The `lalamove.order_id` and `lalamove.share_link` metafields are written by the dispatch action in `app.orders.tsx` (not listed above). The Lalamove callback reads these to look up the Lalamove order and tracking URL.
+This app no longer writes any `lalamove.*` metafields or performs any last-mile dispatch. Courier booking is handled entirely by the **official Shopify Lalamove app**. The former custom integration (a `webhooks.lalamove.ts` callback that wrote `lalamove.status`/`lalamove.driver_*` + `fulfillmentCreate`, an `orders/cancelled` webhook that cancelled the Lalamove order, and an `app.orders.tsx` dispatch action that wrote `lalamove.order_id`/`lalamove.share_link`) was deleted — see the 2026-07-04 verification-log entry. Do not reintroduce a `lalamove.*` write surface here.
 
 ---
 
@@ -408,11 +389,6 @@ erDiagram
     Order ||--o| MF_delivery_resched_hist   : "delivery.reschedule_history (JSON-like audit log)"
     Order ||--o{ OrderTag                   : "YYYY-MM-DD, slot label, 'resched'"
     Order ||--o{ OrderCustomAttribute       : "'Delivery Date', 'Delivery Time'"
-    Order ||--o| MF_lalamove_status         : "lalamove.status (single_line_text_field)"
-    Order ||--o| MF_lalamove_driver_name    : "lalamove.driver_name (single_line_text_field)"
-    Order ||--o| MF_lalamove_driver_phone   : "lalamove.driver_phone (single_line_text_field)"
-    Order ||--o| MF_lalamove_share_link     : "lalamove.share_link (single_line_text_field)"
-    Order ||--o| MF_lalamove_order_id       : "lalamove.order_id (single_line_text_field)"
     Order }o--|| Customer                   : "owns"
 ```
 
