@@ -15,49 +15,6 @@ import {
 import { authenticate } from "../../shopify.server";
 import styles from "./styles.module.css";
 
-// ─── Lalamove Settings ────────────────────────────────────────────────────────
-
-const GET_LALAMOVE_SETTINGS_QUERY = `
-  query GetLalamoveSettings {
-    shop {
-      id
-      lalamoveServiceType: metafield(namespace: "lalamove", key: "service_type") { value }
-      lalamoveSenderName: metafield(namespace: "lalamove", key: "sender_name") { value }
-      lalamoveSenderPhone: metafield(namespace: "lalamove", key: "sender_phone") { value }
-      lalamoveSenderAddress: metafield(namespace: "lalamove", key: "sender_address") { value }
-      lalamoveSenderLat: metafield(namespace: "lalamove", key: "sender_lat") { value }
-      lalamoveSenderLng: metafield(namespace: "lalamove", key: "sender_lng") { value }
-    }
-  }
-`;
-
-const SET_LALAMOVE_SETTINGS_MUTATION = `
-  mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
-    metafieldsSet(metafields: $metafields) {
-      metafields { key namespace value }
-      userErrors { field message }
-    }
-  }
-`;
-
-interface LalamoveSettings {
-  serviceType: string;
-  senderName: string;
-  senderPhone: string;
-  senderAddress: string;
-  senderLat: string;
-  senderLng: string;
-}
-
-const DEFAULT_LALAMOVE_SETTINGS: LalamoveSettings = {
-  serviceType: "MOTORCYCLE",
-  senderName: "",
-  senderPhone: "",
-  senderAddress: "",
-  senderLat: "",
-  senderLng: "",
-};
-
 type ScheduleRulesActionData = DeliveryScheduleRules | { error: string };
 type JsonValue =
   | string
@@ -432,32 +389,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shop = getSessionShop(session);
   const scheduleRules = await getScheduleRulesWithBookedCounts(shop, admin);
 
-  const lalamoveRes = await admin.graphql(GET_LALAMOVE_SETTINGS_QUERY);
-  const lalamoveBody = (await lalamoveRes.json()) as {
-    data?: {
-      shop?: {
-        id?: string;
-        lalamoveServiceType?: { value: string } | null;
-        lalamoveSenderName?: { value: string } | null;
-        lalamoveSenderPhone?: { value: string } | null;
-        lalamoveSenderAddress?: { value: string } | null;
-        lalamoveSenderLat?: { value: string } | null;
-        lalamoveSenderLng?: { value: string } | null;
-      };
-    };
-  };
-  const shopData = lalamoveBody.data?.shop;
-  const lalamoveSettings: LalamoveSettings = {
-    serviceType: shopData?.lalamoveServiceType?.value ?? "MOTORCYCLE",
-    senderName: shopData?.lalamoveSenderName?.value ?? "",
-    senderPhone: shopData?.lalamoveSenderPhone?.value ?? "",
-    senderAddress: shopData?.lalamoveSenderAddress?.value ?? "",
-    senderLat: shopData?.lalamoveSenderLat?.value ?? "",
-    senderLng: shopData?.lalamoveSenderLng?.value ?? "",
-  };
-
   return Response.json(
-    { rules: scheduleRules, lalamoveSettings },
+    { rules: scheduleRules },
     { headers: { "Cache-Control": "no-store" } },
   );
 };
@@ -469,70 +402,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const { admin, session } = await authenticate.admin(request);
   const shop = getSessionShop(session);
-
-  // Handle Lalamove settings save before parseRulesPayload consumes the body
-  const contentType = request.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    let peeked: unknown = null;
-    try {
-      peeked = await request.clone().json();
-    } catch {
-      // not JSON we can parse — fall through to normal handler
-    }
-    if (
-      peeked &&
-      typeof peeked === "object" &&
-      !Array.isArray(peeked) &&
-      (peeked as Record<string, unknown>)._action === "lalamoveSave"
-    ) {
-      const s = peeked as LalamoveSettings & { _action: string };
-
-      const shopGidRes = await admin.graphql(`query { shop { id } }`);
-      const shopGidBody = (await shopGidRes.json()) as {
-        data?: { shop?: { id: string } };
-      };
-      const shopGid = shopGidBody.data?.shop?.id;
-      if (!shopGid)
-        return Response.json({ error: "Could not get shop ID" }, { status: 500 });
-
-      const trimmedLat = (s.senderLat ?? "").trim();
-      const trimmedLng = (s.senderLng ?? "").trim();
-      const coordPattern = /^[+-]?(\d{1,3})(\.\d{1,15})?$/;
-      if ((trimmedLat || trimmedLng) && (!coordPattern.test(trimmedLat) || !coordPattern.test(trimmedLng))) {
-        return Response.json(
-          { error: "Sender latitude and longitude must be plain decimal numbers (e.g. 14.5995, 120.9842)" },
-          { status: 400 },
-        );
-      }
-
-      const metafields = [
-        { ownerId: shopGid, namespace: "lalamove", key: "service_type", value: s.serviceType ?? "MOTORCYCLE", type: "single_line_text_field" },
-        { ownerId: shopGid, namespace: "lalamove", key: "sender_name", value: s.senderName ?? "", type: "single_line_text_field" },
-        { ownerId: shopGid, namespace: "lalamove", key: "sender_phone", value: s.senderPhone ?? "", type: "single_line_text_field" },
-        { ownerId: shopGid, namespace: "lalamove", key: "sender_address", value: s.senderAddress ?? "", type: "single_line_text_field" },
-        { ownerId: shopGid, namespace: "lalamove", key: "sender_lat", value: trimmedLat, type: "single_line_text_field" },
-        { ownerId: shopGid, namespace: "lalamove", key: "sender_lng", value: trimmedLng, type: "single_line_text_field" },
-      ];
-
-      const saveRes = await admin.graphql(SET_LALAMOVE_SETTINGS_MUTATION, { variables: { metafields } });
-      const saveBody = (await saveRes.json()) as {
-        data?: { metafieldsSet?: { userErrors?: { message: string }[] } };
-      };
-      const errors = saveBody.data?.metafieldsSet?.userErrors ?? [];
-      if (errors.length > 0)
-        return Response.json({ error: errors[0].message }, { status: 400 });
-
-      try {
-        const { registerLalamoveWebhook } = await import("../../lib/lalamove.server");
-        const appUrl = process.env.SHOPIFY_APP_URL ?? "";
-        await registerLalamoveWebhook(`${appUrl}/webhooks/lalamove`);
-      } catch (e) {
-        console.warn("[lalamoveSave] webhook registration failed:", e);
-      }
-
-      return Response.json({ ok: true });
-    }
-  }
 
   const payload = await parseRulesPayload(request);
 
@@ -553,17 +422,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function ScheduleRulesPage() {
   const loaderData = useLoaderData() as {
     rules: DeliveryScheduleRules;
-    lalamoveSettings: LalamoveSettings;
   };
   const scheduleRules = loaderData.rules;
   const fetcher = useFetcher<ScheduleRulesActionData>();
-  const lalamoveFetcher = useFetcher<{ ok?: boolean; error?: string }>();
   const shopify = useAppBridge();
   const [formState, setFormState] = useState<ScheduleRulesFormState>(() =>
     toFormState(scheduleRules),
-  );
-  const [lalamoveForm, setLalamoveForm] = useState<LalamoveSettings>(
-    loaderData.lalamoveSettings ?? DEFAULT_LALAMOVE_SETTINGS,
   );
   const [clientError, setClientError] = useState<string | null>(null);
 
@@ -1331,95 +1195,6 @@ export default function ScheduleRulesPage() {
                   </s-stack>
                 </s-stack>
               </form>
-            </s-section>
-
-            {/* ── Lalamove Delivery Settings ──────────────────────────── */}
-            <s-section heading="Lalamove Delivery Settings">
-              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-                <div>
-                  <label style={{ display: "block", marginBottom: 4, fontWeight: 500 }}>Service Type</label>
-                  <input
-                    type="text"
-                    value={lalamoveForm.serviceType}
-                    onChange={(e) => setLalamoveForm((f) => ({ ...f, serviceType: e.target.value }))}
-                    placeholder="e.g. MOTORCYCLE"
-                    style={{ width: "100%", padding: "8px 12px", borderRadius: 6, border: "1px solid #c9cccf" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 4, fontWeight: 500 }}>Sender Name</label>
-                  <input
-                    type="text"
-                    value={lalamoveForm.senderName}
-                    onChange={(e) => setLalamoveForm((f) => ({ ...f, senderName: e.target.value }))}
-                    placeholder="Store name shown to driver"
-                    style={{ width: "100%", padding: "8px 12px", borderRadius: 6, border: "1px solid #c9cccf" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 4, fontWeight: 500 }}>Sender Phone</label>
-                  <input
-                    type="text"
-                    value={lalamoveForm.senderPhone}
-                    onChange={(e) => setLalamoveForm((f) => ({ ...f, senderPhone: e.target.value }))}
-                    placeholder="+639xxxxxxxxx"
-                    style={{ width: "100%", padding: "8px 12px", borderRadius: 6, border: "1px solid #c9cccf" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 4, fontWeight: 500 }}>Pickup Address</label>
-                  <input
-                    type="text"
-                    value={lalamoveForm.senderAddress}
-                    onChange={(e) => setLalamoveForm((f) => ({ ...f, senderAddress: e.target.value }))}
-                    placeholder="Full store address"
-                    style={{ width: "100%", padding: "8px 12px", borderRadius: 6, border: "1px solid #c9cccf" }}
-                  />
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 4, fontWeight: 500 }}>Pickup Latitude</label>
-                    <input
-                      type="text"
-                      value={lalamoveForm.senderLat}
-                      onChange={(e) => setLalamoveForm((f) => ({ ...f, senderLat: e.target.value }))}
-                      placeholder="14.5995"
-                      style={{ width: "100%", padding: "8px 12px", borderRadius: 6, border: "1px solid #c9cccf" }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ display: "block", marginBottom: 4, fontWeight: 500 }}>Pickup Longitude</label>
-                    <input
-                      type="text"
-                      value={lalamoveForm.senderLng}
-                      onChange={(e) => setLalamoveForm((f) => ({ ...f, senderLng: e.target.value }))}
-                      placeholder="120.9842"
-                      style={{ width: "100%", padding: "8px 12px", borderRadius: 6, border: "1px solid #c9cccf" }}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      lalamoveFetcher.submit(
-                        { _action: "lalamoveSave", ...lalamoveForm },
-                        { method: "post", encType: "application/json" },
-                      )
-                    }
-                    disabled={lalamoveFetcher.state !== "idle"}
-                    style={{ padding: "8px 20px", background: "#008060", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 500 }}
-                  >
-                    {lalamoveFetcher.state !== "idle" ? "Saving…" : "Save Lalamove Settings"}
-                  </button>
-                  {lalamoveFetcher.state === "idle" && lalamoveFetcher.data?.ok && (
-                    <span style={{ marginLeft: 12, color: "#008060", fontSize: 13 }}>Saved ✓</span>
-                  )}
-                  {lalamoveFetcher.state === "idle" && lalamoveFetcher.data?.error && (
-                    <span style={{ marginLeft: 12, color: "#d82c0d", fontSize: 13 }}>{lalamoveFetcher.data.error}</span>
-                  )}
-                </div>
-              </div>
             </s-section>
           </div>
         </div>
