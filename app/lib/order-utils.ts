@@ -104,6 +104,21 @@ export const TIME_SLOT_RE =
 
 // ─── Date / time parsing helpers ──────────────────────────────────────────────
 
+export function parseTimeWindowHour(tw: string): number {
+  if (!tw || tw === "—") return 999;
+  const colonMatch = tw.match(/^(\d{1,2}):(\d{2})/);
+  if (colonMatch) return parseInt(colonMatch[1], 10);
+  const ampmMatch = tw.match(/(\d{1,2})\s*(am|pm)/i);
+  if (ampmMatch) {
+    let h = parseInt(ampmMatch[1], 10);
+    const period = ampmMatch[2].toLowerCase();
+    if (period === "pm" && h !== 12) h += 12;
+    if (period === "am" && h === 12) h = 0;
+    return h;
+  }
+  return 999;
+}
+
 export function parseDateValue(raw: string | null | undefined): number {
   if (!raw) return Infinity;
   const parts = raw.split("-");
@@ -371,7 +386,51 @@ export function getAttr(attrs: CustomAttribute[], ...keys: string[]): string {
   return "—";
 }
 
+// ─── Filter helpers ──────────────────────────────────────────────────────────
+
+export function normalizeTimeSlot(value: string): string {
+  if (!value) return "";
+  let s = value.trim();
+  // Strip label prefixes — keep from first digit
+  const firstDigit = s.search(/\d/);
+  if (firstDigit > 0) s = s.slice(firstDigit);
+  // Normalize en-dash and em-dash to hyphen
+  s = s.replace(/[–—]/g, "-");
+  // Strip all whitespace
+  s = s.replace(/\s+/g, "");
+  // Strip :00 (e.g. "9:00AM" → "9AM", "12:00PM" → "12PM")
+  s = s.replace(/:00/g, "");
+  // Uppercase for consistent comparison
+  return s.toUpperCase();
+}
+
 // ─── Line item helpers ────────────────────────────────────────────────────────
+
+export function getSearchableOrderText(order: Order): string {
+  const fullName = [order.customer?.firstName, order.customer?.lastName]
+    .filter(Boolean)
+    .join(" ");
+  const city = getCity(order);
+  const tags = Array.isArray(order.tags) ? order.tags.join(" ") : "";
+  const itemNames = (order.lineItems?.edges || [])
+    .map((e) => e.node.name)
+    .filter(Boolean)
+    .join(" ");
+  return [
+    order.name,
+    order.customer?.firstName,
+    order.customer?.lastName,
+    fullName,
+    getOrderPhone(order),
+    order.customer?.defaultEmailAddress?.emailAddress,
+    city,
+    tags,
+    itemNames,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
 
 export function getFirstItemImageUrl(order: Order): string | undefined {
   const item = order.lineItems?.edges?.[0]?.node ?? null;
