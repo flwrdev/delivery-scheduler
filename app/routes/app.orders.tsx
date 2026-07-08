@@ -35,6 +35,10 @@ import {
   useNavigation,
 } from "react-router";
 import { useBulkActions } from "../hooks/useBulkActions";
+import { getSafeEventValue } from "../lib/get-safe-event-value";
+import { CancelModal } from "../components/orders/CancelModal";
+import { ArchiveModal } from "../components/orders/ArchiveModal";
+import { UnarchiveModal } from "../components/orders/UnarchiveModal";
 import { authenticate } from "../shopify.server";
 import stylesHref from "../styles/orders-dashboard.css?url";
 
@@ -167,19 +171,6 @@ const GET_ORDERS_QUERY = `
 `;
 
 // ─── Runtime safety helpers ───────────────────────────────────────────────────
-
-function getSafeEventValue(e: Event): string {
-  const t = (e.currentTarget ?? e.target) as
-    | (EventTarget & { value?: unknown })
-    | null;
-  const detailValue = (e as Event & { detail?: { value?: unknown } }).detail
-    ?.value;
-  return (
-    (typeof t?.value === "string" ? t.value : null) ??
-    (typeof detailValue === "string" ? detailValue : null) ??
-    ""
-  );
-}
 
 function isIsoDateParam(value: string | null): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -1379,148 +1370,33 @@ function Extension() {
       </s-menu>
 
       {/* Cancel orders confirmation modal */}
-      <s-modal
-        id="modal-cancel-orders"
-        heading="Cancel selected orders?"
-        size="small"
-      >
-        <s-box padding="base">
-          <s-stack direction="block" gap="base">
-            <s-banner tone="critical">
-              <s-paragraph>
-                {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
-                be cancelled. Cancellation is irreversible.
-              </s-paragraph>
-            </s-banner>
-            <s-select
-              id="cancel-reason"
-              label="Cancellation reason"
-              value={cancelReason}
-              onChange={(e: Event) => setCancelReason(getSafeEventValue(e))}
-            >
-              <s-option value="CUSTOMER">Customer request</s-option>
-              <s-option value="INVENTORY">Insufficient inventory</s-option>
-              <s-option value="DECLINED">Payment declined</s-option>
-              <s-option value="FRAUD">Fraud</s-option>
-              <s-option value="STAFF">Staff error</s-option>
-              <s-option value="OTHER">Other</s-option>
-            </s-select>
-            <s-checkbox
-              label="Restock inventory committed to these orders"
-              checked={cancelRestock}
-              onChange={(e: Event) =>
-                setCancelRestock((e.currentTarget as HTMLInputElement).checked)
-              }
-            />
-            <s-checkbox
-              label="Notify customers by email"
-              checked={cancelNotify}
-              onChange={(e: Event) =>
-                setCancelNotify((e.currentTarget as HTMLInputElement).checked)
-              }
-            />
-            <s-text-field
-              id="cancel-staff-note"
-              label="Staff note (optional, internal only — max 255 chars)"
-              value={cancelStaffNote}
-              onInput={(e: Event) => setCancelStaffNote(getSafeEventValue(e))}
-              onChange={(e: Event) => setCancelStaffNote(getSafeEventValue(e))}
-            />
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="secondary-actions"
-          commandFor="modal-cancel-orders"
-          command="--hide"
-          disabled={isSubmitting}
-        >
-          Keep them
-        </s-button>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          tone="critical"
-          disabled={isSubmitting || selectedCount === 0}
-          onClick={handleCancelConfirm}
-        >
-          {isSubmitting
-            ? "Cancelling…"
-            : `Cancel ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
-        </s-button>
-      </s-modal>
+      <CancelModal
+        selectedCount={selectedCount}
+        isSubmitting={isSubmitting}
+        cancelReason={cancelReason}
+        setCancelReason={setCancelReason}
+        cancelRestock={cancelRestock}
+        setCancelRestock={setCancelRestock}
+        cancelNotify={cancelNotify}
+        setCancelNotify={setCancelNotify}
+        cancelStaffNote={cancelStaffNote}
+        setCancelStaffNote={setCancelStaffNote}
+        onConfirm={handleCancelConfirm}
+      />
 
       {/* Archive orders confirmation modal */}
-      <s-modal
-        id="modal-archive-orders"
-        heading="Archive selected orders?"
-        size="small"
-      >
-        <s-box padding="base">
-          <s-stack direction="block" gap="base">
-            <s-banner tone="warning">
-              <s-paragraph>
-                {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
-                be archived and hidden from the main orders view. You can
-                unarchive them later.
-              </s-paragraph>
-            </s-banner>
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="secondary-actions"
-          commandFor="modal-archive-orders"
-          command="--hide"
-          disabled={isSubmitting}
-        >
-          Cancel
-        </s-button>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          disabled={isSubmitting || selectedCount === 0}
-          onClick={handleArchiveConfirm}
-        >
-          {isSubmitting
-            ? "Archiving…"
-            : `Archive ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
-        </s-button>
-      </s-modal>
+      <ArchiveModal
+        selectedCount={selectedCount}
+        isSubmitting={isSubmitting}
+        onConfirm={handleArchiveConfirm}
+      />
 
       {/* Unarchive orders confirmation modal */}
-      <s-modal
-        id="modal-unarchive-orders"
-        heading="Unarchive selected orders?"
-        size="small"
-      >
-        <s-box padding="base">
-          <s-stack direction="block" gap="base">
-            <s-banner tone="info">
-              <s-paragraph>
-                {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
-                be unarchived and returned to the main orders view.
-              </s-paragraph>
-            </s-banner>
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="secondary-actions"
-          commandFor="modal-unarchive-orders"
-          command="--hide"
-          disabled={isSubmitting}
-        >
-          Cancel
-        </s-button>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          disabled={isSubmitting || selectedCount === 0}
-          onClick={handleUnarchiveConfirm}
-        >
-          {isSubmitting
-            ? "Unarchiving…"
-            : `Unarchive ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
-        </s-button>
-      </s-modal>
+      <UnarchiveModal
+        selectedCount={selectedCount}
+        isSubmitting={isSubmitting}
+        onConfirm={handleUnarchiveConfirm}
+      />
 
       {/* Mark as fulfilled modal */}
       <s-modal
