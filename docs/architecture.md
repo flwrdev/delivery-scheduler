@@ -3,6 +3,7 @@
 > **This file covers system topology and data model only.** It is the source of truth and pointer hub for the docs set.
 >
 > - Route-by-route detail, auth mechanisms, write-path contract → [api.md](./api.md)
+> - Orders Operations UI (list page + detail drawer) composition & data flow → [orders-ui.md](./orders-ui.md)
 > - Dated verification history → [verification-log.md](./verification-log.md)
 > - Why specific technical decisions were made → [decisions.md](./decisions.md)
 > - Commands, local dev, testing, deployment/cold-start notes → [development.md](./development.md)
