@@ -17,7 +17,3 @@ Rules:
 - Courier dispatch is out of scope — handled by the official Shopify
   Lalamove app. Do not reintroduce custom Lalamove code
   (see `docs/decisions.md` ADR-1).
-- After creating or pulling any new Prisma migration, explicitly tell
-  the user: "Run `npm run setup` before your next `npm run dev`" —
-  dev boot no longer auto-applies migrations (see shopify.web.toml
-  commit 00482e1).
