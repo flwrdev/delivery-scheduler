@@ -103,29 +103,3 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 **Decision:** Added `!.env.example` to `.gitignore` after the existing `.env.*` line.
 
 **Status:** Done.
-
----
-
-## ADR-8 — Refactor in place (not greenfield rebuild) for Order Operations V2
-
-**Source:** [proposals/orders-refactor-vs-rebuild.md](./proposals/orders-refactor-vs-rebuild.md) (read-only audit, 2026-07-08).
-
-**Context:** Order Operations V2 adds write paths the current `/app/orders` dashboard lacks (reschedule via `custom.date`/`custom.time_slot`/`reschedule_history`, mark COD paid), plus a Today-first view and keyboard-driven flow. The question was whether to refactor `app.orders.tsx` + `OrderDrawer.tsx` in place or rebuild in a new namespace reusing only shared utilities.
-
-**Decision:** Refactor in place. Basis (from the audit): reusability scorecard of **64% keep-as-is / 34% salvage-with-rework / 2% delete** over 4,633 lines; `markFulfilled` is already implemented in the existing action handler (`app.orders.tsx:709–870`), proving the per-op pattern absorbs complex writes; and the reschedule domain services (`syncOrderDeliveryMetafields`, `syncOrderDeliveryScheduleTag`, `validateDeliverySelection`, `RESCHEDULED_ORDER_TAG`) are shared with the live customer reschedule route in this same repo — a greenfield namespace would import the identical services while duplicating the loader, query, table, and CSS.
-
-**Consequence:** Phase 1+ extraction work (modals → components, KPI/filter/bulk-action hooks, dead-export deletion, docs-drift fixes D1/D2 + the development.md dev-boot note) proceeds against the existing route. No parallel second dashboard will be built or maintained.
-
-**Exit criteria — the recommendation flips to greenfield if any of these holds (verbatim from the proposal):**
-
-1. **If V2's UX is decided to be a queue/kanban, not a table** — then the table
-   JSX (the biggest salvage item) stops being reusable and the split degrades to
-   roughly 50% keep / 15% salvage / 35% rewrite, at which point greenfield wins.
-2. **If Phase-1 extraction reveals the Polaris web-component modal wiring
-   (`commandFor`/`command` attributes + `getElementById` show/hide) breaks when
-   modals move to child components** and has no clean fix — the salvage bucket's
-   "mechanical" premise fails.
-3. **If the dashboard must stay bit-frozen during V2 development** (e.g. peak
-   season freeze) — refactor-in-place violates the freeze by definition.
-
-**Status:** Adopted. Phase 0 (tree cleanup + baseline) done 2026-07-08; Phase 1 not yet started.
