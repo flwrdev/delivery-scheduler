@@ -1,5 +1,10 @@
 import { authenticate, unauthenticated } from "../shopify.server";
-import { validateDeliverySelection } from "../lib/delivery-availability";
+import {
+  isCartEligibleForMothersDay,
+  isMothersDayRushDate,
+  validateDeliverySelection,
+} from "../lib/delivery-availability";
+import { loadOrderMothersDayValidationItems } from "../services/mothers-day-validation.server";
 import {
   extractDeliveryAttributesFromPayload,
   getOrderGidFromPayload,
@@ -34,6 +39,19 @@ export const action = async ({ request }: { request: Request }) => {
   if (!selectionValidation.ok) {
     console.warn("[orders/create] delivery sync blocked: invalid selection.");
     return new Response();
+  }
+
+  if (isMothersDayRushDate(deliveryDate)) {
+    const validationItems = await loadOrderMothersDayValidationItems(
+      admin,
+      orderId,
+    );
+    if (!isCartEligibleForMothersDay(validationItems)) {
+      console.warn(
+        "[orders/create] Mother's Day delivery sync blocked: ineligible line item.",
+      );
+      return new Response();
+    }
   }
 
   const result = await syncOrderDeliveryMetafields(admin, {

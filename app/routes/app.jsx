@@ -1,5 +1,4 @@
 import {
-  Link,
   Outlet,
   redirect,
   useLoaderData,
@@ -34,6 +33,7 @@ export const loader = async ({ request }) => {
 export default function App() {
   const { apiKey } = useLoaderData();
   const [searchParams] = useSearchParams();
+  const dashboardHref = buildEmbeddedAppPath("/app/dashboard", searchParams);
   const ordersHref = buildEmbeddedAppPath("/app/orders", searchParams);
   const schedulerHref = buildEmbeddedAppPath("/app/scheduler", searchParams);
   const scheduleRulesHref = buildEmbeddedAppPath(
@@ -43,11 +43,12 @@ export default function App() {
 
   return (
     <AppProvider embedded apiKey={apiKey}>
-      <ui-nav-menu>
-        <Link to={ordersHref} rel="home">Orders</Link>
-        <Link to={schedulerHref}>Scheduler</Link>
-        <Link to={scheduleRulesHref}>Schedule rules</Link>
-      </ui-nav-menu>
+      <s-app-nav>
+        <s-link href={dashboardHref}>Dashboard</s-link>
+        <s-link href={ordersHref}>Orders</s-link>
+        <s-link href={schedulerHref}>Scheduler</s-link>
+        <s-link href={scheduleRulesHref}>Schedule rules</s-link>
+      </s-app-nav>
       <Outlet />
     </AppProvider>
   );
