@@ -1,6 +1,6 @@
 import { SignJWT } from "jose";
 
-import prisma from "../app/db.server.js";
+import prisma from "../../app/db.server.js";
 
 export interface MintTokenOptions {
   apiKey: string;
