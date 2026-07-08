@@ -19,13 +19,11 @@ npm run setup              # prisma generate && prisma migrate deploy (used by d
 npx prisma studio          # inspect Postgres data locally
 ```
 
-> **Dev boot no longer auto-applies migrations** (commit `00482e1`): `shopify app dev` now runs only `react-router dev` (its `predev` still runs `prisma generate`, which is codegen-only — no DB connection). After creating or pulling a new Prisma migration, run `npm run setup` before your next `npm run dev`, or local dev runs against an un-migrated database. Production is unaffected — the Dockerfile's `docker-start` still runs `npm run setup`.
-
 ## Testing notes
 
-Vitest is configured standalone (`vitest.config.ts`) — Node environment by default, no react-router plugin loaded, so server-helper unit tests run fast. Add `// @vitest-environment jsdom` per-file for component tests. Only files under `test/**/*.test.{ts,tsx}` are picked up; Playwright e2e specs live in `e2e/` and are excluded from the vitest run — they're invoked separately (`npx playwright test --config e2e/playwright.config.ts`).
+Vitest is configured standalone (`vitest.config.ts`) — Node environment by default, no react-router plugin loaded, so server-helper unit tests run fast. Add `// @vitest-environment jsdom` per-file for component tests. Only files under `test/**/*.test.{ts,tsx}` are picked up; `e2e/`, `test/e2e/`, and `tests/e2e/` (Playwright) are excluded from the vitest run — they're invoked separately and appear to be duplicated across three locations.
 
-> The former "duplicated e2e locations" TODO is resolved: `test/e2e/` and `tests/e2e/` no longer exist on disk (verified 2026-07-08) — `e2e/` is the single location. A leftover of that move (a stale `../../app/db.server.js` import in `e2e/helpers.ts`) was fixed the same day.
+> **Open cleanup TODO:** the Playwright e2e specs appear to be duplicated across three locations (`e2e/`, `test/e2e/`, `tests/e2e/`). This observation is carried over from `CLAUDE.md` — it has not been resolved. Consolidate to one location when someone touches the e2e suite.
 
 **Test-count history** (counts at time of writing, **not current** — the Lalamove test suites were deleted 2026-07-04, so the total dropped):
 - 18/18 green — 2026-06-07 (after Lalamove hardening + first `npm test` script).
