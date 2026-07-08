@@ -39,8 +39,6 @@ import { getSafeEventValue } from "../lib/get-safe-event-value";
 import { CancelModal } from "../components/orders/CancelModal";
 import { ArchiveModal } from "../components/orders/ArchiveModal";
 import { UnarchiveModal } from "../components/orders/UnarchiveModal";
-import { AddTagsModal } from "../components/orders/AddTagsModal";
-import { RemoveTagsModal } from "../components/orders/RemoveTagsModal";
 import { authenticate } from "../shopify.server";
 import stylesHref from "../styles/orders-dashboard.css?url";
 
@@ -1504,22 +1502,86 @@ function Extension() {
       </s-modal>
 
       {/* Add tags modal */}
-      <AddTagsModal
-        selectedCount={selectedCount}
-        isSubmitting={isSubmitting}
-        addTagsInput={addTagsInput}
-        setAddTagsInput={setAddTagsInput}
-        onConfirm={handleAddTags}
-      />
+      <s-modal
+        id="modal-add-tags"
+        heading="Add tags to selected orders"
+        size="small"
+      >
+        <s-box padding="base">
+          <s-stack direction="block" gap="base">
+            <s-text>
+              Add the tags below to {selectedCount}{" "}
+              {selectedCount === 1 ? "order" : "orders"}.
+            </s-text>
+            <s-text-field
+              id="add-tags-input"
+              label="Tags (comma-separated)"
+              placeholder="e.g. priority, vip, holiday"
+              value={addTagsInput}
+              onInput={(e: Event) => setAddTagsInput(getSafeEventValue(e))}
+              onChange={(e: Event) => setAddTagsInput(getSafeEventValue(e))}
+            />
+          </s-stack>
+        </s-box>
+        <s-button
+          slot="secondary-actions"
+          commandFor="modal-add-tags"
+          command="--hide"
+          disabled={isSubmitting}
+        >
+          Cancel
+        </s-button>
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          disabled={isSubmitting || !addTagsInput.trim() || selectedCount === 0}
+          onClick={handleAddTags}
+        >
+          {isSubmitting ? "Adding…" : "Add tags"}
+        </s-button>
+      </s-modal>
 
       {/* Remove tags modal */}
-      <RemoveTagsModal
-        selectedCount={selectedCount}
-        isSubmitting={isSubmitting}
-        removeTagsInput={removeTagsInput}
-        setRemoveTagsInput={setRemoveTagsInput}
-        onConfirm={handleRemoveTags}
-      />
+      <s-modal
+        id="modal-remove-tags"
+        heading="Remove tags from selected orders"
+        size="small"
+      >
+        <s-box padding="base">
+          <s-stack direction="block" gap="base">
+            <s-text>
+              Remove the tags below from {selectedCount}{" "}
+              {selectedCount === 1 ? "order" : "orders"}.
+            </s-text>
+            <s-text-field
+              id="remove-tags-input"
+              label="Tags (comma-separated)"
+              placeholder="e.g. priority, vip"
+              value={removeTagsInput}
+              onInput={(e: Event) => setRemoveTagsInput(getSafeEventValue(e))}
+              onChange={(e: Event) => setRemoveTagsInput(getSafeEventValue(e))}
+            />
+          </s-stack>
+        </s-box>
+        <s-button
+          slot="secondary-actions"
+          commandFor="modal-remove-tags"
+          command="--hide"
+          disabled={isSubmitting}
+        >
+          Cancel
+        </s-button>
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          disabled={
+            isSubmitting || !removeTagsInput.trim() || selectedCount === 0
+          }
+          onClick={handleRemoveTags}
+        >
+          {isSubmitting ? "Removing…" : "Remove tags"}
+        </s-button>
+      </s-modal>
 
       {/* Items to prep modal (triggered by KPI card button) */}
       <s-modal id="modal-kpi-products" heading="Items to prepare" size="small">
