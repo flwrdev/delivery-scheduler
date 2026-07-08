@@ -122,32 +122,7 @@ Finally sync the Shopify app config:
 npm run deploy -- --allow-updates
 ```
 
-## 6. Storefront Access Token (for the `/apps/schedule-rules/products` route)
-
-`app/routes/apps.schedule-rules.products.ts` calls the Storefront API directly
-with a private access token instead of going through `authenticate.public.appProxy`
-— this avoids a session-storage (Neon) round trip on every cold start, since
-that route only serves public catalog data. Manual, one-time setup:
-
-1. Shopify Admin → Settings → Apps → Develop apps → this app → API credentials
-   → generate a Storefront API access token (or add the Headless sales channel).
-2. Add it as a Cloud Run secret and env var, same pattern as `SHOPIFY_API_SECRET`:
-
-```powershell
-gcloud secrets create delivery-scheduler-storefront-token --replication-policy=automatic
-$storefrontTokenFile = Join-Path $env:TEMP "delivery-scheduler-storefront-token.txt"
-[System.IO.File]::WriteAllText($storefrontTokenFile, "PASTE_STOREFRONT_TOKEN", [System.Text.Encoding]::ASCII)
-gcloud secrets versions add delivery-scheduler-storefront-token --data-file=$storefrontTokenFile
-Remove-Item $storefrontTokenFile
-
-gcloud run services update delivery-scheduler --region us-central1 `
-  --update-secrets SHOPIFY_STOREFRONT_ACCESS_TOKEN=delivery-scheduler-storefront-token:latest
-```
-
-Until this is set, the route returns `502 Storefront API request failed` — it
-does not fall back to the Admin API.
-
-## 7. Keep costs down
+## 6. Keep costs down
 
 - Leave Cloud Run `min instances` at `0`.
 - Keep `max instances` low unless you see real traffic pressure.
