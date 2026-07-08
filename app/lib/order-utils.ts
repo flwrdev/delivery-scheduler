@@ -86,6 +86,12 @@ export interface Order {
   } | null;
   customAttributes: CustomAttribute[];
   lineItems: { edges: { node: LineItem }[] } | null;
+  paymentGatewayNames?: string[];
+  lalamoveOrderId?: { value: string } | null;
+  lalamoveStatus?: { value: string } | null;
+  lalamoveShareLink?: { value: string } | null;
+  lalamoveDriverName?: { value: string } | null;
+  lalamoveDriverPhone?: { value: string } | null;
 }
 
 export type BadgeTone =
@@ -598,4 +604,30 @@ export function formatTimelineTimestamp(value: string): string {
 
 export function formatTimelineStatus(value: string): string {
   return value === "—" ? "Status not recorded" : formatStatusLabel(value);
+}
+
+// ─── Lalamove helpers ────────────────────────────────────────────────────────
+
+export function getLalamoveOrderId(order: Order): string | null {
+  return order.lalamoveOrderId?.value ?? null;
+}
+
+export function getLalamoveStatus(order: Order): string | null {
+  return order.lalamoveStatus?.value ?? null;
+}
+
+export function getLalamoveShareLink(order: Order): string | null {
+  return order.lalamoveShareLink?.value ?? null;
+}
+
+export function getLalamoveDriverName(order: Order): string | null {
+  return order.lalamoveDriverName?.value ?? null;
+}
+
+export function getLalamoveDriverPhone(order: Order): string | null {
+  return order.lalamoveDriverPhone?.value ?? null;
+}
+
+export function isLalamoveCOD(order: Order): boolean {
+  return order.paymentGatewayNames?.includes("Cash on Delivery (COD)") ?? false;
 }
