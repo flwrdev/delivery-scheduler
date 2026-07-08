@@ -41,8 +41,6 @@ import { ArchiveModal } from "../components/orders/ArchiveModal";
 import { UnarchiveModal } from "../components/orders/UnarchiveModal";
 import { AddTagsModal } from "../components/orders/AddTagsModal";
 import { RemoveTagsModal } from "../components/orders/RemoveTagsModal";
-import { SharedTagsModal } from "../components/orders/SharedTagsModal";
-import { KpiProductsModal } from "../components/orders/KpiProductsModal";
 import { authenticate } from "../shopify.server";
 import stylesHref from "../styles/orders-dashboard.css?url";
 
@@ -982,6 +980,16 @@ function Extension() {
     return () => clearTimeout(timer);
   }, [searchTerm, searchParams, navigate]);
 
+  useEffect(() => {
+    if (tagsModalTrigger > 0) {
+      const el = document.getElementById("modal-tags-shared") as
+        | (HTMLElement & { show?: () => void })
+        | null;
+      if (el && typeof el.show === "function") el.show();
+      else el?.setAttribute("open", "");
+    }
+  }, [tagsModalTrigger]);
+
   // Stable date references for tab filtering (computed once per mount)
   const dateRefs = useMemo(() => {
     const now = new Date();
@@ -1514,19 +1522,57 @@ function Extension() {
       />
 
       {/* Items to prep modal (triggered by KPI card button) */}
-      <KpiProductsModal kpiProducts={kpiProducts} />
+      <s-modal id="modal-kpi-products" heading="Items to prepare" size="small">
+        <s-box padding="base">
+          <s-stack direction="block" gap="small">
+            {kpiProducts.length === 0 ? (
+              <s-text color="subdued">No products found.</s-text>
+            ) : (
+              <s-stack direction="block" gap="small-100">
+                {kpiProducts.map(([name, qty], idx) => (
+                  <s-stack
+                    key={idx}
+                    direction="inline"
+                    justifyContent="space-between"
+                    alignItems="center"
+                  >
+                    <s-text>{name}</s-text>
+                    <s-text type="strong">× {qty}</s-text>
+                  </s-stack>
+                ))}
+              </s-stack>
+            )}
+          </s-stack>
+        </s-box>
+        <s-button
+          slot="primary-action"
+          commandFor="modal-kpi-products"
+          command="--hide"
+        >
+          Close
+        </s-button>
+      </s-modal>
 
       {/* Shared row-level tags/attributes modal — one instance for all rows */}
-      <SharedTagsModal
-        tags={
-          tagsModalOrderId
-            ? getMeaningfulTags(
-                orders.find((o) => o.id === tagsModalOrderId)?.tags || [],
-              )
-            : []
-        }
-        openTrigger={tagsModalTrigger}
-      />
+      <s-modal id="modal-tags-shared" heading="Attributes" size="small">
+        <s-box padding="base">
+          <s-stack direction="inline" gap="small">
+            {tagsModalOrderId &&
+              getMeaningfulTags(
+                (orders.find((o) => o.id === tagsModalOrderId)?.tags) || [],
+              ).map((tag) => (
+                <s-chip key={tag}>{tagDisplayLabel(tag)}</s-chip>
+              ))}
+          </s-stack>
+        </s-box>
+        <s-button
+          slot="primary-action"
+          commandFor="modal-tags-shared"
+          command="--hide"
+        >
+          Close
+        </s-button>
+      </s-modal>
 
       {/* ── Error banner ────────────────────────────────────────────────────── */}
       {error && !errorDismissed && (
