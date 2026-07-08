@@ -1,0 +1,247 @@
+<h2>Option B — Revised</h2>
+<p class="subtitle">Smaller buttons, icon-only priority fee, "Book" dispatch button.</p>
+
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  .m { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+  .m-modal { background:#fff; border-radius:10px; padding:20px; box-shadow:0 4px 20px rgba(0,0,0,.15); width:320px; }
+  .m-title { font-size:14px; font-weight:700; color:#202223; margin:0 0 12px; }
+  .m-section-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:#6d7175; margin:0 0 7px; }
+  .m-checkbox-row { display:flex; align-items:flex-start; gap:8px; margin-bottom:7px; }
+  .m-checkbox-row input { margin-top:2px; flex-shrink:0; }
+  .m-check-label { display:flex; flex-direction:column; gap:1px; }
+  .m-check-text { font-size:12px; color:#202223; font-weight:500; }
+  .m-check-helper { font-size:11px; color:#6d7175; }
+  .m-textarea { width:100%; box-sizing:border-box; border:1px solid #c9cccf; border-radius:6px; padding:7px 9px; font-size:12px; resize:none; font-family:inherit; color:#374151; }
+  .m-char-count { font-size:10px; color:#6d7175; text-align:right; margin:2px 0 10px; }
+  .m-price-card { display:flex; align-items:center; justify-content:space-between; background:#f6f6f7; border-radius:7px; padding:8px 11px; margin-bottom:12px; }
+  .m-price-label { font-size:11px; color:#6d7175; font-weight:500; }
+  .m-price-value { font-size:14px; font-weight:700; color:#202223; }
+  .m-price-loading { display:flex; align-items:center; gap:5px; font-size:11px; color:#6d7175; }
+  .m-spinner { display:inline-block; width:10px; height:10px; border:2px solid #e5e7eb; border-top-color:#6d7175; border-radius:50%; animation:spin .7s linear infinite; }
+  .m-spinner-sm { display:inline-block; width:9px; height:9px; border:1.5px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+  .m-spinner-amber { display:inline-block; width:12px; height:12px; border:2px solid #fef3c7; border-top-color:#d97706; border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .m-btn-row { display:flex; gap:7px; justify-content:flex-end; align-items:center; }
+  /* Small button base */
+  .m-btn { padding:5px 12px; border-radius:5px; font-size:12px; font-weight:600; cursor:default; border:1px solid transparent; display:inline-flex; align-items:center; gap:5px; line-height:1.4; }
+  .m-btn-cancel { background:#fff; border-color:#c9cccf; color:#202223; }
+  .m-btn-orange { background:#ff6600; color:#fff; }
+  .m-btn-orange-loading { background:#ff6600; color:#fff; opacity:.85; }
+  .m-btn-danger-outline { background:#fff; border-color:#dc2626; color:#dc2626; }
+  .m-btn-outline { background:#fff; border-color:#c9cccf; color:#202223; }
+  /* Icon-only button */
+  .m-icon-btn { width:30px; height:30px; border-radius:5px; border:1px solid #c9cccf; background:#fff; color:#202223; display:inline-flex; align-items:center; justify-content:center; cursor:default; flex-shrink:0; position:relative; }
+  .m-icon-btn:hover { background:#f6f6f7; }
+  .m-icon-btn-orange { border-color:#ff6600; color:#ff6600; }
+  .m-tooltip { position:absolute; bottom:calc(100% + 5px); left:50%; transform:translateX(-50%); background:#202223; color:#fff; font-size:10px; font-weight:500; white-space:nowrap; padding:2px 6px; border-radius:3px; pointer-events:none; }
+  /* Drawer */
+  .m-drawer { background:#fff; border:1px solid #e1e3e5; border-radius:8px; padding:14px; width:260px; }
+  .m-drawer-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#6d7175; margin:0 0 9px; }
+  .m-status-row { display:flex; align-items:center; gap:7px; margin-bottom:8px; }
+  .m-pill { display:inline-flex; align-items:center; gap:4px; padding:2px 9px; border-radius:20px; font-size:11px; font-weight:600; }
+  .m-pill-amber { background:#fef3c7; color:#92400e; }
+  .m-pill-blue { background:#dbeafe; color:#1e40af; }
+  .m-pill-green { background:#d1fae5; color:#065f46; }
+  .m-pill-red { background:#fee2e2; color:#991b1b; }
+  .m-input { padding:5px 8px; border:1px solid #c9cccf; border-radius:5px; font-size:12px; width:90px; }
+  .m-helper { font-size:10px; color:#6d7175; margin:2px 0 7px; }
+  .m-driver-card { background:#f6f6f7; border-radius:5px; padding:7px 9px; margin-bottom:8px; }
+  .m-driver-name { font-size:12px; font-weight:600; color:#202223; }
+  .m-driver-phone { font-size:11px; color:#6d7175; }
+  .m-row { display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
+</style>
+
+<!-- ── Dispatch Modal ── -->
+<div class="section">
+  <h3>Dispatch Modal — Revised</h3>
+  <p class="subtitle">"Book" replaces "Dispatch via Lalamove". Smaller, tighter buttons.</p>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">Quote loading</div>
+      <div class="mockup-body m" style="display:flex;justify-content:center;padding:16px 8px">
+        <div class="m-modal">
+          <p class="m-title">Dispatch via Lalamove — #3446</p>
+          <p class="m-section-label">Special Requests</p>
+          <div class="m-checkbox-row">
+            <input type="checkbox" checked>
+            <div class="m-check-label">
+              <span class="m-check-text">Buy for me (Up to ₱2,000)</span>
+              <span class="m-check-helper">Driver pays COD amount at pickup</span>
+            </div>
+          </div>
+          <div class="m-checkbox-row" style="margin-bottom:12px">
+            <input type="checkbox">
+            <div class="m-check-label">
+              <span class="m-check-text">Thermal bag</span>
+              <span class="m-check-helper">Keeps items cool during transit</span>
+            </div>
+          </div>
+          <p class="m-section-label">Notes to driver</p>
+          <textarea class="m-textarea" rows="3" readonly>COD order. Please prepare PHP 489.00 for payment at pickup. Thank you!</textarea>
+          <p class="m-char-count">419 characters left</p>
+          <div class="m-price-card">
+            <span class="m-price-label">Estimated price</span>
+            <span class="m-price-loading"><span class="m-spinner"></span> Fetching…</span>
+          </div>
+          <div class="m-btn-row">
+            <button class="m-btn m-btn-cancel">Cancel</button>
+            <button class="m-btn m-btn-orange">Book</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="mockup-header">Dispatching (loading)</div>
+      <div class="mockup-body m" style="display:flex;justify-content:center;padding:16px 8px">
+        <div class="m-modal">
+          <p class="m-title">Dispatch via Lalamove — #3446</p>
+          <p class="m-section-label">Special Requests</p>
+          <div class="m-checkbox-row">
+            <input type="checkbox" checked>
+            <div class="m-check-label">
+              <span class="m-check-text">Buy for me (Up to ₱2,000)</span>
+              <span class="m-check-helper">Driver pays COD amount at pickup</span>
+            </div>
+          </div>
+          <div class="m-checkbox-row" style="margin-bottom:12px">
+            <input type="checkbox" checked>
+            <div class="m-check-label">
+              <span class="m-check-text">Thermal bag</span>
+              <span class="m-check-helper">Keeps items cool during transit</span>
+            </div>
+          </div>
+          <p class="m-section-label">Notes to driver</p>
+          <textarea class="m-textarea" rows="3" readonly>COD order. Please prepare PHP 489.00 for payment at pickup. Thank you!</textarea>
+          <p class="m-char-count">419 characters left</p>
+          <div class="m-price-card">
+            <span class="m-price-label">Estimated price</span>
+            <span class="m-price-value">₱226.00</span>
+          </div>
+          <div class="m-btn-row">
+            <button class="m-btn m-btn-cancel">Cancel</button>
+            <button class="m-btn m-btn-orange-loading"><span class="m-spinner-sm"></span> Booking…</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Drawer States ── -->
+<div class="section" style="margin-top:20px">
+  <h3>Lalamove Drawer Section — Revised</h3>
+  <p class="subtitle">Icon-only priority fee button with tooltip. Smaller, compact buttons throughout.</p>
+
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px" class="m">
+
+    <!-- Not dispatched -->
+    <div class="mockup">
+      <div class="mockup-header">Not dispatched</div>
+      <div class="mockup-body" style="padding:12px">
+        <div class="m-drawer">
+          <p class="m-drawer-label">Lalamove Delivery</p>
+          <button class="m-btn m-btn-orange">Book via Lalamove</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Assigning -->
+    <div class="mockup">
+      <div class="mockup-header">Finding driver</div>
+      <div class="mockup-body" style="padding:12px">
+        <div class="m-drawer">
+          <p class="m-drawer-label">Lalamove Delivery</p>
+          <div class="m-status-row">
+            <span class="m-spinner-amber"></span>
+            <span class="m-pill m-pill-amber">Finding driver…</span>
+          </div>
+          <!-- Icon + input row -->
+          <div class="m-row" style="margin-bottom:2px">
+            <input class="m-input" type="number" placeholder="₱ Priority fee">
+            <div class="m-icon-btn m-icon-btn-orange" title="Add Priority Fee">
+              <div class="m-tooltip">Add priority fee</div>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </div>
+          </div>
+          <p class="m-helper">Increase fee to attract drivers faster</p>
+          <button class="m-btn m-btn-danger-outline">Cancel Delivery</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- On the way -->
+    <div class="mockup">
+      <div class="mockup-header">On the way</div>
+      <div class="mockup-body" style="padding:12px">
+        <div class="m-drawer">
+          <p class="m-drawer-label">Lalamove Delivery</p>
+          <div class="m-status-row">
+            <span class="m-pill m-pill-blue">● On the way</span>
+          </div>
+          <div class="m-driver-card">
+            <div class="m-driver-name">Juan dela Cruz</div>
+            <div class="m-driver-phone">+63 912 345 6789</div>
+          </div>
+          <div class="m-row" style="margin-bottom:7px">
+            <button class="m-btn m-btn-outline">Copy link</button>
+            <button class="m-btn m-btn-outline">Open ↗</button>
+          </div>
+          <button class="m-btn m-btn-danger-outline">Cancel Delivery</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Completed -->
+    <div class="mockup">
+      <div class="mockup-header">Delivered</div>
+      <div class="mockup-body" style="padding:12px">
+        <div class="m-drawer">
+          <p class="m-drawer-label">Lalamove Delivery</p>
+          <div class="m-status-row">
+            <span class="m-pill m-pill-green">✓ Delivered</span>
+          </div>
+          <div class="m-driver-card">
+            <div class="m-driver-name">Juan dela Cruz</div>
+          </div>
+          <div class="m-row">
+            <button class="m-btn m-btn-outline">Copy link</button>
+            <button class="m-btn m-btn-outline">Open ↗</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cancelled -->
+    <div class="mockup">
+      <div class="mockup-header">Cancelled / Expired</div>
+      <div class="mockup-body" style="padding:12px">
+        <div class="m-drawer">
+          <p class="m-drawer-label">Lalamove Delivery</p>
+          <div class="m-status-row" style="margin-bottom:8px">
+            <span class="m-pill m-pill-red">✗ Cancelled</span>
+          </div>
+          <button class="m-btn m-btn-orange">Book via Lalamove</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="options" style="margin-top:24px">
+  <div class="option" data-choice="approve" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>Approve — proceed to implementation plan</h3>
+      <p>Write the spec and start building</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise" onclick="toggleSelect(this)">
+    <div class="letter">✎</div>
+    <div class="content">
+      <h3>Request more changes</h3>
+      <p>Tell me what else to adjust</p>
+    </div>
+  </div>
+</div>

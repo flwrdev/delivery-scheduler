@@ -18,6 +18,7 @@ prisma/dev.sqlite
 
 .env
 .env.*
+!.env.example
 
 
 

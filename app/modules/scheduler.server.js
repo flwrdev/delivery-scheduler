@@ -1,9 +1,4 @@
 import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
-import {
-  MOTHERS_DAY_RUSH_DATES,
-  MOTHERS_DAY_RUSH_TIME_SLOTS,
-  isMothersDayRushDate,
-} from "../lib/delivery-availability";
 import { getSessionShop } from "./session.server";
 
 function getTodayString(timezone) {
@@ -67,7 +62,7 @@ export async function getSchedulerData({ admin, session }) {
   const today = getTodayString(rules.timezone);
 
   const upcomingBlockedDates = rules.disabledDates
-    .filter((date) => date >= today && !isMothersDayRushDate(date))
+    .filter((date) => date >= today)
     .sort();
   const blockedSlotDates = Object.entries(rules.disabledSlots)
     .filter(([date, slots]) => date >= today && slots.length)
@@ -100,8 +95,6 @@ export async function getSchedulerData({ admin, session }) {
     upcomingBlockedDates: upcomingBlockedDates.slice(0, 6),
     blockedSlotDates: blockedSlotDates.slice(0, 4),
     watchlist: capacityEntries.slice(0, 6),
-    protectedRushDates: MOTHERS_DAY_RUSH_DATES,
-    protectedRushSlots: MOTHERS_DAY_RUSH_TIME_SLOTS,
     today,
   };
 }

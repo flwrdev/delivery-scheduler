@@ -1,40 +1,30 @@
-import { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense, type ChangeEvent } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense } from "react";
 
-// Lazy-loaded: the drawer (and its Lalamove dispatch form) only mounts when a
-// merchant opens an order, so it ships as a separate chunk off the initial bundle.
+// Lazy-loaded: the drawer only mounts when a merchant opens an order, so it
+// ships as a separate chunk off the initial bundle.
 const OrderDrawer = lazy(() =>
   import("../components/OrderDrawer").then((m) => ({ default: m.OrderDrawer })),
 );
 import {
   type Order,
-  type CustomAttribute,
-  type BadgeTone,
   toLocalISODate,
   normalizeDateToISO,
-  normalizeTimeSlot,
   formatDeliveryDate,
   formatMoney,
-  DATE_ISO_RE,
-  TIME_SLOT_RE,
   financialStatusTone,
   isUnpaidStatus,
   fulfillmentStatusTone,
   isOpenFulfillmentStatus,
   formatStatusLabel,
-  isHiddenDateTag,
-  isHiddenTag,
   tagDisplayLabel,
   getMeaningfulTags,
   getDeliveryRelativeLabel,
   isDeliveryOverdue,
-  findAttrValue,
   getDeliveryDateValue,
   getDeliveryTimeValue,
   getCustomerName,
-  getOrderPhone,
   getCity,
   getInstructionValue,
-  getSearchableOrderText,
   getFirstItemImageUrl,
   getFirstItemAltText,
 } from "../lib/order-utils";
@@ -42,10 +32,18 @@ import {
   useLoaderData,
   useNavigate,
   useSearchParams,
-  useFetcher,
   useNavigation,
 } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useBulkActions } from "../hooks/useBulkActions";
+import { getSafeEventValue } from "../lib/get-safe-event-value";
+import { CancelModal } from "../components/orders/CancelModal";
+import { ArchiveModal } from "../components/orders/ArchiveModal";
+import { UnarchiveModal } from "../components/orders/UnarchiveModal";
+import { AddTagsModal } from "../components/orders/AddTagsModal";
+import { RemoveTagsModal } from "../components/orders/RemoveTagsModal";
+import { SharedTagsModal } from "../components/orders/SharedTagsModal";
+import { KpiProductsModal } from "../components/orders/KpiProductsModal";
+import { MarkFulfilledModal } from "../components/orders/MarkFulfilledModal";
 import { authenticate } from "../shopify.server";
 import stylesHref from "../styles/orders-dashboard.css?url";
 
@@ -145,22 +143,6 @@ const GET_ORDERS_QUERY = `
             value
             jsonValue
           }
-          paymentGatewayNames
-          lalamoveOrderId: metafield(namespace: "lalamove", key: "order_id") {
-            value
-          }
-          lalamoveStatus: metafield(namespace: "lalamove", key: "status") {
-            value
-          }
-          lalamoveShareLink: metafield(namespace: "lalamove", key: "share_link") {
-            value
-          }
-          lalamoveDriverName: metafield(namespace: "lalamove", key: "driver_name") {
-            value
-          }
-          lalamoveDriverPhone: metafield(namespace: "lalamove", key: "driver_phone") {
-            value
-          }
           lineItems(first: 10) {
             edges {
               node {
@@ -195,19 +177,6 @@ const GET_ORDERS_QUERY = `
 
 // ─── Runtime safety helpers ───────────────────────────────────────────────────
 
-function getSafeEventValue(e: Event): string {
-  const t = (e.currentTarget ?? e.target) as
-    | (EventTarget & { value?: unknown })
-    | null;
-  const detailValue = (e as Event & { detail?: { value?: unknown } }).detail
-    ?.value;
-  return (
-    (typeof t?.value === "string" ? t.value : null) ??
-    (typeof detailValue === "string" ? detailValue : null) ??
-    ""
-  );
-}
-
 function isIsoDateParam(value: string | null): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -231,19 +200,7 @@ type LoaderData = {
   searchParam: string;
   timeWindowParam: string;
   tabParam: string;
-  lalamoveSender: { name: string; phone: string; address: string } | null;
 };
-
-// Pickup (sender) info for the Lalamove dispatch panel — shop-level metafields.
-const GET_LALAMOVE_SENDER_QUERY = `
-  query GetLalamoveSender {
-    shop {
-      lalamoveSenderName: metafield(namespace: "lalamove", key: "sender_name") { value }
-      lalamoveSenderPhone: metafield(namespace: "lalamove", key: "sender_phone") { value }
-      lalamoveSenderAddress: metafield(namespace: "lalamove", key: "sender_address") { value }
-    }
-  }
-`;
 
 export const loader = async ({
   request,
@@ -317,25 +274,6 @@ export const loader = async ({
     errors?: Array<{ message: string }>;
   };
 
-  const senderRes = await admin.graphql(GET_LALAMOVE_SENDER_QUERY);
-  const senderBody = (await senderRes.json()) as {
-    data?: {
-      shop?: {
-        lalamoveSenderName?: { value: string } | null;
-        lalamoveSenderPhone?: { value: string } | null;
-        lalamoveSenderAddress?: { value: string } | null;
-      };
-    };
-  };
-  const senderShop = senderBody.data?.shop;
-  const lalamoveSender = senderShop?.lalamoveSenderAddress?.value
-    ? {
-        name: senderShop.lalamoveSenderName?.value ?? "",
-        phone: senderShop.lalamoveSenderPhone?.value ?? "",
-        address: senderShop.lalamoveSenderAddress?.value ?? "",
-      }
-    : null;
-
   return Response.json(
     {
       orders:
@@ -347,7 +285,6 @@ export const loader = async ({
       searchParam,
       timeWindowParam,
       tabParam,
-      lalamoveSender,
     } satisfies LoaderData,
     { headers: { "Cache-Control": "no-store" } },
   );
@@ -479,28 +416,6 @@ const ORDER_UPDATE_METAFIELD_MUTATION = `
   }
 `;
 
-const SET_ORDER_LALAMOVE_METAFIELDS_MUTATION = `
-  mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
-    metafieldsSet(metafields: $metafields) {
-      metafields { key namespace value }
-      userErrors { field message }
-    }
-  }
-`;
-
-const GET_SHOP_LALAMOVE_SETTINGS_QUERY = `
-  query GetShopLalamoveSettings {
-    shop {
-      lalamoveServiceType: metafield(namespace: "lalamove", key: "service_type") { value }
-      lalamoveSenderName: metafield(namespace: "lalamove", key: "sender_name") { value }
-      lalamoveSenderPhone: metafield(namespace: "lalamove", key: "sender_phone") { value }
-      lalamoveSenderAddress: metafield(namespace: "lalamove", key: "sender_address") { value }
-      lalamoveSenderLat: metafield(namespace: "lalamove", key: "sender_lat") { value }
-      lalamoveSenderLng: metafield(namespace: "lalamove", key: "sender_lng") { value }
-    }
-  }
-`;
-
 // Rewrite raw Shopify access-denied / scope errors into something the merchant can act on.
 function scopeHint(msg: string): string {
   if (
@@ -579,7 +494,7 @@ async function uploadBouquetPhoto(
 
 // ─── Action result types ──────────────────────────────────────────────────────
 
-type BulkActionName =
+export type BulkActionName =
   | "archive"
   | "unarchive"
   | "cancel"
@@ -608,49 +523,13 @@ interface BulkActionItemResult {
   message?: string;
 }
 
-interface BulkActionResponse {
+export interface BulkActionResponse {
   ok: boolean;
   action: BulkActionName | null;
   message?: string;
   results: BulkActionItemResult[];
   summary: { ok: number; failed: number };
 }
-
-async function setLalamoveMetafields(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-  orderId: string,
-  fields: {
-    order_id?: string;
-    status?: string;
-    share_link?: string;
-    driver_name?: string;
-    driver_phone?: string;
-  },
-) {
-  const metafields = Object.entries(fields).map(([key, value]) => ({
-    ownerId: orderId,
-    namespace: "lalamove",
-    key,
-    value: value ?? "",
-    type: "single_line_text_field",
-  }));
-  await admin.graphql(SET_ORDER_LALAMOVE_METAFIELDS_MUTATION, {
-    variables: { metafields },
-  });
-}
-
-// ─── Lalamove constants ───────────────────────────────────────────────────────
-
-const VALID_SPECIAL_REQUESTS = new Set([
-  "PURCHASE_SERVICE_1",
-  "PURCHASE_SERVICE_2",
-  "PURCHASE_SERVICE_3",
-  "PURCHASE_SERVICE_4",
-  "THERMAL_BAG_1",
-  "CASH_ON_DELIVERY",
-  "CASH_ON_DELIVERY_AUTODEDUCT",
-  "QUEUEING_SERVICE",
-]);
 
 // ─── Action handler ───────────────────────────────────────────────────────────
 
@@ -659,7 +538,7 @@ export const action = async ({
 }: {
   request: Request;
 }): Promise<Response> => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   if (request.method.toUpperCase() !== "POST") {
     return Response.json(
       {
@@ -692,257 +571,6 @@ export const action = async ({
     results: [],
     summary: { ok: 0, failed: 0 },
   };
-
-  if (opRaw === "lalamoveGetQuote") {
-    const deliveryAddress = String(fd.get("deliveryAddress") ?? "");
-    const deliveryDate = String(fd.get("deliveryDate") ?? "");
-    const timeSlot = String(fd.get("timeSlot") ?? "");
-    const specialRequestsRaw = String(fd.get("specialRequests") ?? "");
-    const specialRequests = specialRequestsRaw
-      ? specialRequestsRaw.split(",").filter((v) => VALID_SPECIAL_REQUESTS.has(v))
-      : [];
-
-    const settingsRes = await admin.graphql(GET_SHOP_LALAMOVE_SETTINGS_QUERY);
-    const settingsBody = (await settingsRes.json()) as {
-      data?: {
-        shop?: {
-          lalamoveServiceType?: { value: string } | null;
-          lalamoveSenderLat?: { value: string } | null;
-          lalamoveSenderLng?: { value: string } | null;
-          lalamoveSenderAddress?: { value: string } | null;
-        };
-      };
-    };
-    const shopSettings = settingsBody.data?.shop;
-    const serviceType = shopSettings?.lalamoveServiceType?.value ?? "MOTORCYCLE";
-    const senderLat = (shopSettings?.lalamoveSenderLat?.value ?? "").trim();
-    const senderLng = (shopSettings?.lalamoveSenderLng?.value ?? "").trim();
-    const senderAddress = shopSettings?.lalamoveSenderAddress?.value ?? "";
-
-    if (!senderLat || !senderLng) {
-      return Response.json(
-        { ok: false, error: "Pickup coordinates not configured. Go to Schedule Rules → Lalamove Settings." },
-        { status: 400 },
-      );
-    }
-
-    const { getQuotation, geocodeAddress, buildScheduleAt, sanitizeCoordinate } =
-      await import("../lib/lalamove.server");
-
-    let senderLatSafe: string;
-    let senderLngSafe: string;
-    try {
-      senderLatSafe = sanitizeCoordinate(senderLat, "latitude");
-      senderLngSafe = sanitizeCoordinate(senderLng, "longitude");
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Invalid pickup coordinates." },
-        { status: 400 },
-      );
-    }
-
-    let deliveryCoords: { lat: string; lng: string };
-    try {
-      deliveryCoords = await geocodeAddress(deliveryAddress);
-    } catch {
-      return Response.json(
-        { ok: false, error: "Could not locate the delivery address. Please verify the customer's address." },
-        { status: 400 },
-      );
-    }
-
-    try {
-      const quotation = await getQuotation({
-        serviceType,
-        language: "en_PH",
-        scheduleAt: buildScheduleAt(deliveryDate, timeSlot),
-        specialRequests: specialRequests.length ? specialRequests : undefined,
-        stops: [
-          { coordinates: { lat: senderLatSafe, lng: senderLngSafe }, address: senderAddress },
-          { coordinates: deliveryCoords, address: deliveryAddress },
-        ],
-      });
-      return Response.json({
-        ok: true,
-        quotationId: quotation.quotationId,
-        price: `${quotation.priceBreakdown.currency} ${quotation.priceBreakdown.total}`,
-        expiresAt: quotation.expiresAt,
-      });
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Quotation failed. Please try again." },
-        { status: 400 },
-      );
-    }
-  }
-
-  if (opRaw === "lalamoveDispatch") {
-    const orderId = String(fd.get("orderId") ?? "");
-    const deliveryDate = String(fd.get("deliveryDate") ?? "");
-    const timeSlot = String(fd.get("timeSlot") ?? "");
-    const customerName = String(fd.get("customerName") ?? "");
-    const customerPhone = String(fd.get("customerPhone") ?? "");
-    const deliveryAddress = String(fd.get("deliveryAddress") ?? "");
-    const notesToDriver = String(fd.get("notesToDriver") ?? "");
-    const specialRequestsRaw = String(fd.get("specialRequests") ?? "");
-    const specialRequests = specialRequestsRaw
-      ? specialRequestsRaw.split(",").filter((v) => VALID_SPECIAL_REQUESTS.has(v))
-      : [];
-    const shopDomain = session.shop;
-
-    const settingsRes = await admin.graphql(GET_SHOP_LALAMOVE_SETTINGS_QUERY);
-    const settingsBody = (await settingsRes.json()) as {
-      data?: {
-        shop?: {
-          lalamoveServiceType?: { value: string } | null;
-          lalamoveSenderName?: { value: string } | null;
-          lalamoveSenderPhone?: { value: string } | null;
-          lalamoveSenderAddress?: { value: string } | null;
-          lalamoveSenderLat?: { value: string } | null;
-          lalamoveSenderLng?: { value: string } | null;
-        };
-      };
-    };
-    const shopSettings = settingsBody.data?.shop;
-    const serviceType = shopSettings?.lalamoveServiceType?.value ?? "MOTORCYCLE";
-    const senderName = shopSettings?.lalamoveSenderName?.value ?? "";
-    const senderPhone = shopSettings?.lalamoveSenderPhone?.value ?? "";
-    const senderAddress = shopSettings?.lalamoveSenderAddress?.value ?? "";
-    const senderLat = (shopSettings?.lalamoveSenderLat?.value ?? "").trim();
-    const senderLng = (shopSettings?.lalamoveSenderLng?.value ?? "").trim();
-
-    if (!senderLat || !senderLng) {
-      return Response.json(
-        { ok: false, error: "Lalamove pickup coordinates not configured. Go to Schedule Rules → Lalamove Settings." },
-        { status: 400 },
-      );
-    }
-
-    const { getQuotation, placeOrder, geocodeAddress, buildScheduleAt, sanitizeCoordinate } =
-      await import("../lib/lalamove.server");
-
-    let senderLatSafe: string;
-    let senderLngSafe: string;
-    try {
-      senderLatSafe = sanitizeCoordinate(senderLat, "latitude");
-      senderLngSafe = sanitizeCoordinate(senderLng, "longitude");
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Invalid pickup coordinates." },
-        { status: 400 },
-      );
-    }
-
-    let deliveryCoords: { lat: string; lng: string };
-    try {
-      deliveryCoords = await geocodeAddress(deliveryAddress);
-    } catch {
-      return Response.json(
-        { ok: false, error: "Could not locate the delivery address. Please verify the customer's address." },
-        { status: 400 },
-      );
-    }
-
-    let quotation;
-    try {
-      quotation = await getQuotation({
-        serviceType,
-        language: "en_PH",
-        scheduleAt: buildScheduleAt(deliveryDate, timeSlot),
-        specialRequests: specialRequests.length ? specialRequests : undefined,
-        stops: [
-          { coordinates: { lat: senderLatSafe, lng: senderLngSafe }, address: senderAddress },
-          { coordinates: deliveryCoords, address: deliveryAddress },
-        ],
-      });
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Quotation failed. Please try again." },
-        { status: 400 },
-      );
-    }
-
-    const senderStop = quotation.stops[0];
-    const recipientStop = quotation.stops[1];
-
-    let lalamoveOrder;
-    try {
-      lalamoveOrder = await placeOrder({
-        quotationId: quotation.quotationId,
-        sender: { stopId: senderStop.stopId, name: senderName, phone: senderPhone },
-        recipients: [{
-          stopId: recipientStop.stopId,
-          name: customerName,
-          phone: customerPhone,
-          remarks: notesToDriver || undefined,
-        }],
-        metadata: { shopifyOrderId: orderId, shop: shopDomain },
-      });
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Order placement failed. Please try again." },
-        { status: 400 },
-      );
-    }
-
-    await setLalamoveMetafields(admin, orderId, {
-      order_id: lalamoveOrder.orderId,
-      status: lalamoveOrder.status,
-      share_link: lalamoveOrder.shareLink,
-    });
-
-    return Response.json({
-      ok: true,
-      lalamoveOrderId: lalamoveOrder.orderId,
-      lalamoveStatus: lalamoveOrder.status,
-      lalamoveShareLink: lalamoveOrder.shareLink,
-      estimatedPrice: `${lalamoveOrder.priceBreakdown.currency} ${lalamoveOrder.priceBreakdown.total}`,
-    });
-  }
-
-  if (opRaw === "lalamoveCancel") {
-    const orderId = String(fd.get("orderId") ?? "");
-    const lalamoveOrderId = String(fd.get("lalamoveOrderId") ?? "");
-    if (!lalamoveOrderId) {
-      return Response.json(
-        { ok: false, error: "No Lalamove order to cancel." },
-        { status: 400 },
-      );
-    }
-    const { cancelLalamoveOrder } = await import("../lib/lalamove.server");
-    try {
-      await cancelLalamoveOrder(lalamoveOrderId);
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Cancel failed. Please try again." },
-        { status: 400 },
-      );
-    }
-    await setLalamoveMetafields(admin, orderId, { status: "CANCELED" });
-    return Response.json({ ok: true });
-  }
-
-  if (opRaw === "lalamovePriorityFee") {
-    const lalamoveOrderId = String(fd.get("lalamoveOrderId") ?? "");
-    const priorityFee = String(fd.get("priorityFee") ?? "");
-    const currency = String(fd.get("currency") ?? "PHP");
-    if (!lalamoveOrderId || !priorityFee) {
-      return Response.json(
-        { ok: false, error: "Missing order ID or fee amount." },
-        { status: 400 },
-      );
-    }
-    const { addPriorityFee } = await import("../lib/lalamove.server");
-    try {
-      await addPriorityFee(lalamoveOrderId, priorityFee, currency);
-    } catch (e) {
-      return Response.json(
-        { ok: false, error: e instanceof Error ? e.message : "Priority fee failed. Please try again." },
-        { status: 400 },
-      );
-    }
-    return Response.json({ ok: true });
-  }
 
   if (!op) {
     return Response.json(
@@ -1286,7 +914,6 @@ function Extension() {
   const navigate = useNavigate();
   const navigation = useNavigation();
   const [searchParams] = useSearchParams();
-  const shopify = useAppBridge();
 
   const orders = loaderData.orders;
   const pageInfo = loaderData.pageInfo;
@@ -1355,16 +982,6 @@ function Extension() {
     }, 300);
     return () => clearTimeout(timer);
   }, [searchTerm, searchParams, navigate]);
-
-  useEffect(() => {
-    if (tagsModalTrigger > 0) {
-      const el = document.getElementById("modal-tags-shared") as
-        | (HTMLElement & { show?: () => void })
-        | null;
-      if (el && typeof el.show === "function") el.show();
-      else el?.setAttribute("open", "");
-    }
-  }, [tagsModalTrigger]);
 
   // Stable date references for tab filtering (computed once per mount)
   const dateRefs = useMemo(() => {
@@ -1578,10 +1195,9 @@ function Extension() {
     };
   }, [displayedOrders, dateRefs.todayISO]);
 
-  const { kpiTotalQuantity, kpiProducts } = useMemo(() => {
+  const { kpiProducts } = useMemo(() => {
     if (displayedOrders.length === 0)
-      return { kpiTotalQuantity: "—", kpiProducts: [] as [string, number][] };
-    let total = 0;
+      return { kpiProducts: [] as [string, number][] };
     const productMap = new Map<string, number>();
 
     for (const o of displayedOrders) {
@@ -1589,7 +1205,6 @@ function Extension() {
       const items = o.lineItems?.edges || [];
       for (const item of items) {
         const qty = item.node.quantity || 0;
-        total += qty;
         if (item.node.name) {
           const name = item.node.name;
           productMap.set(name, (productMap.get(name) || 0) + qty);
@@ -1601,7 +1216,6 @@ function Extension() {
       (a, b) => b[1] - a[1],
     );
     return {
-      kpiTotalQuantity: String(total), // F06: always show the real counted total
       kpiProducts: sortedProducts,
     };
   }, [displayedOrders]);
@@ -1647,208 +1261,42 @@ function Extension() {
     };
   }, [orders, dateRefs]);
 
-  // ── Export for Lalamove ──────────────────────────────────────────────────────
 
-  const exportForLalamove = (): void => {
-    const selectedOrders = displayedOrders.filter((o) => selectedIds.has(o.id));
-    const headers = [
-      '"1. Address"',
-      '"2. Name"',
-      '"3. Phone"',
-      '"4. Block/floor"',
-    ];
-    const rows = selectedOrders.map((order) => {
-      const addr = order.shippingAddress;
-      const address = addr?.address1 || "";
-      const name = getCustomerName(order);
-      const phone = getOrderPhone(order);
-      const blockFloor = [addr?.address2, addr?.city]
-        .filter(Boolean)
-        .join(", ");
-      return [
-        `"${address.replace(/"/g, '""')}"`,
-        `"${name.replace(/"/g, '""')}"`,
-        `"${phone.replace(/"/g, '""')}"`,
-        `"${blockFloor.replace(/"/g, '""')}"`,
-      ].join(",");
-    });
-    const csv = [headers.join(","), ...rows].join("\n");
-    const today = toLocalISODate(new Date());
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `lalamove-${today}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
+  // ── Bulk actions (archive / unarchive / cancel / tags / fulfill) ───────────
+  //    State + submission + toast handling moved verbatim to useBulkActions.
 
-  // ── Bulk actions (archive / unarchive / cancel / tags) ─────────────────────
-
-  const fetcher = useFetcher<BulkActionResponse>();
-  const isSubmitting: boolean = fetcher.state !== "idle";
-
-  // Cancel modal form state
-  const [cancelReason, setCancelReason] = useState<string>("CUSTOMER");
-  const [cancelRestock, setCancelRestock] = useState<boolean>(false);
-  const [cancelNotify, setCancelNotify] = useState<boolean>(false);
-  const [cancelStaffNote, setCancelStaffNote] = useState<string>("");
-
-  // Tag modal form state
-  const [addTagsInput, setAddTagsInput] = useState<string>("");
-  const [removeTagsInput, setRemoveTagsInput] = useState<string>("");
-
-  // Mark as fulfilled modal form state
-  const [fulfillTrackingNumber, setFulfillTrackingNumber] =
-    useState<string>("");
-  const [fulfillTrackingUrl, setFulfillTrackingUrl] = useState<string>("");
-  const [fulfillNotify, setFulfillNotify] = useState<boolean>(false);
-  const [fulfillPhotoFile, setFulfillPhotoFile] = useState<File | null>(null);
-  const [fulfillPhotoPreview, setFulfillPhotoPreview] = useState<string>("");
-  const [fulfillPhotoError, setFulfillPhotoError] = useState<string>("");
-
-  const hideModal = (id: string) => {
-    const el = document.getElementById(id) as
-      | (HTMLElement & { hide?: () => void })
-      | null;
-    if (!el) return;
-    if (typeof el.hide === "function") el.hide();
-    else el.removeAttribute("open");
-  };
-
-  const showModal = (id: string) => {
-    const el = document.getElementById(id) as
-      | (HTMLElement & { show?: () => void })
-      | null;
-    if (!el) return;
-    if (typeof el.show === "function") el.show();
-    else el.setAttribute("open", "");
-  };
-
-  const submitBulk = useCallback(
-    (op: BulkActionName, extras?: Record<string, string>) => {
-      if (selectedIds.size === 0) return;
-      const fd = new FormData();
-      fd.append("_action", op);
-      selectedIds.forEach((id) => fd.append("orderId", id));
-      if (extras) {
-        for (const [k, v] of Object.entries(extras)) fd.append(k, v);
-      }
-      fetcher.submit(fd, { method: "post" });
-    },
-    [fetcher, selectedIds],
-  );
-
-  const handleArchive = () => showModal("modal-archive-orders");
-  const handleUnarchive = () => showModal("modal-unarchive-orders");
-  const handleArchiveConfirm = () => submitBulk("archive");
-  const handleUnarchiveConfirm = () => submitBulk("unarchive");
-
-  const handleCancelConfirm = () => {
-    submitBulk("cancel", {
-      reason: cancelReason,
-      restock: cancelRestock ? "1" : "0",
-      notifyCustomer: cancelNotify ? "1" : "0",
-      staffNote: cancelStaffNote,
-    });
-  };
-
-  const handleAddTags = () => {
-    if (!addTagsInput.trim()) return;
-    submitBulk("tagsAdd", { tags: addTagsInput });
-  };
-
-  const handleRemoveTags = () => {
-    if (!removeTagsInput.trim()) return;
-    submitBulk("tagsRemove", { tags: removeTagsInput });
-  };
-
-  const handleMarkFulfilled = useCallback(() => {
-    if (selectedIds.size === 0) return;
-    const fd = new FormData();
-    fd.append("_action", "markFulfilled");
-    selectedIds.forEach((id) => fd.append("orderId", id));
-    fd.append("trackingNumber", fulfillTrackingNumber);
-    fd.append("trackingUrl", fulfillTrackingUrl);
-    fd.append("notifyCustomer", fulfillNotify ? "1" : "0");
-    if (fulfillPhotoFile) fd.append("bouquetPhoto", fulfillPhotoFile);
-    fetcher.submit(fd, { method: "post", encType: "multipart/form-data" });
-  }, [selectedIds, fetcher, fulfillTrackingNumber, fulfillTrackingUrl, fulfillNotify, fulfillPhotoFile]);
-
-  const handlePhotoChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
-    setFulfillPhotoFile(null);
-    setFulfillPhotoPreview("");
-    setFulfillPhotoError("");
-    if (!file) return;
-    const MAX = 5 * 1024 * 1024;
-    const allowed = ["image/jpeg", "image/png", "image/webp"];
-    if (!allowed.includes(file.type)) {
-      setFulfillPhotoError("Only JPEG, PNG, or WebP images are accepted.");
-      return;
-    }
-    if (file.size > MAX) {
-      setFulfillPhotoError("File must be 5 MB or smaller.");
-      return;
-    }
-    setFulfillPhotoFile(file);
-    setFulfillPhotoPreview(URL.createObjectURL(file));
-  };
-
-  useEffect(() => {
-    if (!fetcher.data || fetcher.state !== "idle") return;
-    const d = fetcher.data;
-    const actionLabel: Record<BulkActionName, { verb: string; ing: string }> = {
-      archive: { verb: "archived", ing: "Archive" },
-      unarchive: { verb: "unarchived", ing: "Unarchive" },
-      cancel: { verb: "queued for cancellation", ing: "Cancel" },
-      tagsAdd: { verb: "updated (tags added)", ing: "Add tags" },
-      tagsRemove: { verb: "updated (tags removed)", ing: "Remove tags" },
-      markFulfilled: { verb: "marked as fulfilled", ing: "Mark as fulfilled" },
-    };
-    const meta = d.action ? actionLabel[d.action] : null;
-
-    if (d.ok && d.summary && d.summary.ok > 0) {
-      const n = d.summary.ok;
-      shopify.toast.show(`${n} ${n === 1 ? "order" : "orders"} ${meta?.verb ?? "updated"}.`);
-      setSelectedIds(new Set());
-      hideModal("modal-archive-orders");
-      hideModal("modal-unarchive-orders");
-      hideModal("modal-cancel-orders");
-      hideModal("modal-add-tags");
-      hideModal("modal-remove-tags");
-      hideModal("modal-mark-fulfilled");
-      setCancelStaffNote("");
-      setAddTagsInput("");
-      setRemoveTagsInput("");
-      setFulfillTrackingNumber("");
-      setFulfillTrackingUrl("");
-      setFulfillNotify(false);
-      setFulfillPhotoFile(null);
-      setFulfillPhotoPreview("");
-      setFulfillPhotoError("");
-    } else if (d.summary && d.summary.failed > 0) {
-      const failed = (d.results || []).filter((r) => !r.success);
-      const lines = failed
-        .slice(0, 3)
-        .map((r) => `${r.orderId.split("/").pop()}: ${r.message ?? "Failed"}`)
-        .join(" • ");
-      const more = failed.length > 3 ? ` (+${failed.length - 3} more)` : "";
-      const okN = d.summary.ok;
-      const failN = d.summary.failed;
-      const msg =
-        okN > 0
-          ? `${okN} succeeded, ${failN} failed. ${lines}${more}`
-          : `${meta?.ing ?? "Action"} failed for ${failN} ${failN === 1 ? "order" : "orders"}. ${lines}${more}`;
-      shopify.toast.show(msg, { isError: true });
-      // Keep only failed orders selected so merchant can retry without re-selecting
-      setSelectedIds(new Set(failed.map((r) => r.orderId)));
-    } else if (d.message) {
-      shopify.toast.show(d.message, { isError: true });
-    }
-  }, [fetcher.data, fetcher.state, shopify]);
+  const {
+    isSubmitting,
+    cancelReason,
+    setCancelReason,
+    cancelRestock,
+    setCancelRestock,
+    cancelNotify,
+    setCancelNotify,
+    cancelStaffNote,
+    setCancelStaffNote,
+    addTagsInput,
+    setAddTagsInput,
+    removeTagsInput,
+    setRemoveTagsInput,
+    fulfillTrackingNumber,
+    setFulfillTrackingNumber,
+    fulfillTrackingUrl,
+    setFulfillTrackingUrl,
+    fulfillNotify,
+    setFulfillNotify,
+    fulfillPhotoPreview,
+    fulfillPhotoError,
+    handlePhotoChange,
+    handleArchive,
+    handleUnarchive,
+    handleArchiveConfirm,
+    handleUnarchiveConfirm,
+    handleCancelConfirm,
+    handleAddTags,
+    handleRemoveTags,
+    handleMarkFulfilled,
+  } = useBulkActions(selectedIds, setSelectedIds);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -1917,386 +1365,82 @@ function Extension() {
       </s-menu>
 
       {/* Cancel orders confirmation modal */}
-      <s-modal
-        id="modal-cancel-orders"
-        heading="Cancel selected orders?"
-        size="small"
-      >
-        <s-box padding="base">
-          <s-stack direction="block" gap="base">
-            <s-banner tone="critical">
-              <s-paragraph>
-                {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
-                be cancelled. Cancellation is irreversible.
-              </s-paragraph>
-            </s-banner>
-            <s-select
-              id="cancel-reason"
-              label="Cancellation reason"
-              value={cancelReason}
-              onChange={(e: Event) => setCancelReason(getSafeEventValue(e))}
-            >
-              <s-option value="CUSTOMER">Customer request</s-option>
-              <s-option value="INVENTORY">Insufficient inventory</s-option>
-              <s-option value="DECLINED">Payment declined</s-option>
-              <s-option value="FRAUD">Fraud</s-option>
-              <s-option value="STAFF">Staff error</s-option>
-              <s-option value="OTHER">Other</s-option>
-            </s-select>
-            <s-checkbox
-              label="Restock inventory committed to these orders"
-              checked={cancelRestock}
-              onChange={(e: Event) =>
-                setCancelRestock((e.currentTarget as HTMLInputElement).checked)
-              }
-            />
-            <s-checkbox
-              label="Notify customers by email"
-              checked={cancelNotify}
-              onChange={(e: Event) =>
-                setCancelNotify((e.currentTarget as HTMLInputElement).checked)
-              }
-            />
-            <s-text-field
-              id="cancel-staff-note"
-              label="Staff note (optional, internal only — max 255 chars)"
-              value={cancelStaffNote}
-              onInput={(e: Event) => setCancelStaffNote(getSafeEventValue(e))}
-              onChange={(e: Event) => setCancelStaffNote(getSafeEventValue(e))}
-            />
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="secondary-actions"
-          commandFor="modal-cancel-orders"
-          command="--hide"
-          disabled={isSubmitting}
-        >
-          Keep them
-        </s-button>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          tone="critical"
-          disabled={isSubmitting || selectedCount === 0}
-          onClick={handleCancelConfirm}
-        >
-          {isSubmitting
-            ? "Cancelling…"
-            : `Cancel ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
-        </s-button>
-      </s-modal>
+      <CancelModal
+        selectedCount={selectedCount}
+        isSubmitting={isSubmitting}
+        cancelReason={cancelReason}
+        setCancelReason={setCancelReason}
+        cancelRestock={cancelRestock}
+        setCancelRestock={setCancelRestock}
+        cancelNotify={cancelNotify}
+        setCancelNotify={setCancelNotify}
+        cancelStaffNote={cancelStaffNote}
+        setCancelStaffNote={setCancelStaffNote}
+        onConfirm={handleCancelConfirm}
+      />
 
       {/* Archive orders confirmation modal */}
-      <s-modal
-        id="modal-archive-orders"
-        heading="Archive selected orders?"
-        size="small"
-      >
-        <s-box padding="base">
-          <s-stack direction="block" gap="base">
-            <s-banner tone="warning">
-              <s-paragraph>
-                {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
-                be archived and hidden from the main orders view. You can
-                unarchive them later.
-              </s-paragraph>
-            </s-banner>
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="secondary-actions"
-          commandFor="modal-archive-orders"
-          command="--hide"
-          disabled={isSubmitting}
-        >
-          Cancel
-        </s-button>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          disabled={isSubmitting || selectedCount === 0}
-          onClick={handleArchiveConfirm}
-        >
-          {isSubmitting
-            ? "Archiving…"
-            : `Archive ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
-        </s-button>
-      </s-modal>
+      <ArchiveModal
+        selectedCount={selectedCount}
+        isSubmitting={isSubmitting}
+        onConfirm={handleArchiveConfirm}
+      />
 
       {/* Unarchive orders confirmation modal */}
-      <s-modal
-        id="modal-unarchive-orders"
-        heading="Unarchive selected orders?"
-        size="small"
-      >
-        <s-box padding="base">
-          <s-stack direction="block" gap="base">
-            <s-banner tone="info">
-              <s-paragraph>
-                {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
-                be unarchived and returned to the main orders view.
-              </s-paragraph>
-            </s-banner>
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="secondary-actions"
-          commandFor="modal-unarchive-orders"
-          command="--hide"
-          disabled={isSubmitting}
-        >
-          Cancel
-        </s-button>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          disabled={isSubmitting || selectedCount === 0}
-          onClick={handleUnarchiveConfirm}
-        >
-          {isSubmitting
-            ? "Unarchiving…"
-            : `Unarchive ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
-        </s-button>
-      </s-modal>
+      <UnarchiveModal
+        selectedCount={selectedCount}
+        isSubmitting={isSubmitting}
+        onConfirm={handleUnarchiveConfirm}
+      />
 
       {/* Mark as fulfilled modal */}
-      <s-modal
-        id="modal-mark-fulfilled"
-        heading="Mark selected orders as fulfilled?"
-        size="small"
-      >
-        <s-box padding="base">
-          <s-stack direction="block" gap="base">
-            <s-banner tone="warning">
-              <s-paragraph>
-                This creates a real Shopify fulfillment for {selectedCount}{" "}
-                {selectedCount === 1 ? "order" : "orders"}. Customers will
-                receive a notification email if &quot;Notify customer&quot; is
-                enabled.
-              </s-paragraph>
-            </s-banner>
-            <s-text-field
-              id="fulfill-tracking-number"
-              label="Tracking number (optional)"
-              placeholder="e.g. 1Z999AA10123456784"
-              value={fulfillTrackingNumber}
-              onInput={(e: Event) =>
-                setFulfillTrackingNumber(getSafeEventValue(e))
-              }
-              onChange={(e: Event) =>
-                setFulfillTrackingNumber(getSafeEventValue(e))
-              }
-            />
-            <s-text-field
-              id="fulfill-tracking-url"
-              label="Tracking URL (optional)"
-              placeholder="https://tracking.example.com/…"
-              value={fulfillTrackingUrl}
-              onInput={(e: Event) =>
-                setFulfillTrackingUrl(getSafeEventValue(e))
-              }
-              onChange={(e: Event) =>
-                setFulfillTrackingUrl(getSafeEventValue(e))
-              }
-            />
-            <s-checkbox
-              label="Notify customer by email"
-              checked={fulfillNotify}
-              onChange={(e: Event) =>
-                setFulfillNotify((e.currentTarget as HTMLInputElement).checked)
-              }
-            />
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <label
-                htmlFor="fulfill-photo-input"
-                style={{ fontSize: 13, fontWeight: 500, color: "#202223" }}
-              >
-                Bouquet Photo (optional)
-              </label>
-              <input
-                id="fulfill-photo-input"
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                style={{ fontSize: 13 }}
-                onChange={handlePhotoChange}
-              />
-              {fulfillPhotoError && (
-                <p style={{ margin: 0, fontSize: 13, color: "#d72c0d" }}>
-                  {fulfillPhotoError}
-                </p>
-              )}
-              {fulfillPhotoPreview && (
-                <img
-                  src={fulfillPhotoPreview}
-                  alt="Bouquet preview"
-                  style={{
-                    marginTop: 4,
-                    maxWidth: 120,
-                    maxHeight: 120,
-                    objectFit: "cover",
-                    borderRadius: 6,
-                    border: "1px solid #e1e3e5",
-                  }}
-                />
-              )}
-            </div>
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="secondary-actions"
-          commandFor="modal-mark-fulfilled"
-          command="--hide"
-          disabled={isSubmitting}
-        >
-          Cancel
-        </s-button>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          disabled={isSubmitting || selectedCount === 0}
-          onClick={handleMarkFulfilled}
-        >
-          {isSubmitting
-            ? "Fulfilling…"
-            : `Mark ${selectedCount} ${selectedCount === 1 ? "order" : "orders"} fulfilled`}
-        </s-button>
-      </s-modal>
+      <MarkFulfilledModal
+        selectedCount={selectedCount}
+        isSubmitting={isSubmitting}
+        fulfillTrackingNumber={fulfillTrackingNumber}
+        setFulfillTrackingNumber={setFulfillTrackingNumber}
+        fulfillTrackingUrl={fulfillTrackingUrl}
+        setFulfillTrackingUrl={setFulfillTrackingUrl}
+        fulfillNotify={fulfillNotify}
+        setFulfillNotify={setFulfillNotify}
+        fulfillPhotoPreview={fulfillPhotoPreview}
+        fulfillPhotoError={fulfillPhotoError}
+        onPhotoChange={handlePhotoChange}
+        onConfirm={handleMarkFulfilled}
+      />
 
       {/* Add tags modal */}
-      <s-modal
-        id="modal-add-tags"
-        heading="Add tags to selected orders"
-        size="small"
-      >
-        <s-box padding="base">
-          <s-stack direction="block" gap="base">
-            <s-text>
-              Add the tags below to {selectedCount}{" "}
-              {selectedCount === 1 ? "order" : "orders"}.
-            </s-text>
-            <s-text-field
-              id="add-tags-input"
-              label="Tags (comma-separated)"
-              placeholder="e.g. priority, vip, holiday"
-              value={addTagsInput}
-              onInput={(e: Event) => setAddTagsInput(getSafeEventValue(e))}
-              onChange={(e: Event) => setAddTagsInput(getSafeEventValue(e))}
-            />
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="secondary-actions"
-          commandFor="modal-add-tags"
-          command="--hide"
-          disabled={isSubmitting}
-        >
-          Cancel
-        </s-button>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          disabled={isSubmitting || !addTagsInput.trim() || selectedCount === 0}
-          onClick={handleAddTags}
-        >
-          {isSubmitting ? "Adding…" : "Add tags"}
-        </s-button>
-      </s-modal>
+      <AddTagsModal
+        selectedCount={selectedCount}
+        isSubmitting={isSubmitting}
+        addTagsInput={addTagsInput}
+        setAddTagsInput={setAddTagsInput}
+        onConfirm={handleAddTags}
+      />
 
       {/* Remove tags modal */}
-      <s-modal
-        id="modal-remove-tags"
-        heading="Remove tags from selected orders"
-        size="small"
-      >
-        <s-box padding="base">
-          <s-stack direction="block" gap="base">
-            <s-text>
-              Remove the tags below from {selectedCount}{" "}
-              {selectedCount === 1 ? "order" : "orders"}.
-            </s-text>
-            <s-text-field
-              id="remove-tags-input"
-              label="Tags (comma-separated)"
-              placeholder="e.g. priority, vip"
-              value={removeTagsInput}
-              onInput={(e: Event) => setRemoveTagsInput(getSafeEventValue(e))}
-              onChange={(e: Event) => setRemoveTagsInput(getSafeEventValue(e))}
-            />
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="secondary-actions"
-          commandFor="modal-remove-tags"
-          command="--hide"
-          disabled={isSubmitting}
-        >
-          Cancel
-        </s-button>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          disabled={
-            isSubmitting || !removeTagsInput.trim() || selectedCount === 0
-          }
-          onClick={handleRemoveTags}
-        >
-          {isSubmitting ? "Removing…" : "Remove tags"}
-        </s-button>
-      </s-modal>
+      <RemoveTagsModal
+        selectedCount={selectedCount}
+        isSubmitting={isSubmitting}
+        removeTagsInput={removeTagsInput}
+        setRemoveTagsInput={setRemoveTagsInput}
+        onConfirm={handleRemoveTags}
+      />
 
       {/* Items to prep modal (triggered by KPI card button) */}
-      <s-modal id="modal-kpi-products" heading="Items to prepare" size="small">
-        <s-box padding="base">
-          <s-stack direction="block" gap="small">
-            {kpiProducts.length === 0 ? (
-              <s-text color="subdued">No products found.</s-text>
-            ) : (
-              <s-stack direction="block" gap="small-100">
-                {kpiProducts.map(([name, qty], idx) => (
-                  <s-stack
-                    key={idx}
-                    direction="inline"
-                    justifyContent="space-between"
-                    alignItems="center"
-                  >
-                    <s-text>{name}</s-text>
-                    <s-text type="strong">× {qty}</s-text>
-                  </s-stack>
-                ))}
-              </s-stack>
-            )}
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="primary-action"
-          commandFor="modal-kpi-products"
-          command="--hide"
-        >
-          Close
-        </s-button>
-      </s-modal>
+      <KpiProductsModal kpiProducts={kpiProducts} />
 
       {/* Shared row-level tags/attributes modal — one instance for all rows */}
-      <s-modal id="modal-tags-shared" heading="Attributes" size="small">
-        <s-box padding="base">
-          <s-stack direction="inline" gap="small">
-            {tagsModalOrderId &&
-              getMeaningfulTags(
-                (orders.find((o) => o.id === tagsModalOrderId)?.tags) || [],
-              ).map((tag) => (
-                <s-chip key={tag}>{tagDisplayLabel(tag)}</s-chip>
-              ))}
-          </s-stack>
-        </s-box>
-        <s-button
-          slot="primary-action"
-          commandFor="modal-tags-shared"
-          command="--hide"
-        >
-          Close
-        </s-button>
-      </s-modal>
+      <SharedTagsModal
+        tags={
+          tagsModalOrderId
+            ? getMeaningfulTags(
+                orders.find((o) => o.id === tagsModalOrderId)?.tags || [],
+              )
+            : []
+        }
+        openTrigger={tagsModalTrigger}
+      />
 
       {/* ── Error banner ────────────────────────────────────────────────────── */}
       {error && !errorDismissed && (
@@ -2432,13 +1576,6 @@ function Extension() {
                 accessibilityLabel="Bulk actions"
               >
                 {isSubmitting ? "Working…" : "Bulk actions"}
-              </s-button>
-              <s-button
-                variant="secondary"
-                onClick={exportForLalamove}
-                disabled={isSubmitting}
-              >
-                Export for Lalamove
               </s-button>
               <s-button
                 variant="tertiary"
@@ -2905,7 +2042,6 @@ function Extension() {
         <Suspense fallback={null}>
           <OrderDrawer
             order={selectedOrder}
-            lalamoveSender={loaderData.lalamoveSender}
             onClose={handleCloseDrawer}
           />
         </Suspense>

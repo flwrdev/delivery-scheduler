@@ -1,0 +1,282 @@
+<h2>Option B — v3 (Polaris Native)</h2>
+<p class="subtitle">Softer borders, Polaris tokens, "Book" everywhere, bolt icon for priority fee, no helper label.</p>
+
+<style>
+  /* Polaris design tokens (approximated) */
+  :root {
+    --p-border: #e1e3e5;
+    --p-border-input: #8c9196;
+    --p-text: #202223;
+    --p-text-subdued: #6d7175;
+    --p-bg: #fff;
+    --p-bg-secondary: #f6f6f7;
+    --p-bg-hover: #f1f2f3;
+    --p-radius-sm: 6px;
+    --p-radius-md: 8px;
+    --p-shadow-card: 0 0 0 1px rgba(63,63,68,.05), 0 1px 3px rgba(63,63,68,.15);
+    --p-shadow-overlay: 0 4px 16px rgba(0,0,0,.15);
+    --p-interactive: #2c6ecb;
+    --p-critical: #d82c0d;
+    --p-critical-bg: #fff4f4;
+    --p-critical-border: #fead9a;
+    --p-warning-bg: #fff5ea;
+    --p-warning-border: #ffc96b;
+    --p-warning-text: #6d4c00;
+    --p-success-bg: #f1f8f5;
+    --p-success-border: #95c9b4;
+    --p-success-text: #1a5c3a;
+    --p-info-bg: #f4f6fb;
+    --p-info-border: #b4c5e5;
+    --p-info-text: #1a3464;
+    --p-orange: #ff6600;
+    --p-font-sm: 12px;
+    --p-font-xs: 11px;
+    --p-font-body: 13px;
+  }
+
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: var(--p-font-body); color: var(--p-text); }
+
+  /* ── Modal ── */
+  .p-modal { background: var(--p-bg); border-radius: var(--p-radius-md); padding: 20px; box-shadow: var(--p-shadow-overlay); width: 320px; border: 1px solid var(--p-border); }
+  .p-modal-title { font-size: 14px; font-weight: 600; color: var(--p-text); margin: 0 0 14px; }
+  .p-label { font-size: var(--p-font-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--p-text-subdued); margin: 0 0 6px; }
+  .p-check-group { margin-bottom: 10px; }
+  .p-check-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 5px; }
+  .p-check-row input[type=checkbox] { margin-top: 1px; flex-shrink: 0; accent-color: var(--p-interactive); }
+  .p-check-text { font-size: var(--p-font-body); color: var(--p-text); font-weight: 500; line-height: 1.4; }
+  .p-check-helper { font-size: var(--p-font-xs); color: var(--p-text-subdued); line-height: 1.4; margin-top: 1px; }
+  .p-textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--p-border-input); border-radius: var(--p-radius-sm); padding: 7px 9px; font-size: var(--p-font-body); resize: none; font-family: inherit; color: var(--p-text); background: var(--p-bg); line-height: 1.5; }
+  .p-textarea:focus { outline: none; border-color: var(--p-interactive); box-shadow: 0 0 0 2px rgba(44,110,203,.2); }
+  .p-char-count { font-size: var(--p-font-xs); color: var(--p-text-subdued); text-align: right; margin: 2px 0 12px; }
+  /* Price card */
+  .p-price-card { display: flex; align-items: center; justify-content: space-between; background: var(--p-bg-secondary); border-radius: var(--p-radius-sm); border: 1px solid var(--p-border); padding: 9px 12px; margin-bottom: 14px; }
+  .p-price-lbl { font-size: var(--p-font-sm); color: var(--p-text-subdued); }
+  .p-price-val { font-size: 15px; font-weight: 700; color: var(--p-text); }
+  .p-price-loading { display: flex; align-items: center; gap: 5px; font-size: var(--p-font-sm); color: var(--p-text-subdued); }
+  /* Spinners */
+  .p-spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--p-border); border-top-color: var(--p-text-subdued); border-radius: 50%; animation: spin .7s linear infinite; }
+  .p-spinner-btn { display: inline-block; width: 10px; height: 10px; border: 1.5px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
+  .p-spinner-amber { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--p-warning-border); border-top-color: var(--p-warning-text); border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* Buttons */
+  .p-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: var(--p-radius-sm); font-size: var(--p-font-sm); font-weight: 500; cursor: default; border: 1px solid transparent; line-height: 1.5; font-family: inherit; white-space: nowrap; }
+  .p-btn-default { background: var(--p-bg); border-color: var(--p-border); color: var(--p-text); box-shadow: 0 1px 0 rgba(0,0,0,.08); }
+  .p-btn-default:hover { background: var(--p-bg-hover); }
+  .p-btn-orange { background: var(--p-orange); border-color: var(--p-orange); color: #fff; box-shadow: 0 1px 0 rgba(0,0,0,.15); }
+  .p-btn-orange-loading { background: var(--p-orange); border-color: var(--p-orange); color: rgba(255,255,255,.9); box-shadow: none; }
+  .p-btn-critical-plain { background: transparent; border-color: transparent; color: var(--p-critical); padding: 5px 4px; font-size: var(--p-font-sm); box-shadow: none; text-decoration: underline; text-underline-offset: 2px; }
+  .p-btn-row { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
+  /* Icon button */
+  .p-icon-btn { width: 28px; height: 28px; border-radius: var(--p-radius-sm); border: 1px solid var(--p-border); background: var(--p-bg); color: var(--p-text-subdued); display: inline-flex; align-items: center; justify-content: center; cursor: default; flex-shrink: 0; box-shadow: 0 1px 0 rgba(0,0,0,.06); }
+  /* Drawer section */
+  .p-drawer-sect { background: var(--p-bg); border: 1px solid var(--p-border); border-radius: var(--p-radius-md); padding: 14px 14px 12px; width: 240px; box-shadow: var(--p-shadow-card); }
+  .p-sect-label { font-size: var(--p-font-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--p-text-subdued); margin: 0 0 10px; }
+  /* Status pills — Polaris badge style */
+  .p-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 20px; font-size: var(--p-font-xs); font-weight: 500; line-height: 1.6; }
+  .p-badge-warning { background: var(--p-warning-bg); color: var(--p-warning-text); border: 1px solid var(--p-warning-border); }
+  .p-badge-info { background: var(--p-info-bg); color: var(--p-info-text); border: 1px solid var(--p-info-border); }
+  .p-badge-success { background: var(--p-success-bg); color: var(--p-success-text); border: 1px solid var(--p-success-border); }
+  .p-badge-critical { background: var(--p-critical-bg); color: var(--p-critical); border: 1px solid var(--p-critical-border); }
+  .p-status-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  /* Driver card */
+  .p-driver-card { background: var(--p-bg-secondary); border-radius: var(--p-radius-sm); padding: 7px 10px; margin-bottom: 8px; border: 1px solid var(--p-border); }
+  .p-driver-name { font-size: var(--p-font-sm); font-weight: 600; color: var(--p-text); }
+  .p-driver-phone { font-size: var(--p-font-xs); color: var(--p-text-subdued); margin-top: 1px; }
+  /* Input */
+  .p-input { padding: 5px 8px; border: 1px solid var(--p-border-input); border-radius: var(--p-radius-sm); font-size: var(--p-font-sm); width: 100px; font-family: inherit; background: var(--p-bg); color: var(--p-text); }
+  .p-input-row { display: flex; gap: 5px; align-items: center; margin-bottom: 8px; }
+  .p-action-row { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+</style>
+
+<!-- ── Dispatch Modal ── -->
+<div class="section">
+  <h3>Dispatch Modal</h3>
+  <p class="subtitle">Polaris-native feel. "Book" / "Booking…". Softer borders and shadows.</p>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">Fetching price</div>
+      <div class="mockup-body" style="display:flex;justify-content:center;padding:16px 8px">
+        <div class="p-modal">
+          <p class="p-modal-title">Dispatch via Lalamove — #3446</p>
+          <p class="p-label">Special Requests</p>
+          <div class="p-check-group">
+            <div class="p-check-row">
+              <input type="checkbox" checked>
+              <div>
+                <div class="p-check-text">Buy for me (Up to ₱2,000)</div>
+                <div class="p-check-helper">Driver pays COD amount at pickup</div>
+              </div>
+            </div>
+            <div class="p-check-row">
+              <input type="checkbox">
+              <div>
+                <div class="p-check-text">Thermal bag</div>
+                <div class="p-check-helper">Keeps items cool during transit</div>
+              </div>
+            </div>
+          </div>
+          <p class="p-label">Notes to driver</p>
+          <textarea class="p-textarea" rows="3" readonly>COD order. Please prepare PHP 489.00 for payment at pickup. Thank you!</textarea>
+          <p class="p-char-count">419 characters left</p>
+          <div class="p-price-card">
+            <span class="p-price-lbl">Estimated price</span>
+            <span class="p-price-loading"><span class="p-spinner"></span> Fetching…</span>
+          </div>
+          <div class="p-btn-row">
+            <button class="p-btn p-btn-default">Cancel</button>
+            <button class="p-btn p-btn-orange">Book</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="mockup-header">Booking in progress</div>
+      <div class="mockup-body" style="display:flex;justify-content:center;padding:16px 8px">
+        <div class="p-modal">
+          <p class="p-modal-title">Dispatch via Lalamove — #3446</p>
+          <p class="p-label">Special Requests</p>
+          <div class="p-check-group">
+            <div class="p-check-row">
+              <input type="checkbox" checked>
+              <div>
+                <div class="p-check-text">Buy for me (Up to ₱2,000)</div>
+                <div class="p-check-helper">Driver pays COD amount at pickup</div>
+              </div>
+            </div>
+            <div class="p-check-row">
+              <input type="checkbox" checked>
+              <div>
+                <div class="p-check-text">Thermal bag</div>
+                <div class="p-check-helper">Keeps items cool during transit</div>
+              </div>
+            </div>
+          </div>
+          <p class="p-label">Notes to driver</p>
+          <textarea class="p-textarea" rows="3" readonly>COD order. Please prepare PHP 489.00 for payment at pickup. Thank you!</textarea>
+          <p class="p-char-count">419 characters left</p>
+          <div class="p-price-card">
+            <span class="p-price-lbl">Estimated price</span>
+            <span class="p-price-val">₱226.00</span>
+          </div>
+          <div class="p-btn-row">
+            <button class="p-btn p-btn-default">Cancel</button>
+            <button class="p-btn p-btn-orange-loading"><span class="p-spinner-btn"></span> Booking…</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Drawer States ── -->
+<div class="section" style="margin-top:24px">
+  <h3>Lalamove Drawer Section</h3>
+  <p class="subtitle">"Book" everywhere. Lightning bolt for priority fee. No helper label. Polaris badge style.</p>
+
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+
+    <div class="mockup">
+      <div class="mockup-header">Not dispatched</div>
+      <div class="mockup-body" style="padding:12px;display:flex;justify-content:center">
+        <div class="p-drawer-sect">
+          <p class="p-sect-label">Lalamove Delivery</p>
+          <button class="p-btn p-btn-orange">Book</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup">
+      <div class="mockup-header">Finding driver</div>
+      <div class="mockup-body" style="padding:12px;display:flex;justify-content:center">
+        <div class="p-drawer-sect">
+          <p class="p-sect-label">Lalamove Delivery</p>
+          <div class="p-status-row">
+            <span class="p-spinner-amber"></span>
+            <span class="p-badge p-badge-warning">Finding driver…</span>
+          </div>
+          <div class="p-input-row">
+            <input class="p-input" type="number" placeholder="₱ Priority fee">
+            <!-- Lightning bolt icon for priority fee -->
+            <div class="p-icon-btn" title="Add priority fee">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+              </svg>
+            </div>
+          </div>
+          <button class="p-btn p-btn-critical-plain">Cancel delivery</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup">
+      <div class="mockup-header">On the way</div>
+      <div class="mockup-body" style="padding:12px;display:flex;justify-content:center">
+        <div class="p-drawer-sect">
+          <p class="p-sect-label">Lalamove Delivery</p>
+          <div class="p-status-row">
+            <span class="p-badge p-badge-info">● On the way</span>
+          </div>
+          <div class="p-driver-card">
+            <div class="p-driver-name">Juan dela Cruz</div>
+            <div class="p-driver-phone">+63 912 345 6789</div>
+          </div>
+          <div class="p-action-row">
+            <button class="p-btn p-btn-default" style="font-size:11px;padding:4px 9px">Copy link</button>
+            <button class="p-btn p-btn-default" style="font-size:11px;padding:4px 9px">Open ↗</button>
+          </div>
+          <button class="p-btn p-btn-critical-plain">Cancel delivery</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup">
+      <div class="mockup-header">Delivered</div>
+      <div class="mockup-body" style="padding:12px;display:flex;justify-content:center">
+        <div class="p-drawer-sect">
+          <p class="p-sect-label">Lalamove Delivery</p>
+          <div class="p-status-row" style="margin-bottom:8px">
+            <span class="p-badge p-badge-success">✓ Delivered</span>
+          </div>
+          <div class="p-driver-card">
+            <div class="p-driver-name">Juan dela Cruz</div>
+          </div>
+          <div class="p-action-row">
+            <button class="p-btn p-btn-default" style="font-size:11px;padding:4px 9px">Copy link</button>
+            <button class="p-btn p-btn-default" style="font-size:11px;padding:4px 9px">Open ↗</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup">
+      <div class="mockup-header">Cancelled / Expired</div>
+      <div class="mockup-body" style="padding:12px;display:flex;justify-content:center">
+        <div class="p-drawer-sect">
+          <p class="p-sect-label">Lalamove Delivery</p>
+          <div class="p-status-row" style="margin-bottom:8px">
+            <span class="p-badge p-badge-critical">✗ Cancelled</span>
+          </div>
+          <button class="p-btn p-btn-orange">Book</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="options" style="margin-top:28px">
+  <div class="option" data-choice="approve" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>Approve — write spec + plan</h3>
+      <p>Start building this design</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise" onclick="toggleSelect(this)">
+    <div class="letter">✎</div>
+    <div class="content">
+      <h3>Still need changes</h3>
+      <p>Tell me in terminal</p>
+    </div>
+  </div>
+</div>
