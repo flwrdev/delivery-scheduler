@@ -5,7 +5,8 @@
     "e2e/**",
     "test/**",
     "tests/**",
-    "playwright/**"
+    "playwright/**",
+    "_archive/**"
   ],
   "compilerOptions": {
     "lib": ["DOM", "DOM.Iterable", "ES2022"],

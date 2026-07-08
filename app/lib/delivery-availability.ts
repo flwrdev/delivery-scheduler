@@ -19,35 +19,6 @@ export interface DeliveryScheduleRules {
   slotCapacity: Record<string, Record<string, DeliveryScheduleCapacity>>;
 }
 
-export interface DeliveryValidationItem {
-  sku?: unknown;
-  tags?: unknown;
-  productTags?: unknown;
-  mothersDayEligible?: unknown;
-}
-
-// Mother's Day rush dates are hard business rules layered over merchant-editable slots.
-export const MOTHERS_DAY_RUSH_DATES = [
-  "2026-05-09",
-  "2026-05-10",
-  "2026-05-11",
-];
-export const MOTHERS_DAY_RUSH_TIME_SLOTS: DeliveryScheduleSlot[] = [
-  { display: "8:00 AM - 1:00 PM", value: "8:00 AM - 1:00 PM" },
-  { display: "1:00 PM - 7:00 PM", value: "1:00 PM - 7:00 PM" },
-];
-export const MOTHERS_DAY_PRODUCT_TAG = "may10";
-export const MOTHERS_DAY_PRODUCT_ERROR_MESSAGE =
-  "Sorry, this item is not available for Mother's Day rush dates. Please choose another delivery date or select from our Mother's Day Collection.";
-export const MOTHERS_DAY_RESCHEDULE_ERROR_MESSAGE =
-  "Rescheduling is only allowed up to 2 days before the delivery date. Mother's Day rush dates are only available for selected Mother's Day products.";
-
-const MOTHERS_DAY_ALLOWED_SKUS = new Set(
-  Array.from(
-    { length: 20 },
-    (_, index) => `md${String(index + 1).padStart(2, "0")}`,
-  ),
-);
 const LEGACY_DELIVERY_TAG_PATTERN = /^\d{4}-\d{2}-\d{2}\s*\|\s*.+$/;
 const DELIVERY_TIME_SLOT_TAG_PATTERN =
   /^\d{1,2}(?::\d{2})?\s*(?:AM|PM)\s*-\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM)$/i;
@@ -248,64 +219,11 @@ export function isDeliveryScheduleTag(
   );
 }
 
-function normalizeSku(value: unknown): string {
-  return normalizedString(value).toLowerCase();
-}
-
-function normalizeTags(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return value
-      .map((tag) => normalizedString(tag).toLowerCase())
-      .filter(Boolean);
-  }
-
-  const tagValue = normalizedString(value);
-  return tagValue ? [tagValue.toLowerCase()] : [];
-}
-
-export function isMothersDayRushDate(date: string | null | undefined): boolean {
-  return (
-    typeof date === "string" && MOTHERS_DAY_RUSH_DATES.includes(date.trim())
-  );
-}
-
 export function getAvailableTimeSlots(
-  date: string | null | undefined,
+  _date: string | null | undefined,
   rules: DeliveryScheduleRules = DEFAULT_DELIVERY_SCHEDULE_RULES,
 ): DeliveryScheduleSlot[] {
-  if (isMothersDayRushDate(date)) {
-    return MOTHERS_DAY_RUSH_TIME_SLOTS.map((slot) => ({ ...slot }));
-  }
-
   return rules.slots.map((slot) => ({ ...slot }));
-}
-
-export function isMothersDayEligibleItem(
-  item: DeliveryValidationItem,
-): boolean {
-  if (item.mothersDayEligible === true) {
-    return true;
-  }
-
-  const tags = [
-    ...normalizeTags(item.productTags),
-    ...normalizeTags(item.tags),
-  ];
-  if (tags.includes(MOTHERS_DAY_PRODUCT_TAG)) {
-    return true;
-  }
-
-  return MOTHERS_DAY_ALLOWED_SKUS.has(normalizeSku(item.sku));
-}
-
-export function isCartEligibleForMothersDay(
-  cartItems: DeliveryValidationItem[] | null | undefined,
-): boolean {
-  return (
-    Array.isArray(cartItems) &&
-    cartItems.length > 0 &&
-    cartItems.every(isMothersDayEligibleItem)
-  );
 }
 
 export function canRescheduleDelivery(
@@ -458,10 +376,6 @@ export function isDateBlocked(
   rules: DeliveryScheduleRules,
   dateStr: string,
 ): boolean {
-  if (isMothersDayRushDate(dateStr)) {
-    return false;
-  }
-
   return (
     Array.isArray(rules.disabledDates) && rules.disabledDates.includes(dateStr)
   );
