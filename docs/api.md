@@ -119,9 +119,8 @@ The active `delivery-reschedule-customer` modal posts to `/public/customer-accou
 - `orderCancel`
 - `tagsAdd` / `tagsRemove` — **freeform text input**; merchant types arbitrary tag strings
 - `fulfillmentCreate` (mark fulfilled, with optional tracking number/URL)
-- `stagedUploadsCreate` + `fileCreate` + `orderUpdate` — the optional bouquet-photo attachment on mark-fulfilled: uploads the image to Shopify Files and writes its URL to the **`custom.bouquet_photo`** metafield (`app.orders.tsx:389–422`, executed `:848–868`)
 
-None of these mutations are part of the delivery sync contract — none write `custom.date`, `custom.time_slot`, `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date`, `$app.reschedule_status`, `$app.reschedule_requested_at`, `delivery.reschedule_history`, or the `Delivery Date` / `Delivery Time` customAttributes. (`custom.bouquet_photo` shares the `custom` namespace but is **not** a delivery-schedule field.)
+None of these mutations are part of the delivery sync contract — none write `custom.date`, `custom.time_slot`, `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date`, `$app.reschedule_status`, `$app.reschedule_requested_at`, `delivery.reschedule_history`, or the `Delivery Date` / `Delivery Time` customAttributes.
 
 However, because the tag input is freeform, a merchant *can* manually add or remove a string that matches `DELIVERY_SCHEDULE_TAG_PATTERN` (e.g. `2026-05-23` or `9AM-12PM`). The system does not validate or enforce this — if it happens, downstream readers (`order-delivery-block`, scheduler queries) will see the manually-typed tag the same way they see auto-synced delivery tags. Treat this as a manual-override side channel, not a supported delivery write path.
 
@@ -219,8 +218,9 @@ flowchart LR
 
     subgraph ORDERS["/app/orders"]
         O_LOAD["loader → Admin GraphQL (direct)"]:::act
-        O_LIST["Polaris table:<br/>select, name, items, customer, city,<br/>deliveryDate, timeWindow,<br/>payment, fulfillment, total, tags"]:::screen
-        O_FILT["toolbar: search + delivery-date<br/>+ time-slot + reset;<br/>URL tabs: all / today / tomorrow /<br/>thisWeek / unfulfilled / unpaid"]:::screen
+        O_LIST["Polaris table:<br/>name, items, customer, city,<br/>payment, fulfillment,<br/>deliveryDate, timeWindow, total"]:::screen
+        O_FILT["filters + sort<br/>(city, timeWindow,<br/>deliveryDate, fulfillment)"]:::screen
+        O_COLS["DEFAULT_VISIBLE_COLUMNS vs<br/>MOBILE_VISIBLE_COLUMNS"]:::screen
     end
 
     subgraph SCHED["/app/scheduler"]
@@ -246,7 +246,7 @@ flowchart LR
     APP --> SCHED
     APP --> RULES
 
-    ORDERS --> O_LOAD --> O_LIST --> O_FILT
+    ORDERS --> O_LOAD --> O_LIST --> O_FILT --> O_COLS
     O_LOAD --> SAPI
 
     SCHED --> S_VIEW --> SAPI
