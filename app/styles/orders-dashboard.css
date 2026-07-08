@@ -1,58 +1,10 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300..700&display=swap");
-
 /* Orders Operations Dashboard — route-scoped styles (ods- prefix) */
-
-/* ── Design System tokens (design-system.md §1) ───────────────────────────── */
-:root {
-  /* Core palette & UI states */
-  --p-color-text-muted: rgb(48, 48, 48); /* Primary body text color */
-  --p-color-interactive-primary: rgb(227, 227, 227); /* Scrollbar / line accents */
-  --p-color-interactive-1: rgb(255, 255, 255); /* Core surface layers */
-  --p-color-interactive-2: rgb(48, 48, 48); /* Bold interactive details */
-
-  /* Table row & container interactivity */
-  --p-color-bg-surface-secondary: #f7f7f7; /* Table header default bg */
-  --p-color-bg-surface-secondary-hover: #f1f1f1; /* Row hover */
-  --p-color-bg-surface-secondary-active: #ebebeb; /* Active / selected row */
-
-  /* Contextual status fills & accents */
-  --p-color-bg-fill-success-secondary: #affebf; /* Fulfilled badge surface */
-  --p-color-bg-fill-critical-secondary: #fed1d7; /* Unfulfilled badge surface */
-  --p-color-text-critical-secondary: #c70a24; /* Unfulfilled typography */
-  --p-color-bg-fill-info-secondary: #d5ebff; /* Generic helper elements */
-  --p-color-text-inverse-secondary: #b5b5b5; /* Scrollbar hover */
-  --p-color-text-warning-secondary: #956f00; /* Payment pending typography */
-
-  /* Typography scale (weights) */
-  --font-weight-regular: 400; /* Light layout copy */
-  --font-weight-medium-light: 450; /* Primary body text & list nodes */
-  --font-weight-semibold: 550; /* Headers, metadata descriptors */
-  --font-weight-bold: 600; /* Title assets & numeric totals */
-
-  /* Map Polaris weight aliases to the design-system scale (value-only remap) */
-  --p-font-weight-regular: var(--font-weight-regular);
-  --p-font-weight-medium: var(--font-weight-medium-light);
-  --p-font-weight-semibold: var(--font-weight-semibold);
-  --p-font-weight-bold: var(--font-weight-bold);
-
-  /* Spacing scale */
-  --p-space-100: 4px;
-  --p-space-200: 8px;
-  --p-space-300: 12px;
-  --p-space-400: 14px;
-  --p-space-500: 20px;
-}
 
 #orders-dashboard-page,
 #orders-table-section,
 .ods-tabs-table {
   max-width: 100%;
   overflow-x: clip;
-  font-family: "Inter", sans-serif;
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: var(--font-weight-medium-light, 450);
-  color: var(--p-color-text-muted, rgb(48, 48, 48));
 }
 
 #modal-cancel-orders,
@@ -201,7 +153,7 @@ s-modal {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(500px, 100vw);
+  width: min(480px, 96vw);
   max-width: 100vw;
   background: var(--p-color-bg-surface, #fff);
   box-shadow: var(--p-shadow-overlay, -4px 0 32px rgba(0, 0, 0, 0.18));
@@ -210,8 +162,6 @@ s-modal {
   flex-direction: column;
   overflow: hidden;
   box-sizing: border-box;
-  font-family: "Inter", sans-serif;
-  transition: transform 0.3s ease-in-out;
 }
 
 /* ── Drawer header ──────────────────────────────────────────────────────── */
@@ -686,34 +636,7 @@ s-modal {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: var(--p-color-bg-surface-secondary, rgb(247, 247, 247));
-  color: rgb(97, 97, 97);
-  font-weight: var(--font-weight-semibold, 550);
-  text-transform: uppercase;
-}
-
-/* ── Custom scrollbars (design-system.md §4A) ─────────────────────────────── */
-.ods-drawer-body::-webkit-scrollbar,
-.ods-table-frame::-webkit-scrollbar,
-.ods-dd--scrollable::-webkit-scrollbar {
-  width: var(--p-space-200, 8px);
-  height: var(--p-space-200, 8px);
-}
-.ods-drawer-body::-webkit-scrollbar-track,
-.ods-table-frame::-webkit-scrollbar-track,
-.ods-dd--scrollable::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0);
-}
-.ods-drawer-body::-webkit-scrollbar-thumb,
-.ods-table-frame::-webkit-scrollbar-thumb,
-.ods-dd--scrollable::-webkit-scrollbar-thumb {
-  background: var(--p-color-interactive-primary, rgb(227, 227, 227));
-  border-radius: 4px;
-}
-.ods-drawer-body::-webkit-scrollbar-thumb:hover,
-.ods-table-frame::-webkit-scrollbar-thumb:hover,
-.ods-dd--scrollable::-webkit-scrollbar-thumb:hover {
-  background: var(--p-color-text-inverse-secondary, rgb(181, 181, 181));
+  background: var(--p-color-bg-surface, #fff);
 }
 
 /* ── Toolbar (compact wrappers prevent custom elements from stretching) ─── */
@@ -971,9 +894,9 @@ s-modal {
   line-height: 1.4;
 }
 .ods-delivery-relative--overdue {
-  color: var(--p-color-text-critical-secondary, #c70a24);
-  background: var(--p-color-bg-fill-critical-secondary, #fed1d7);
-  font-weight: var(--font-weight-bold, 600);
+  color: var(--p-color-text-critical, #c9371d);
+  background: var(--p-color-bg-surface-critical-subdued, #ffe9e8);
+  font-weight: 700;
 }
 .ods-muted {
   color: var(--p-color-text-secondary, #6d7175);
@@ -986,7 +909,7 @@ s-modal {
 }
 .ods-status-cell--attention {
   padding-left: var(--p-space-2, 8px);
-  box-shadow: inset 4px 0 0 #dc2626;
+  box-shadow: inset 3px 0 0 var(--p-color-border-critical, #c9371d);
 }
 
 /* Delivery section uses same white bg as all sections for Shopify-native feel */
@@ -1043,4 +966,505 @@ button.ods-action-link:hover {
 .ods-kpi-card--clickable:focus-visible {
   outline: 2px solid var(--p-color-bg-fill-focus, #005bd3);
   outline-offset: -2px;
+}
+
+/* ── Lalamove UX Polish ──────────────────────────────────────────────────── */
+
+@keyframes ods-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Spinners */
+.ods-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--p-color-border, #e1e3e5);
+  border-top-color: var(--p-color-text-secondary, #6d7175);
+  border-radius: 50%;
+  animation: ods-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.ods-spinner--btn {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: ods-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.ods-spinner--amber {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fef3c7;
+  border-top-color: #d97706;
+  border-radius: 50%;
+  animation: ods-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Small buttons (Polaris-inspired) */
+.ods-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: var(--p-border-radius-100, 6px);
+  font-size: var(--p-font-size-75, 12px);
+  font-weight: var(--p-font-weight-medium, 500);
+  cursor: pointer;
+  border: 1px solid transparent;
+  line-height: 1.5;
+  font-family: inherit;
+  white-space: nowrap;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.ods-btn--default {
+  background: var(--p-color-bg-surface, #fff);
+  border-color: var(--p-color-border, #e1e3e5);
+  color: var(--p-color-text, #202223);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+}
+.ods-btn--default:hover:not(:disabled) {
+  background: var(--p-color-bg-surface-hover, #f1f2f3);
+}
+.ods-btn--block {
+  width: 100%;
+  justify-content: center;
+}
+.ods-btn--orange {
+  background: #ff6600;
+  border-color: #ff6600;
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
+}
+.ods-btn--orange:hover:not(:disabled) {
+  background: #e65c00;
+  border-color: #e65c00;
+}
+.ods-btn--orange:disabled,
+.ods-btn--orange-loading {
+  opacity: 0.8;
+  cursor: not-allowed;
+}
+.ods-btn--critical-plain {
+  background: transparent;
+  border-color: transparent;
+  color: var(--p-color-text-critical, #d82c0d);
+  box-shadow: none;
+  padding-left: 0;
+  padding-right: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ods-btn--critical-plain:hover:not(:disabled) {
+  color: #b52508;
+}
+.ods-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Icon-only button */
+.ods-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--p-border-radius-100, 6px);
+  border: 1px solid var(--p-color-border, #e1e3e5);
+  background: var(--p-color-bg-surface, #fff);
+  color: var(--p-color-text-secondary, #6d7175);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.06);
+  padding: 0;
+  font-family: inherit;
+}
+.ods-icon-btn:hover:not(:disabled) {
+  background: var(--p-color-bg-surface-hover, #f1f2f3);
+  color: var(--p-color-text, #202223);
+}
+.ods-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Checkbox rows with helper text */
+.ods-check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ods-check-row input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.ods-check-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ods-check-text {
+  font-size: var(--p-font-size-100, 13px);
+  color: var(--p-color-text, #202223);
+  font-weight: var(--p-font-weight-medium, 500);
+  line-height: 1.4;
+}
+.ods-check-helper {
+  font-size: var(--p-font-size-75, 11px);
+  color: var(--p-color-text-secondary, #6d7175);
+  line-height: 1.4;
+}
+
+/* Estimated price card */
+.ods-price-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--p-color-bg-surface-secondary, #f6f6f7);
+  border: 1px solid var(--p-color-border, #e1e3e5);
+  border-radius: var(--p-border-radius-100, 6px);
+  padding: 9px 12px;
+  margin-bottom: 14px;
+}
+.ods-price-card__label {
+  font-size: var(--p-font-size-75, 12px);
+  color: var(--p-color-text-secondary, #6d7175);
+}
+.ods-price-card__loading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--p-font-size-75, 12px);
+  color: var(--p-color-text-secondary, #6d7175);
+}
+.ods-price-card__value {
+  font-size: 15px;
+  font-weight: var(--p-font-weight-bold, 700);
+  color: var(--p-color-text, #202223);
+}
+.ods-price-card__error {
+  font-size: var(--p-font-size-75, 12px);
+  color: var(--p-color-text-critical, #d82c0d);
+}
+
+/* Dispatch modal overlay + panel */
+.ods-dispatch-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ods-dispatch-modal {
+  background: var(--p-color-bg-surface, #fff);
+  border-radius: var(--p-border-radius-200, 8px);
+  padding: 0;
+  width: 420px;
+  max-width: 92vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--p-color-border, #e1e3e5);
+}
+
+/* ── Lalamove dispatch panel (drawer modal) ─────────────────────────────── */
+.ods-lld-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  background: #fff4ec;
+  border-bottom: 1px solid #ffd8bf;
+  border-radius: 8px 8px 0 0;
+}
+.ods-lld-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #ff6b00;
+  color: #fff;
+  font-weight: 800;
+  font-size: 18px;
+  flex: 0 0 auto;
+}
+.ods-lld-title {
+  margin: 0;
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: #d35400;
+}
+.ods-lld-subtitle {
+  margin: 0;
+  font-size: 11px;
+  color: #8a6d5a;
+}
+.ods-lld-label {
+  margin: 16px 20px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+}
+.ods-lld-label-note {
+  float: right;
+  font-weight: 400;
+  font-style: italic;
+  color: #9aa0a6;
+}
+
+/* Route card */
+.ods-route-card {
+  margin: 0 20px;
+  border: 1px solid #e1e3e5;
+  border-radius: 8px;
+  padding: 12px;
+}
+.ods-route-stop {
+  display: flex;
+  gap: 10px;
+  position: relative;
+}
+.ods-route-stop + .ods-route-stop {
+  margin-top: 14px;
+}
+.ods-route-stop:first-child::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 22px;
+  bottom: -14px;
+  width: 2px;
+  border-left: 2px dashed #d7b49a;
+}
+.ods-route-dot {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  z-index: 1;
+}
+.ods-route-dot--pickup {
+  background: #ff6b00;
+}
+.ods-route-dot--dropoff {
+  background: #2c6ecb;
+}
+.ods-route-info {
+  min-width: 0;
+  flex: 1;
+}
+.ods-route-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+.ods-route-name {
+  font-weight: 700;
+  font-size: 13px;
+  color: #202223;
+}
+.ods-route-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 20px;
+  flex: 0 0 auto;
+}
+.ods-route-badge--sender {
+  background: #fff0e6;
+  color: #c2410c;
+}
+.ods-route-badge--receiver {
+  background: #eaf1fb;
+  color: #1d4ed8;
+}
+.ods-route-addr {
+  font-size: 12px;
+  color: #4b5563;
+  margin-top: 2px;
+}
+.ods-route-phone {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 1px;
+}
+
+/* Additional service rows with fee */
+.ods-service-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 20px 8px;
+  cursor: pointer;
+}
+.ods-service-row input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  accent-color: #ff6b00;
+}
+.ods-service-text {
+  flex: 1;
+  font-size: 13px;
+  color: #202223;
+}
+.ods-service-sub {
+  color: #9aa0a6;
+  font-size: 12px;
+}
+.ods-service-fee {
+  font-size: 12px;
+  font-weight: 600;
+  color: #d35400;
+  flex: 0 0 auto;
+}
+
+/* Estimated invoice breakdown */
+.ods-invoice-card {
+  margin: 16px 20px 0;
+  background: #fffaf5;
+  border: 1px solid #ffe0c7;
+  border-radius: 8px;
+  padding: 12px;
+}
+.ods-invoice-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #8a6d5a;
+}
+.ods-invoice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: #202223;
+}
+.ods-invoice-row--muted {
+  color: #8a8d91;
+}
+.ods-invoice-row--total {
+  font-weight: 700;
+}
+.ods-invoice-total {
+  color: #ff6b00;
+  font-size: 16px;
+  font-weight: 800;
+}
+.ods-invoice-expiry {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #9aa0a6;
+}
+.ods-invoice-error {
+  font-size: 12px;
+  color: var(--p-color-text-critical, #d82c0d);
+}
+.ods-lld-error {
+  margin: 10px 20px 0;
+  font-size: 12px;
+  color: var(--p-color-text-critical, #d82c0d);
+}
+
+/* Dispatch actions */
+.ods-lld-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 16px 20px 20px;
+}
+.ods-lld-dispatch-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+/* Status badges (Polaris-inspired) */
+.ods-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--p-border-radius-full, 20px);
+  font-size: var(--p-font-size-75, 11px);
+  font-weight: var(--p-font-weight-medium, 500);
+  line-height: 1.6;
+  border: 1px solid transparent;
+}
+.ods-badge--warning {
+  background: #fff5ea;
+  color: #6d4c00;
+  border-color: #ffc96b;
+}
+.ods-badge--info {
+  background: #f4f6fb;
+  color: #1a3464;
+  border-color: #b4c5e5;
+}
+.ods-badge--success {
+  background: #f1f8f5;
+  color: #1a5c3a;
+  border-color: #95c9b4;
+}
+.ods-badge--critical {
+  background: #fff4f4;
+  color: var(--p-color-text-critical, #d82c0d);
+  border-color: #fead9a;
+}
+
+/* Driver info card */
+.ods-driver-card {
+  background: var(--p-color-bg-surface-secondary, #f6f6f7);
+  border: 1px solid var(--p-color-border, #e1e3e5);
+  border-radius: var(--p-border-radius-100, 6px);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.ods-driver-card__name {
+  font-size: var(--p-font-size-100, 13px);
+  font-weight: var(--p-font-weight-semibold, 600);
+  color: var(--p-color-text, #202223);
+}
+.ods-driver-card__phone {
+  font-size: var(--p-font-size-75, 11px);
+  color: var(--p-color-text-secondary, #6d7175);
+  margin-top: 1px;
+}
+
+/* Small number input for priority fee */
+.ods-input-sm {
+  padding: 5px 8px;
+  border: 1px solid var(--p-color-border-input, #8c9196);
+  border-radius: var(--p-border-radius-100, 6px);
+  font-size: var(--p-font-size-75, 12px);
+  font-family: inherit;
+  background: var(--p-color-bg-surface, #fff);
+  color: var(--p-color-text, #202223);
+  width: 120px;
+}
+.ods-input-sm:focus {
+  outline: none;
+  border-color: var(--p-color-border-interactive, #458fff);
+  box-shadow: 0 0 0 2px rgba(69, 143, 255, 0.2);
 }
