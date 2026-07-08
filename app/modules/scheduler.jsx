@@ -293,6 +293,22 @@ export function SchedulerSection({ data }) {
           </div>
         </s-section>
 
+        <s-section slot="aside" heading="Protected rush rules">
+          <dl className={styles.detailList}>
+            <div className={styles.detailRow}>
+              <dt className={styles.detailLabel}>Dates</dt>
+              <dd className={styles.detailValue}>
+                {data.protectedRushDates.map(formatStoredDate).join(" - ")}
+              </dd>
+            </div>
+            <div className={styles.detailRow}>
+              <dt className={styles.detailLabel}>Slots</dt>
+              <dd className={styles.detailValue}>
+                {data.protectedRushSlots.map((slot) => slot.display).join(", ")}
+              </dd>
+            </div>
+          </dl>
+        </s-section>
       </s-page>
   );
 }

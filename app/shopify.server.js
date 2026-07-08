@@ -8,7 +8,7 @@ import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prism
 import prisma from "./db.server";
 
 const prismaSessionStorage = new PrismaSessionStorage(prisma, {
-  connectionRetries: 24,
+  connectionRetries: 6,
   connectionRetryIntervalMs: 5000,
 });
 

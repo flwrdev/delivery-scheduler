@@ -7,24 +7,33 @@ const OrderDrawer = lazy(() =>
 );
 import {
   type Order,
+  type CustomAttribute,
+  type BadgeTone,
   toLocalISODate,
   normalizeDateToISO,
+  normalizeTimeSlot,
   formatDeliveryDate,
   formatMoney,
+  DATE_ISO_RE,
+  TIME_SLOT_RE,
   financialStatusTone,
   isUnpaidStatus,
   fulfillmentStatusTone,
   isOpenFulfillmentStatus,
   formatStatusLabel,
+  isHiddenDateTag,
+  isHiddenTag,
   tagDisplayLabel,
   getMeaningfulTags,
   getDeliveryRelativeLabel,
   isDeliveryOverdue,
+  findAttrValue,
   getDeliveryDateValue,
   getDeliveryTimeValue,
   getCustomerName,
   getCity,
   getInstructionValue,
+  getSearchableOrderText,
   getFirstItemImageUrl,
   getFirstItemAltText,
 } from "../lib/order-utils";
@@ -1211,9 +1220,10 @@ function Extension() {
     };
   }, [displayedOrders, dateRefs.todayISO]);
 
-  const { kpiProducts } = useMemo(() => {
+  const { kpiTotalQuantity, kpiProducts } = useMemo(() => {
     if (displayedOrders.length === 0)
-      return { kpiProducts: [] as [string, number][] };
+      return { kpiTotalQuantity: "—", kpiProducts: [] as [string, number][] };
+    let total = 0;
     const productMap = new Map<string, number>();
 
     for (const o of displayedOrders) {
@@ -1221,6 +1231,7 @@ function Extension() {
       const items = o.lineItems?.edges || [];
       for (const item of items) {
         const qty = item.node.quantity || 0;
+        total += qty;
         if (item.node.name) {
           const name = item.node.name;
           productMap.set(name, (productMap.get(name) || 0) + qty);
@@ -1232,6 +1243,7 @@ function Extension() {
       (a, b) => b[1] - a[1],
     );
     return {
+      kpiTotalQuantity: String(total), // F06: always show the real counted total
       kpiProducts: sortedProducts,
     };
   }, [displayedOrders]);

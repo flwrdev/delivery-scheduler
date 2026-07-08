@@ -1,12 +1,19 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
-import { validateDeliverySelection } from "../lib/delivery-availability";
+import {
+  isCartEligibleForMothersDay,
+  isMothersDayRushDate,
+  MOTHERS_DAY_PRODUCT_ERROR_MESSAGE,
+  validateDeliverySelection,
+} from "../lib/delivery-availability";
+import { hydrateSubmittedCartMothersDayItems } from "../services/mothers-day-validation.server";
 import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
 import { authenticate } from "../shopify.server";
 
 interface ValidateDeliveryRequestBody {
   date?: unknown;
   timeSlot?: unknown;
+  items?: unknown;
 }
 
 function stringValue(value: unknown): string {
@@ -100,6 +107,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
       422,
     );
+  }
+
+  if (isMothersDayRushDate(date)) {
+    const validationItems = await hydrateSubmittedCartMothersDayItems(
+      admin,
+      body.items,
+    );
+    if (!isCartEligibleForMothersDay(validationItems)) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: MOTHERS_DAY_PRODUCT_ERROR_MESSAGE,
+          code: "mothers_day_product_ineligible",
+        },
+        422,
+      );
+    }
   }
 
   return jsonResponse({
