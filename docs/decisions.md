@@ -129,3 +129,33 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
    season freeze) — refactor-in-place violates the freeze by definition.
 
 **Status:** Adopted. Phase 0 (tree cleanup + baseline) done 2026-07-08; Phase 1 not yet started.
+
+---
+
+## ADR-9 — Adopt Polaris React for `/app/orders` as a conscious bet against the web-components direction
+
+**Source:** verification log 2026-07-11 (design finalization); [orders-ops-v2-ux.md](./orders-ops-v2-ux.md).
+
+**Context:** The current `/app/orders` page is built on Polaris **web components** (`s-*`) — Shopify's stated go-forward direction for App Home surfaces. The V2 goal is interaction parity with the native Shopify Admin Orders page (saved-view tabs, `IndexFilters`, `IndexTable` with bulk bar, sortable columns). The web-components library has no equivalent of `IndexFilters`/`IndexTable`/`useIndexResourceState` today, and its command-API modal wiring is the root cause of the S1/S2/S6 defect cluster (see [orders-ops-v2-audit.md](./orders-ops-v2-audit.md)).
+
+**Decision:** Rewrite the `/app/orders` presentation layer in Polaris **React** (`@shopify/polaris` v13). This is a deliberate bet AGAINST Shopify's web-components strategic direction, justified by component maturity: the interaction-parity goal is unachievable with the web-components set today.
+
+**Consequence / exit cost:** A future re-migration to web components (if/when they reach feature parity) is bounded to presentation-only work because the loader/action/services/business logic stay frozen and Polaris React types must not leak into `order-utils.ts` or the services. If Shopify sunsets Polaris React for embedded apps before web components reach parity, revisit this decision.
+
+**Status:** Accepted (design locked 2026-07-11; Phase 0 shipped, Phases 1–5 pending).
+
+---
+
+## ADR-10 — Merchant reschedule is an administrative override; ONE shared service defines the reschedule write sequence
+
+**Source:** verification log 2026-07-11 (design finalization); [orders-ops-v2-ux.md §5](./orders-ops-v2-ux.md).
+
+**Context:** Orders Ops V2 Phase 4 makes `/app/orders` the **4th delivery write path** (merchant manual reschedule). The principal-architecture review found two structural problems with the original "reuse the same services" plan: (1) the customer reschedule route (`public.customer-account.reschedule.ts`) actually **inlines** its whole write orchestration — it does NOT call `syncOrderDeliveryMetafields`/`syncOrderDeliveryScheduleTag`, and it does NOT update the legacy mirror metafields (`delivery.date`, `delivery.time_slot`, `sidekick.delivery_date`), leaving them stale after every customer reschedule; (2) `validateDeliverySelection` bundles the cutoff/prep/`maxDays` date-window policy with the data-integrity checks, so reusing the engine as-is would block the merchant path's primary use case (phoned-in too-close reschedules).
+
+**Decision (merchant policy, stated 2026-07-11):** The merchant manual reschedule is an **administrative override** — customer self-service restrictions (`resched` lock, `≥2-days` gate, `FULFILLED` gate, cutoff/prep window) apply ONLY to the Customer Account flow and never bind the merchant. Data-integrity validations (date format, slot exists, blocked dates/slots) stay hard-enforced; slot capacity becomes **warn + explicit confirm override** (the merchant is the final authority on their own capacity). One new shared service `rescheduleOrderDelivery()` (`app/services/reschedule-order-delivery.server.ts`) defines the entire write sequence; the customer route is refactored onto it, and BOTH sources then write the legacy mirrors (fixing the stale-mirror inconsistency).
+
+**Explicitly declined (accepted risks, recorded so they are not re-litigated):** no pre-write race-guard on the merchant op; no `reschedule_history` re-read before append (concurrent customer+merchant writes can lose one history event); no staff actor identity in history events (`source: "merchant"` is the only attribution); no fulfilled-order confirm dialog.
+
+**Consequence:** When Phase 4 ships, api.md §2 gains a 4th write path, the `/app/orders` caveat is removed, and the Customer Account reschedule row changes (mirrors now written). Any future change to a data-integrity validation requires documented reasoning + impact analysis in the docs set **before** implementation.
+
+**Status:** Accepted (design locked 2026-07-11; implementation pending Phase 4).

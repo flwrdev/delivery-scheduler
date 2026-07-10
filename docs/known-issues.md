@@ -14,6 +14,7 @@ Issue tracking for this repo lives in project memory (`project_audit_status.md`)
 
 ## Standing action items
 
+- **Prisma 7 upgrade blocked (2026-07-11).** `@shopify/shopify-app-session-storage-prisma@9.0.1` (latest) still peers `prisma`/`@prisma/client` at `^6.19.0`, so upgrading to Prisma 7.x breaks the dependency chain. Stay on the **6.19.x** line (currently pinned `^6.19.3`) until Shopify publishes a session-storage release that supports Prisma 7 — check `npm view @shopify/shopify-app-session-storage-prisma@latest peerDependencies` before any future Prisma bump. Also: keep the `prisma` CLI in **dependencies**, not devDependencies — Cloud Run's `docker-start` runs `prisma migrate deploy` at container start.
 - **Rotate/revoke the leaked prod Lalamove + Google Maps keys.** From the 2026-07-04 verification-log entry: the keys previously committed to `.env` were deleted from the file but **MUST** be rotated/revoked at their providers. Keep this item open until a human explicitly confirms it is done — do not mark it resolved from the code side, since deletion from `.env` does not invalidate a key already exposed.
 
 ## Known dead-but-functional route (not a bug)

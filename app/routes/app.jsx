@@ -8,11 +8,19 @@ import {
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
+// Polaris React: AppProvider (renamed to avoid clashing with the App Bridge one
+// above) + its i18n bundle + stylesheet. Nested inside the App Bridge provider so
+// /app/orders can use Polaris React components. Both providers coexist.
+import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
+import polarisEnTranslations from "@shopify/polaris/locales/en.json";
+import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import {
   buildEmbeddedAppPath,
   buildEmbeddedBootstrapPath,
 } from "../lib/embedded-route";
 import { authenticate } from "../shopify.server";
+
+export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -48,7 +56,9 @@ export default function App() {
         <Link to={schedulerHref}>Scheduler</Link>
         <Link to={scheduleRulesHref}>Schedule rules</Link>
       </ui-nav-menu>
-      <Outlet />
+      <PolarisAppProvider i18n={polarisEnTranslations}>
+        <Outlet />
+      </PolarisAppProvider>
     </AppProvider>
   );
 }

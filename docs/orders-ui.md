@@ -1,6 +1,13 @@
 # Orders Operations UI — List Page + Order Detail Drawer
 
 > Part of the docs set. Source of truth: [architecture.md](./architecture.md).
+>
+> ⚠️ **Drawer half superseded (Phase 1 shipped 2026-07-11):** the right-side
+> detail surface is now `app/components/orders/OrderDetailsPanel.tsx` (Polaris
+> React, URL-driven via `?order=`) — see
+> [orders-ops-v2-ux.md §4](./orders-ops-v2-ux.md). `OrderDrawer.tsx` is no longer
+> mounted (file deleted at Phase 5). The **list-table half and data-flow half of
+> this doc are still accurate** until Phase 2 rewrites the table.
 
 Frontend map of the embedded admin `/app/orders` surface: which files render the
 order list table and the right-side order detail drawer, where each gets its data,

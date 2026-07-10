@@ -1,9 +1,11 @@
 import { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense } from "react";
 
-// Lazy-loaded: the drawer only mounts when a merchant opens an order, so it
+// Lazy-loaded: the panel only mounts when a merchant opens an order, so it
 // ships as a separate chunk off the initial bundle.
-const OrderDrawer = lazy(() =>
-  import("../components/OrderDrawer").then((m) => ({ default: m.OrderDrawer })),
+const OrderDetailsPanel = lazy(() =>
+  import("../components/orders/OrderDetailsPanel").then((m) => ({
+    default: m.OrderDetailsPanel,
+  })),
 );
 import {
   type Order,
@@ -46,8 +48,48 @@ import { KpiProductsModal } from "../components/orders/KpiProductsModal";
 import { MarkFulfilledModal } from "../components/orders/MarkFulfilledModal";
 import { authenticate } from "../shopify.server";
 import stylesHref from "../styles/orders-dashboard.css?url";
+import panelStylesHref from "../styles/order-details-panel.css?url";
 
-export const links = () => [{ rel: "stylesheet", href: stylesHref }];
+export const links = () => [
+  { rel: "stylesheet", href: stylesHref },
+  { rel: "stylesheet", href: panelStylesHref },
+];
+
+// Opening/closing the details panel only toggles the ?order search param, and
+// the panel reads its order from already-loaded data — skip the loader re-run
+// for that navigation (REC-7). Everything else (filter/tab/cursor changes,
+// post-action revalidation, useRevalidator) keeps the default behavior.
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  formMethod,
+  defaultShouldRevalidate,
+}: {
+  currentUrl: URL;
+  nextUrl: URL;
+  formMethod?: string;
+  defaultShouldRevalidate: boolean;
+}) {
+  if (formMethod && formMethod.toUpperCase() !== "GET") {
+    return defaultShouldRevalidate;
+  }
+  if (
+    currentUrl.pathname !== nextUrl.pathname ||
+    currentUrl.search === nextUrl.search
+  ) {
+    return defaultShouldRevalidate;
+  }
+  const current = new URLSearchParams(currentUrl.search);
+  const next = new URLSearchParams(nextUrl.search);
+  current.delete("order");
+  next.delete("order");
+  current.sort();
+  next.sort();
+  if (current.toString() === next.toString()) {
+    return false;
+  }
+  return defaultShouldRevalidate;
+}
 
 interface PageInfo {
   hasNextPage: boolean;
@@ -83,6 +125,7 @@ const GET_ORDERS_QUERY = `
           cancelledAt
           displayFulfillmentStatus
           displayFinancialStatus
+          statusPageUrl
           tags
           note
           customer {
@@ -142,6 +185,9 @@ const GET_ORDERS_QUERY = `
           rescheduleHistory: metafield(namespace: "delivery", key: "reschedule_history") {
             value
             jsonValue
+          }
+          rescheduleStatus: metafield(namespace: "$app", key: "reschedule_status") {
+            value
           }
           lineItems(first: 10) {
             edges {
@@ -939,15 +985,41 @@ function Extension() {
   // Row selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // Right-side drawer state — store only the ID so the drawer always reflects fresh loader data
-  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-  const selectedOrder = orders.find((o) => o.id === selectedOrderId) ?? null;
+  // Right-side panel state — URL-driven via ?order=<numeric id> (REC-7) so the
+  // open panel deep-links, survives refresh, and persists across revalidation.
+  // The panel still derives its order from fresh loader data by ID.
+  const selectedOrderParam = searchParams.get("order");
+  const selectedOrder = selectedOrderParam
+    ? (orders.find(
+        (o) => (o.id.split("/").pop() || o.id) === selectedOrderParam,
+      ) ?? null)
+    : null;
+
+  // PUSH (not replace) navigations here: App Bridge mirrors pushed history
+  // entries to the outer admin URL, but replace-based ones were observed NOT
+  // to reach the address bar (2026-07-11 smoke test), which broke the ?order=
+  // deep link. Push also means the browser Back button closes the panel.
+  const openOrderPanel = useCallback(
+    (orderId: string) => {
+      const params = new URLSearchParams(searchParams);
+      const numericId = orderId.split("/").pop() || orderId;
+      if (params.get("order") === numericId) return;
+      params.set("order", numericId);
+      navigate(`?${params.toString()}`, { preventScrollReset: true });
+    },
+    [searchParams, navigate],
+  );
+
+  const handleCloseDrawer = useCallback(() => {
+    const params = new URLSearchParams(searchParams);
+    if (!params.has("order")) return;
+    params.delete("order");
+    navigate(`?${params.toString()}`, { preventScrollReset: true });
+  }, [searchParams, navigate]);
 
   // Shared tags modal state — single modal instance reused for all rows
   const [tagsModalOrderId, setTagsModalOrderId] = useState<string | null>(null);
   const [tagsModalTrigger, setTagsModalTrigger] = useState(0);
-
-  const handleCloseDrawer = useCallback(() => setSelectedOrderId(null), []);
 
   const showTagsModal = useCallback((orderId: string) => {
     setTagsModalOrderId(orderId);
@@ -1797,7 +1869,7 @@ function Extension() {
                             <s-button
                               id={`btn-name-${orderId}`}
                               variant="tertiary"
-                              onClick={() => setSelectedOrderId(order.id)}
+                              onClick={() => openOrderPanel(order.id)}
                               accessibilityLabel={`View order ${order.name} details`}
                             >
                               <s-text type="strong">{order.name}</s-text>
@@ -1887,7 +1959,7 @@ function Extension() {
                               <s-button
                                 variant="tertiary"
                                 id={`btn-item-${orderId}`}
-                                onClick={() => setSelectedOrderId(order.id)}
+                                onClick={() => openOrderPanel(order.id)}
                               >
                                 <s-stack
                                   direction="inline"
@@ -1912,7 +1984,7 @@ function Extension() {
                           <s-button
                             variant="tertiary"
                             id={`btn-customer-${orderId}`}
-                            onClick={() => setSelectedOrderId(order.id)}
+                            onClick={() => openOrderPanel(order.id)}
                           >
                             <s-stack direction="block" gap="small-100">
                               <s-text type="strong">{customerName}</s-text>
@@ -2037,10 +2109,10 @@ function Extension() {
       </div>
       {/* end ods-tabs-table */}
 
-      {/* ── Right-side order detail drawer ──────────────────────────────────── */}
+      {/* ── Right-side order details panel (URL-driven, ?order=) ───────────── */}
       {selectedOrder && (
         <Suspense fallback={null}>
-          <OrderDrawer
+          <OrderDetailsPanel
             order={selectedOrder}
             onClose={handleCloseDrawer}
           />

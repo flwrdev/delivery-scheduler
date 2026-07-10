@@ -2,45 +2,20 @@
 
 /* Orders Operations Dashboard — route-scoped styles (ods- prefix) */
 
-/* ── Design System tokens (design-system.md §1) ───────────────────────────── */
+/* ── Design System tokens (design-system.md §1) ───────────────────────────────
+   Phase 1 (Orders Ops V2, REC-10): the --p-* Polaris token REDEFINITIONS that
+   used to live here were removed — Polaris React now owns every --p-* value,
+   and redefining them globally fought the real tokens the new panel consumes.
+   var(--p-*, fallback) CONSUMERS below are untouched: they now resolve to the
+   genuine Polaris value when defined, else their inline fallback. Only the
+   non-Polaris --font-weight-* custom props remain (rest of this file is pruned
+   at Phase 5). */
 :root {
-  /* Core palette & UI states */
-  --p-color-text-muted: rgb(48, 48, 48); /* Primary body text color */
-  --p-color-interactive-primary: rgb(227, 227, 227); /* Scrollbar / line accents */
-  --p-color-interactive-1: rgb(255, 255, 255); /* Core surface layers */
-  --p-color-interactive-2: rgb(48, 48, 48); /* Bold interactive details */
-
-  /* Table row & container interactivity */
-  --p-color-bg-surface-secondary: #f7f7f7; /* Table header default bg */
-  --p-color-bg-surface-secondary-hover: #f1f1f1; /* Row hover */
-  --p-color-bg-surface-secondary-active: #ebebeb; /* Active / selected row */
-
-  /* Contextual status fills & accents */
-  --p-color-bg-fill-success-secondary: #affebf; /* Fulfilled badge surface */
-  --p-color-bg-fill-critical-secondary: #fed1d7; /* Unfulfilled badge surface */
-  --p-color-text-critical-secondary: #c70a24; /* Unfulfilled typography */
-  --p-color-bg-fill-info-secondary: #d5ebff; /* Generic helper elements */
-  --p-color-text-inverse-secondary: #b5b5b5; /* Scrollbar hover */
-  --p-color-text-warning-secondary: #956f00; /* Payment pending typography */
-
   /* Typography scale (weights) */
   --font-weight-regular: 400; /* Light layout copy */
   --font-weight-medium-light: 450; /* Primary body text & list nodes */
   --font-weight-semibold: 550; /* Headers, metadata descriptors */
   --font-weight-bold: 600; /* Title assets & numeric totals */
-
-  /* Map Polaris weight aliases to the design-system scale (value-only remap) */
-  --p-font-weight-regular: var(--font-weight-regular);
-  --p-font-weight-medium: var(--font-weight-medium-light);
-  --p-font-weight-semibold: var(--font-weight-semibold);
-  --p-font-weight-bold: var(--font-weight-bold);
-
-  /* Spacing scale */
-  --p-space-100: 4px;
-  --p-space-200: 8px;
-  --p-space-300: 12px;
-  --p-space-400: 14px;
-  --p-space-500: 20px;
 }
 
 #orders-dashboard-page,
