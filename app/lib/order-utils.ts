@@ -70,11 +70,13 @@ export interface Order {
   displayFinancialStatus: string;
   tags: string[];
   customer: Customer | null;
+  statusPageUrl?: string | null;
   deliveryDate: Metafield | null;
   deliveryTimeSlot: Metafield | null;
   customDate: Metafield | null;
   customTimeSlot: Metafield | null;
   rescheduleHistory: Metafield | null;
+  rescheduleStatus?: Metafield | null;
   shippingAddress: ShippingAddress | null;
   billingAddress: BillingAddress | null;
   note: string | null;
@@ -412,6 +414,9 @@ export type RescheduleTimelineEvent = {
   timeSlot: string;
   requestedAt: string;
   status: string;
+  fromDate: string;
+  fromTimeSlot: string;
+  source: string;
 };
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
@@ -481,6 +486,14 @@ export function getRescheduleTimelineEvents(order: Order): RescheduleTimelineEve
           "updatedAt",
         ),
         status: getStringField(event, "status", "rescheduleStatus"),
+        fromDate: getStringField(event, "fromDate", "from_date", "previousDate"),
+        fromTimeSlot: getStringField(
+          event,
+          "fromTimeSlot",
+          "from_time_slot",
+          "previousTimeSlot",
+        ),
+        source: getStringField(event, "source"),
       };
 
       if (
@@ -539,4 +552,28 @@ export function formatTimelineTimestamp(value: string): string {
 
 export function formatTimelineStatus(value: string): string {
   return value === "—" ? "Status not recorded" : formatStatusLabel(value);
+}
+
+// ─── Derived delivery status (panel display) ──────────────────────────────────
+
+export type DeliveryStatus = {
+  label: "Fulfilled" | "Rescheduled" | "Scheduled" | "—";
+  tone: BadgeTone;
+};
+
+export function getDeliveryStatus(order: Order): DeliveryStatus {
+  if ((order.displayFulfillmentStatus || "").toUpperCase() === "FULFILLED") {
+    return { label: "Fulfilled", tone: "neutral" };
+  }
+  const wasRescheduled =
+    hasRescheduleTag(order) ||
+    Boolean(order.rescheduleStatus?.value?.trim()) ||
+    getRescheduleTimelineEvents(order).length > 0;
+  if (wasRescheduled) {
+    return { label: "Rescheduled", tone: "info" };
+  }
+  if (getDeliveryDateValue(order) !== "—") {
+    return { label: "Scheduled", tone: "success" };
+  }
+  return { label: "—", tone: "neutral" };
 }

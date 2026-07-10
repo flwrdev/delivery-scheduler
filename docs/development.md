@@ -23,6 +23,30 @@ npx prisma studio          # inspect Postgres data locally
 
 ## Testing notes
 
+> ⚠️ **Embedded-admin smoke tests ALWAYS hit the deployed Cloud Run build, not
+> your working tree (verified live 2026-07-11).** `shopify.app.toml` sets
+> `automatically_update_urls_on_dev = false`, and the SAME app (client_id
+> `a9127e5f…`, handle `delivery-scheduler-11`) is installed on both the
+> production store (`hsrwva-nr`) and the dev store (`flowercart-dev`). So even
+> with `npm run dev` running, opening the app in EITHER store's admin — via the
+> sidebar, a direct URL, or the dev-console "Web" preview link — loads the
+> registered `application_url` (Cloud Run) in the `app-iframe`, i.e. the last
+> DEPLOYED build. Do not flip `automatically_update_urls_on_dev` to `true` on
+> this config: it would repoint the production app's URL at your tunnel while
+> dev runs. To smoke-test app-home changes you must either (a) deploy to Cloud
+> Run first, or (b) run dev against the SEPARATE dev app. See the
+> 2026-07-11 verification-log rows.
+>
+> **Option (b) exists since 2026-07-11:** `shopify.app.delivery-scheduler-dev.toml`
+> (name `delivery-scheduler-DEV`, own client_id `51f7d1b7…`, installed on the
+> dev store `flowercart-dev` only). Run
+> `npm run dev -- --config delivery-scheduler-dev` and open the app in the
+> flowercart-dev admin — the iframe then serves your working tree from the
+> tunnel (`automatically_update_urls_on_dev = true` is safe on THAT config
+> because it is a distinct app). Caveat: the dev app's webhook
+> `api_version` is `2026-10` (prod pins `2026-04`) — fine for app-home smoke
+> tests, but don't use the dev app for webhook-parity testing.
+
 Vitest is configured standalone (`vitest.config.ts`) — Node environment by default, no react-router plugin loaded, so server-helper unit tests run fast. Add `// @vitest-environment jsdom` per-file for component tests. Only files under `test/**/*.test.{ts,tsx}` are picked up; Playwright e2e specs live in `e2e/` and are excluded from the vitest run — they're invoked separately (`npx playwright test --config e2e/playwright.config.ts`).
 
 > The former "duplicated e2e locations" TODO is resolved: `test/e2e/` and `tests/e2e/` no longer exist on disk (verified 2026-07-08) — `e2e/` is the single location. A leftover of that move (a stale `../../app/db.server.js` import in `e2e/helpers.ts`) was fixed the same day.

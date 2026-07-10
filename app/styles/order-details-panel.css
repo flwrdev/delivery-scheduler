@@ -1,0 +1,199 @@
+/* Order Details Panel (odp-) — thin right-docked overlay consuming Polaris
+   tokens. This is deliberately NOT a design system: layout + chrome only;
+   all typography/badges/buttons inside come from Polaris React components. */
+
+.odp-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 99;
+}
+
+.odp-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(480px, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--p-color-bg-surface, #fff);
+  box-shadow: var(--p-shadow-600, -4px 0 32px rgba(0, 0, 0, 0.18));
+  z-index: 100;
+  outline: none;
+  animation: odp-slide-in 0.18s ease-out;
+}
+
+@keyframes odp-slide-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .odp-panel {
+    animation: none;
+  }
+}
+
+.odp-head {
+  padding: var(--p-space-400, 16px) var(--p-space-500, 20px)
+    var(--p-space-300, 12px);
+  border-bottom: 1px solid var(--p-color-border, #e1e3e5);
+  flex: 0 0 auto;
+}
+
+.odp-close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--p-border-radius-200, 8px);
+  font-size: 18px;
+  line-height: 1;
+  color: var(--p-color-text-secondary, #6d7175);
+  cursor: pointer;
+}
+
+.odp-close:hover {
+  background: var(--p-color-bg-surface-hover, #f6f6f7);
+  color: var(--p-color-text, #202223);
+}
+
+.odp-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--p-space-400, 16px) var(--p-space-500, 20px)
+    var(--p-space-800, 32px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--p-space-400, 16px);
+}
+
+/* Label/value rows */
+.odp-dl {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: var(--p-space-150, 6px) var(--p-space-300, 12px);
+  margin: 0;
+  align-items: baseline;
+}
+
+.odp-dt {
+  margin: 0;
+}
+
+.odp-dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.odp-dd--scrollable {
+  max-height: 96px;
+  overflow-y: auto;
+}
+
+/* Copyable values */
+.odp-copyable {
+  cursor: pointer;
+  border-radius: var(--p-border-radius-100, 4px);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--p-space-100, 4px);
+}
+
+.odp-copyable:hover {
+  background: var(--p-color-bg-surface-hover, #f6f6f7);
+}
+
+.odp-copyable--copied {
+  background: var(--p-color-bg-fill-success-secondary, #cdfee1);
+}
+
+/* Timeline */
+.odp-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--p-space-300, 12px);
+}
+
+.odp-timeline-item {
+  position: relative;
+  padding-left: var(--p-space-500, 20px);
+}
+
+.odp-timeline-item::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--p-color-border, #c9cccf);
+}
+
+.odp-timeline-item--current::before {
+  background: var(--p-color-text-success, #29845a);
+}
+
+/* Items */
+.odp-item-row {
+  display: flex;
+  align-items: center;
+  gap: var(--p-space-300, 12px);
+  padding: var(--p-space-200, 8px) 0;
+  border-bottom: 1px solid var(--p-color-border-secondary, #ebebeb);
+}
+
+.odp-item-row:last-of-type {
+  border-bottom: none;
+}
+
+.odp-item-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: var(--p-border-radius-200, 8px);
+  border: 1px solid var(--p-color-border, #e1e3e5);
+  flex: 0 0 auto;
+}
+
+.odp-item-thumb-placeholder {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--p-border-radius-200, 8px);
+  border: 1px solid var(--p-color-border, #e1e3e5);
+  background: var(--p-color-bg-surface-secondary, #f7f7f7);
+  flex: 0 0 auto;
+}
+
+.odp-item-info {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.odp-totals {
+  margin-top: var(--p-space-300, 12px);
+  border-top: 1px solid var(--p-color-border, #e1e3e5);
+  padding-top: var(--p-space-300, 12px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--p-space-100, 4px);
+}
+
+.odp-totals-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
