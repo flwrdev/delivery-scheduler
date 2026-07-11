@@ -1,41 +1,43 @@
-// "Items to prepare" modal, opened declaratively by the Orders KPI card
-// button (commandFor="modal-kpi-products"). JSX moved verbatim from
-// app.orders.tsx Extension(); id unchanged so the trigger keeps working.
+import { BlockStack, InlineStack, Modal, Text } from "@shopify/polaris";
+
+// "Items to prepare" modal, opened from the Orders KPI card (Polaris React).
+// Visibility is controlled by the parent via `open`/`onClose`.
 export interface KpiProductsModalProps {
+  open: boolean;
+  onClose: () => void;
   kpiProducts: [string, number][];
 }
 
-export function KpiProductsModal({ kpiProducts }: KpiProductsModalProps) {
+export function KpiProductsModal({
+  open,
+  onClose,
+  kpiProducts,
+}: KpiProductsModalProps) {
   return (
-    <s-modal id="modal-kpi-products" heading="Items to prepare" size="small">
-      <s-box padding="base">
-        <s-stack direction="block" gap="small">
-          {kpiProducts.length === 0 ? (
-            <s-text color="subdued">No products found.</s-text>
-          ) : (
-            <s-stack direction="block" gap="small-100">
-              {kpiProducts.map(([name, qty], idx) => (
-                <s-stack
-                  key={idx}
-                  direction="inline"
-                  justifyContent="space-between"
-                  alignItems="center"
-                >
-                  <s-text>{name}</s-text>
-                  <s-text type="strong">× {qty}</s-text>
-                </s-stack>
-              ))}
-            </s-stack>
-          )}
-        </s-stack>
-      </s-box>
-      <s-button
-        slot="primary-action"
-        commandFor="modal-kpi-products"
-        command="--hide"
-      >
-        Close
-      </s-button>
-    </s-modal>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Items to prepare"
+      primaryAction={{ content: "Close", onAction: onClose }}
+    >
+      <Modal.Section>
+        {kpiProducts.length === 0 ? (
+          <Text as="p" tone="subdued">
+            No products found.
+          </Text>
+        ) : (
+          <BlockStack gap="150">
+            {kpiProducts.map(([name, qty]) => (
+              <InlineStack key={name} align="space-between" blockAlign="center">
+                <Text as="span">{name}</Text>
+                <Text as="span" fontWeight="semibold">
+                  × {qty}
+                </Text>
+              </InlineStack>
+            ))}
+          </BlockStack>
+        )}
+      </Modal.Section>
+    </Modal>
   );
 }

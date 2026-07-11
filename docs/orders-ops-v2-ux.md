@@ -442,10 +442,38 @@ app/styles/orders-dashboard.css             [SHRINK Phase 1: prune --p-* token o
   `--p-*` Polaris token overrides from `orders-dashboard.css` (REC-10)** — the
   `var(--p-*, fallback)` consumers stay; rest of the file cleanup stays in
   Phase 5. `OrderDrawer.tsx` remains on disk (unmounted) until Phase 5.
-- **Phase 2** — Table → `IndexFilters` + `IndexTable`; `useIndexResourceState`;
-  saved views/search/filters/sort/pagination/bulk bar; KPI band re-skin. Modals →
-  Polaris `Modal`. **Fixes the presentation-layer smoke-test issues** (auto-close,
-  success/error confirmation, modal-stays-open, badge refresh — see audit doc).
+- **Phase 2 — DONE 2026-07-11, live-verified same day** (full merchant smoke
+  checklist passed on the dev app after the round-2 fixes — tabs, filters,
+  sort, search, bulk actions, panel refresh persistence all ✅; audit
+  S1/S2/S4/S5/S6 + E1/E2 closed) —
+  Table → `IndexFilters` + `IndexTable` (new
+  `app/components/orders/OrdersIndexTable.tsx`); `useIndexResourceState` replaces
+  the manual `selectedIds` Set; tabs/search/filters/pagination all keep the same
+  URL params; bulk bar = IndexTable `promotedBulkActions`
+  (Mark as fulfilled · Add tags · Remove tags) + `bulkActions`
+  (Archive · Unarchive · Cancel). All eight modals → Polaris `Modal` with React
+  open state in `useBulkActions` (`activeModal`) — **fixes the
+  presentation-layer smoke-test issues S1/S2/S5/S6 + B1/B2** (auto-close on
+  success, toast visible, single trigger pattern). Remove-tags modal gained
+  clickable suggestions from the selected orders' tags (audit S4, client-side
+  only). KPI band re-skinned as Polaris Cards with the "· this page" scope label
+  (REC-8). New `sort` URL param + `$reverse` query variable (MCP-validated, no
+  new scopes): Order date asc/desc is server-side; Delivery date asc/desc is
+  client-side on the loaded page (the Admin API has no metafield sort key —
+  documented deviation from the §2 parenthetical). Deleted dead
+  `app/lib/get-safe-event-value.ts` (audit C3, zero importers after the
+  rewrite). "Update delivery slot"/"Reschedule" bulk actions arrive at Phase 4.
+  **No write-path change** — the action handler, mutations, and loader contract
+  are untouched apart from the additive `sort`/`reverse` read behavior.
+  **Round-2 fixes (same day, after the merchant smoke test; re-test PASSED
+  same day):** all delivery-date/time-slot filtering (Today/Tomorrow
+  tabs + both toolbar filters) moved **client-side** — Shopify silently
+  ignores metafield search terms on orders (audit E1; they never filtered,
+  even in production); view tabs moved out of IndexFilters into a plain
+  deterministic button row + `disableStickyMode` (audit E2 — the Polaris Tabs
+  collapse behind the reported "phantom tab=unpaid" and the panel-refresh
+  failure); date filter commits only complete sane dates; search ✕ clears
+  immediately.
 - **Phase 3** — `useSmartRefresh` + `useOrdersDiff`: interval cadence, pause rules,
   delayed re-poll after fulfillment actions (REC-6), state-preserving revalidate,
   "Last updated" + new-order nudge (§6).

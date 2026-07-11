@@ -1,9 +1,10 @@
-import { getSafeEventValue } from "../../lib/get-safe-event-value";
+import { BlockStack, Modal, Text, TextField } from "@shopify/polaris";
 
-// Bulk "Add tags" modal. JSX moved verbatim from app.orders.tsx Extension();
-// keeps its document-wide id ("modal-add-tags") so the bulk-menu commandFor
-// trigger and useBulkActions hideModal() keep working unchanged.
+// Bulk "Add tags" modal (Polaris React). Visibility is controlled by the
+// parent via `open`/`onClose`.
 export interface AddTagsModalProps {
+  open: boolean;
+  onClose: () => void;
   selectedCount: number;
   isSubmitting: boolean;
   addTagsInput: string;
@@ -12,6 +13,8 @@ export interface AddTagsModalProps {
 }
 
 export function AddTagsModal({
+  open,
+  onClose,
   selectedCount,
   isSubmitting,
   addTagsInput,
@@ -19,43 +22,35 @@ export function AddTagsModal({
   onConfirm,
 }: AddTagsModalProps) {
   return (
-    <s-modal
-      id="modal-add-tags"
-      heading="Add tags to selected orders"
-      size="small"
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Add tags to selected orders"
+      primaryAction={{
+        content: isSubmitting ? "Adding…" : "Add tags",
+        onAction: onConfirm,
+        loading: isSubmitting,
+        disabled: isSubmitting || !addTagsInput.trim() || selectedCount === 0,
+      }}
+      secondaryActions={[
+        { content: "Cancel", onAction: onClose, disabled: isSubmitting },
+      ]}
     >
-      <s-box padding="base">
-        <s-stack direction="block" gap="base">
-          <s-text>
+      <Modal.Section>
+        <BlockStack gap="400">
+          <Text as="p">
             Add the tags below to {selectedCount}{" "}
             {selectedCount === 1 ? "order" : "orders"}.
-          </s-text>
-          <s-text-field
-            id="add-tags-input"
+          </Text>
+          <TextField
             label="Tags (comma-separated)"
             placeholder="e.g. priority, vip, holiday"
             value={addTagsInput}
-            onInput={(e: Event) => setAddTagsInput(getSafeEventValue(e))}
-            onChange={(e: Event) => setAddTagsInput(getSafeEventValue(e))}
+            onChange={setAddTagsInput}
+            autoComplete="off"
           />
-        </s-stack>
-      </s-box>
-      <s-button
-        slot="secondary-actions"
-        commandFor="modal-add-tags"
-        command="--hide"
-        disabled={isSubmitting}
-      >
-        Cancel
-      </s-button>
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        disabled={isSubmitting || !addTagsInput.trim() || selectedCount === 0}
-        onClick={onConfirm}
-      >
-        {isSubmitting ? "Adding…" : "Add tags"}
-      </s-button>
-    </s-modal>
+        </BlockStack>
+      </Modal.Section>
+    </Modal>
   );
 }

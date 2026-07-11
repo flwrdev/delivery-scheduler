@@ -2,8 +2,22 @@
 
 > Part of the docs set. Source of truth: [architecture.md](./architecture.md).
 > Companion to [orders-ops-v2-ux.md](./orders-ops-v2-ux.md) (Phase A baseline).
-> **Status: IN PROGRESS.** Findings + root cause first; **no business-logic change
-> until a finding is explicitly approved.**
+> **Status: Phase 2 findings CLOSED (live-verified 2026-07-11).** Findings +
+> root cause first; **no business-logic change until a finding is explicitly
+> approved.**
+>
+> **Phase 2 shipped 2026-07-11 and live-verified the same day** (merchant
+> smoke test round 1 + round-2 fixes + full re-test PASSED on the dev app):
+> the mixed modal open/close mechanism behind **S1/S2/S5/S6 + B1/B2** is gone —
+> all modals are Polaris React `Modal`s whose visibility is React state
+> (`activeModal` in `useBulkActions`), closed on fetcher success by a plain
+> setState — **confirmed live: every bulk action auto-closes its modal and
+> shows a toast → S1/S2/S5/S6 + B1/B2 CLOSED.** **S4 CLOSED** (Remove-tags
+> clickable suggestions confirmed working live). **C3** resolved:
+> `get-safe-event-value.ts` deleted (zero importers after the React rewrite).
+> **E1/E2 CLOSED** (round-2 fixes re-tested live — see §E). Still open:
+> **S3** (badge refresh) needs the §6 delayed re-poll (Phase 3) + a live
+> repro; **S7** (bulk mark-fulfilled) remains repro-needed.
 
 Purpose: use the current `/app/orders` implementation as a baseline but **do not
 assume its behavior is correct**. Reproduce the reported smoke-test issues, find the
@@ -50,12 +64,12 @@ fires on manual click, not on action success.
 
 | # | Reported symptom | Status | Root cause (verified) | Handling |
 | --- | --- | --- | --- | --- |
-| S1 | Archive bulk action "not working" | **Repro-needed** | The archive modal **does** render correctly (`ArchiveModal.tsx:18`, real `id="modal-archive-orders"`, confirm → `submitBulk("archive")` → `ORDER_CLOSE_MUTATION`). So the write path is wired. The likely "not working" is the **imperative `showModal()` open path** (useBulkActions.ts:75): if the s-modal doesn't expose `.show()`, the `setAttribute("open")` fallback may not open a command-driven modal — so the confirm dialog never appears and the merchant perceives "archive does nothing." **The agent's claim that the modal has no trigger is WRONG** — it has an `onClick` trigger; the bug is the trigger *mechanism*, not a missing one. **[rewrite-fixes]** | Phase 2 |
-| S2 | Cancel modal doesn't auto-close | **Confirmed** | Mixed open/close mechanism above. Cancel opens via `commandFor="--show"`; success calls `hideModal("modal-cancel-orders")` → `removeAttribute("open")`, a no-op against a command-shown modal. **[rewrite-fixes]** | Phase 2 |
+| S1 | Archive bulk action "not working" | **Repro-needed** | The archive modal **does** render correctly (`ArchiveModal.tsx:18`, real `id="modal-archive-orders"`, confirm → `submitBulk("archive")` → `ORDER_CLOSE_MUTATION`). So the write path is wired. The likely "not working" is the **imperative `showModal()` open path** (useBulkActions.ts:75): if the s-modal doesn't expose `.show()`, the `setAttribute("open")` fallback may not open a command-driven modal — so the confirm dialog never appears and the merchant perceives "archive does nothing." **The agent's claim that the modal has no trigger is WRONG** — it has an `onClick` trigger; the bug is the trigger *mechanism*, not a missing one. **[rewrite-fixes]** | ✅ CLOSED (Phase 2, live-verified 2026-07-11) |
+| S2 | Cancel modal doesn't auto-close | **Confirmed** | Mixed open/close mechanism above. Cancel opens via `commandFor="--show"`; success calls `hideModal("modal-cancel-orders")` → `removeAttribute("open")`, a no-op against a command-shown modal. **[rewrite-fixes]** | ✅ CLOSED (Phase 2, live-verified 2026-07-11) |
 | S3 | Fulfillment badge doesn't refresh | **Repro-needed** (downgraded from "Confirmed" 2026-07-11, REC-6) | Original root-cause claim **withdrawn**: React Router's default behavior IS to revalidate all active loaders after a `fetcher.submit` action completes, and no `shouldRevalidate` export exists anywhere in `app/` to opt out — so "the route doesn't auto-revalidate" contradicts framework behavior. More likely mechanism: **Shopify eventual consistency** — `fulfillmentCreate` is processed asynchronously, so even an immediate post-action re-query can return a stale `displayFulfillmentStatus`. Fix = §6 immediate revalidate **plus a ~3s delayed re-poll** after fulfillment-type actions (approved). Needs one live repro to confirm the mechanism. **[logic-bug-adjacent]** — presentation/data-sync, no service change. | Phase 2 + §6 |
-| S4 | Remove-tag has no autocomplete | **Confirmed** | `RemoveTagsModal` renders a plain `s-text-field` (comma-separated free text); no datalist / suggestion source of the selected orders' existing tags. It's a **missing feature**, not a regression. **[logic-bug]** (new UI feature — needs explicit approval; adds a client-side tag set from loaded orders, no server change). | Phase 2 (approved add-on) |
-| S5 | No success/error confirmation | **Repro-needed** | The toast effect (useBulkActions.ts:131–184) DOES fire on a well-formed `fetcher.data`. It shows nothing only when `fetcher.data` is undefined (action threw before responding) or the response is malformed. Also: **for the Archive/Cancel/etc. modals, if the modal never closes (S2/S6), the toast is emitted but visually competes with the stuck modal**, so the merchant reports "no confirmation." Likely a *perception* of S2/S6 rather than a separate bug. **[rewrite-fixes]** (+ defensive null-check). | Phase 2 |
-| S6 | Modals stay open after success | **Confirmed** | Same mixed open/close root cause as S2 — applies to all modals closed via `hideModal()` on success. **[rewrite-fixes]** | Phase 2 |
+| S4 | Remove-tag has no autocomplete | **Confirmed** | `RemoveTagsModal` renders a plain `s-text-field` (comma-separated free text); no datalist / suggestion source of the selected orders' existing tags. It's a **missing feature**, not a regression. **[logic-bug]** (new UI feature — needs explicit approval; adds a client-side tag set from loaded orders, no server change). | ✅ CLOSED (Phase 2 approved add-on, live-verified 2026-07-11) |
+| S5 | No success/error confirmation | **Repro-needed** | The toast effect (useBulkActions.ts:131–184) DOES fire on a well-formed `fetcher.data`. It shows nothing only when `fetcher.data` is undefined (action threw before responding) or the response is malformed. Also: **for the Archive/Cancel/etc. modals, if the modal never closes (S2/S6), the toast is emitted but visually competes with the stuck modal**, so the merchant reports "no confirmation." Likely a *perception* of S2/S6 rather than a separate bug. **[rewrite-fixes]** (+ defensive null-check). | ✅ CLOSED (Phase 2, live-verified 2026-07-11 — toasts confirmed on every bulk action) |
+| S6 | Modals stay open after success | **Confirmed** | Same mixed open/close root cause as S2 — applies to all modals closed via `hideModal()` on success. **[rewrite-fixes]** | ✅ CLOSED (Phase 2, live-verified 2026-07-11 — modals auto-close on success) |
 | S7 | Bulk mark-fulfilled fails for all-valid orders | **Repro-needed** | Two candidate causes in `markFulfilled` (app.orders.tsx:704–865): (a) **atomic batch failure** — if the batch fulfillment-order query hits a scope/permission error, `batchQueryFailed=true` skips *all* fulfillment creation incl. valid orders (all-or-nothing, :778–799, :802); (b) **`CREATE_FULFILLMENT` filter** (:790–795) — an order whose fulfillment orders don't list that supported action yields "No fulfillable items remaining," which reads as a failure for an order the merchant considers valid. Most probable for "all valid orders fail": a **missing `write_…_fulfillment_orders` scope** → `scopeHint` path. Needs one live repro to pick (a) vs (b). **[logic-bug]** if it's the atomicity/scope path. | audit → Phase 2/4 |
 
 ## B. Additional findings (discovered during audit)
@@ -95,6 +109,32 @@ renders a real `s-modal id="modal-archive-orders"` and the confirm button wires 
 `submitBulk("archive")` → `ORDER_CLOSE_MUTATION`. The archive **write path is
 intact**; any failure is in the imperative *open* mechanism (S1), not a missing
 trigger. Root causes in §A supersede the automated pass where they differ.
+
+## E. Round-2 findings (Phase 2 smoke test, 2026-07-11)
+
+- **E1 — Orders metafield search silently ignored.** The loader's
+  `metafields.custom.date` / `metafields.custom.time_slot` query terms were
+  dropped by Shopify (metafield search on orders requires a
+  filterable-indexed definition), so the Today/Tomorrow tabs and both toolbar
+  filters **never filtered — in production either**. Confirmed by live repro
+  (applied time-slot filter returned every order). **[logic-bug] ✅ CLOSED —
+  FIXED 2026-07-11, merchant re-test PASSED same day** (Today/Tomorrow tabs
+  and both toolbar filters confirmed narrowing the list correctly): all
+  metafield-based filtering is client-side over an enlarged page (250 rows);
+  server terms removed. Future option: enable the filterable capability on
+  the two definitions and move it back server-side.
+- **E2 — Polaris Tabs unusable inside the embedded iframe.** `IndexFilters`'
+  Tabs measure their container to decide which tabs fit; in the app iframe the
+  measurement raced and collapsed every non-selected tab into the "More views"
+  disclosure while earlier paints showed non-interactive label copies — tab
+  clicks did nothing, so a selected view (`?tab=unpaid` via the KPI card)
+  could never be left (the reported "phantom tab=unpaid", which also broke
+  panel-refresh persistence). IndexFilters' sticky mode (IntersectionObserver
+  + fixed band) also misfires in the iframe. **[rewrite-fixes] ✅ CLOSED —
+  FIXED 2026-07-11, merchant re-test PASSED same day** (all view tabs
+  clickable with a real mouse, stuck params clear on tab change, panel
+  survives refresh): view tabs are a plain Polaris Button row outside
+  IndexFilters (`tabs={[]}`), and `disableStickyMode` is set.
 
 ---
 

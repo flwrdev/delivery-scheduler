@@ -1,10 +1,19 @@
-import { getSafeEventValue } from "../../lib/get-safe-event-value";
+import {
+  Banner,
+  BlockStack,
+  Checkbox,
+  Modal,
+  Select,
+  Text,
+  TextField,
+} from "@shopify/polaris";
 
-// Bulk "Cancel selected orders" confirmation modal. JSX moved verbatim from
-// app.orders.tsx Extension(); the modal keeps its document-wide id
-// ("modal-cancel-orders") so existing commandFor triggers and the
-// useBulkActions hideModal() call keep working unchanged.
+// Bulk "Cancel selected orders" confirmation modal (Polaris React).
+// Visibility is controlled by the parent via `open`/`onClose` — closing on
+// action success is plain React state in useBulkActions (fixes audit S2).
 export interface CancelModalProps {
+  open: boolean;
+  onClose: () => void;
   selectedCount: number;
   isSubmitting: boolean;
   cancelReason: string;
@@ -18,7 +27,18 @@ export interface CancelModalProps {
   onConfirm: () => void;
 }
 
+const CANCEL_REASON_OPTIONS = [
+  { label: "Customer request", value: "CUSTOMER" },
+  { label: "Insufficient inventory", value: "INVENTORY" },
+  { label: "Payment declined", value: "DECLINED" },
+  { label: "Fraud", value: "FRAUD" },
+  { label: "Staff error", value: "STAFF" },
+  { label: "Other", value: "OTHER" },
+];
+
 export function CancelModal({
+  open,
+  onClose,
   selectedCount,
   isSubmitting,
   cancelReason,
@@ -32,74 +52,57 @@ export function CancelModal({
   onConfirm,
 }: CancelModalProps) {
   return (
-    <s-modal
-      id="modal-cancel-orders"
-      heading="Cancel selected orders?"
-      size="small"
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Cancel selected orders?"
+      primaryAction={{
+        content: isSubmitting
+          ? "Cancelling…"
+          : `Cancel ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`,
+        onAction: onConfirm,
+        destructive: true,
+        loading: isSubmitting,
+        disabled: isSubmitting || selectedCount === 0,
+      }}
+      secondaryActions={[
+        { content: "Keep them", onAction: onClose, disabled: isSubmitting },
+      ]}
     >
-      <s-box padding="base">
-        <s-stack direction="block" gap="base">
-          <s-banner tone="critical">
-            <s-paragraph>
+      <Modal.Section>
+        <BlockStack gap="400">
+          <Banner tone="critical">
+            <Text as="p">
               {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
               be cancelled. Cancellation is irreversible.
-            </s-paragraph>
-          </s-banner>
-          <s-select
-            id="cancel-reason"
+            </Text>
+          </Banner>
+          <Select
             label="Cancellation reason"
+            options={CANCEL_REASON_OPTIONS}
             value={cancelReason}
-            onChange={(e: Event) => setCancelReason(getSafeEventValue(e))}
-          >
-            <s-option value="CUSTOMER">Customer request</s-option>
-            <s-option value="INVENTORY">Insufficient inventory</s-option>
-            <s-option value="DECLINED">Payment declined</s-option>
-            <s-option value="FRAUD">Fraud</s-option>
-            <s-option value="STAFF">Staff error</s-option>
-            <s-option value="OTHER">Other</s-option>
-          </s-select>
-          <s-checkbox
+            onChange={setCancelReason}
+          />
+          <Checkbox
             label="Restock inventory committed to these orders"
             checked={cancelRestock}
-            onChange={(e: Event) =>
-              setCancelRestock((e.currentTarget as HTMLInputElement).checked)
-            }
+            onChange={setCancelRestock}
           />
-          <s-checkbox
+          <Checkbox
             label="Notify customers by email"
             checked={cancelNotify}
-            onChange={(e: Event) =>
-              setCancelNotify((e.currentTarget as HTMLInputElement).checked)
-            }
+            onChange={setCancelNotify}
           />
-          <s-text-field
-            id="cancel-staff-note"
-            label="Staff note (optional, internal only — max 255 chars)"
+          <TextField
+            label="Staff note (optional, internal only)"
             value={cancelStaffNote}
-            onInput={(e: Event) => setCancelStaffNote(getSafeEventValue(e))}
-            onChange={(e: Event) => setCancelStaffNote(getSafeEventValue(e))}
+            onChange={setCancelStaffNote}
+            maxLength={255}
+            showCharacterCount
+            autoComplete="off"
           />
-        </s-stack>
-      </s-box>
-      <s-button
-        slot="secondary-actions"
-        commandFor="modal-cancel-orders"
-        command="--hide"
-        disabled={isSubmitting}
-      >
-        Keep them
-      </s-button>
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        tone="critical"
-        disabled={isSubmitting || selectedCount === 0}
-        onClick={onConfirm}
-      >
-        {isSubmitting
-          ? "Cancelling…"
-          : `Cancel ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
-      </s-button>
-    </s-modal>
+        </BlockStack>
+      </Modal.Section>
+    </Modal>
   );
 }
