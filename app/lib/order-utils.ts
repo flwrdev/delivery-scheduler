@@ -363,7 +363,7 @@ export function getInstructionValue(order: Order): string {
 
 /**
  * Retrieves a custom attribute value by key, returning "—" if not found.
- * Thin wrapper over findAttrValue for OrderDrawer display fields.
+ * Used by the OrderDetailsPanel display fields.
  */
 export function getAttr(attrs: CustomAttribute[], ...keys: string[]): string {
   for (const key of keys) {

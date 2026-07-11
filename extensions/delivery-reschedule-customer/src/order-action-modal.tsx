@@ -116,10 +116,14 @@ function buildAction(
     gap: 'base',
   });
 
+  // The one-online-reschedule policy rides inside the intro sentence
+  // (merchant decision 2026-07-12: no extra line — avoid vertical clutter).
+  // The backend enforces the limit via the `resched` tag; this only sets
+  // the expectation before the customer submits.
   const intro = document.createElement('s-text');
   intro.textContent = state.isLoadingRules
     ? 'Loading available delivery dates and time slots.'
-    : 'Select a new delivery date and time slot.';
+    : 'Select a new delivery date and time slot. You can reschedule your delivery only once, so please choose carefully.';
   stack.append(intro);
 
   if (state.submitError) {

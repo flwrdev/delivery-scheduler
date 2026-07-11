@@ -1,10 +1,4 @@
-import {
-  useState,
-  useCallback,
-  useEffect,
-  useRef,
-  type ChangeEvent,
-} from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useFetcher, useRevalidator } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import type { BulkActionName, BulkActionResponse } from "../routes/app.orders";
@@ -59,9 +53,6 @@ export function useBulkActions(
     useState<string>("");
   const [fulfillTrackingUrl, setFulfillTrackingUrl] = useState<string>("");
   const [fulfillNotify, setFulfillNotify] = useState<boolean>(false);
-  const [fulfillPhotoFile, setFulfillPhotoFile] = useState<File | null>(null);
-  const [fulfillPhotoPreview, setFulfillPhotoPreview] = useState<string>("");
-  const [fulfillPhotoError, setFulfillPhotoError] = useState<string>("");
 
   const submitBulk = useCallback(
     (op: BulkActionName, extras?: Record<string, string>) => {
@@ -130,29 +121,8 @@ export function useBulkActions(
     fd.append("trackingNumber", fulfillTrackingNumber);
     fd.append("trackingUrl", fulfillTrackingUrl);
     fd.append("notifyCustomer", fulfillNotify ? "1" : "0");
-    if (fulfillPhotoFile) fd.append("bouquetPhoto", fulfillPhotoFile);
-    fetcher.submit(fd, { method: "post", encType: "multipart/form-data" });
-  }, [selectedResources, fetcher, fulfillTrackingNumber, fulfillTrackingUrl, fulfillNotify, fulfillPhotoFile]);
-
-  const handlePhotoChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
-    setFulfillPhotoFile(null);
-    setFulfillPhotoPreview("");
-    setFulfillPhotoError("");
-    if (!file) return;
-    const MAX = 5 * 1024 * 1024;
-    const allowed = ["image/jpeg", "image/png", "image/webp"];
-    if (!allowed.includes(file.type)) {
-      setFulfillPhotoError("Only JPEG, PNG, or WebP images are accepted.");
-      return;
-    }
-    if (file.size > MAX) {
-      setFulfillPhotoError("File must be 5 MB or smaller.");
-      return;
-    }
-    setFulfillPhotoFile(file);
-    setFulfillPhotoPreview(URL.createObjectURL(file));
-  };
+    fetcher.submit(fd, { method: "post" });
+  }, [selectedResources, fetcher, fulfillTrackingNumber, fulfillTrackingUrl, fulfillNotify]);
 
   // The selection callbacks come from useIndexResourceState, whose returned
   // function identities are not guaranteed stable across renders — read them
@@ -216,7 +186,9 @@ export function useBulkActions(
 
     if (d.ok && d.summary && d.summary.ok > 0) {
       const n = d.summary.ok;
-      shopify.toast.show(`${n} ${n === 1 ? "order" : "orders"} ${meta?.verb ?? "updated"}.`);
+      shopify.toast.show(
+        `${n} ${n === 1 ? "order" : "orders"} ${meta?.verb ?? "updated"}.`,
+      );
       clearSelectionRef.current();
       setActiveModal(null);
       setCancelStaffNote("");
@@ -225,9 +197,6 @@ export function useBulkActions(
       setFulfillTrackingNumber("");
       setFulfillTrackingUrl("");
       setFulfillNotify(false);
-      setFulfillPhotoFile(null);
-      setFulfillPhotoPreview("");
-      setFulfillPhotoError("");
     } else if (d.summary && d.summary.failed > 0) {
       const failed = (d.results || []).filter((r) => !r.success);
       const lines = failed
@@ -283,9 +252,6 @@ export function useBulkActions(
     setFulfillTrackingUrl,
     fulfillNotify,
     setFulfillNotify,
-    fulfillPhotoPreview,
-    fulfillPhotoError,
-    handlePhotoChange,
     handleArchiveConfirm,
     handleUnarchiveConfirm,
     handleCancelConfirm,

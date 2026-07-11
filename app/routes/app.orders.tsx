@@ -57,13 +57,9 @@ import { validateMerchantRescheduleSelection } from "../lib/delivery-availabilit
 import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
 import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
 import { authenticate } from "../shopify.server";
-import stylesHref from "../styles/orders-dashboard.css?url";
 import panelStylesHref from "../styles/order-details-panel.css?url";
 
-export const links = () => [
-  { rel: "stylesheet", href: stylesHref },
-  { rel: "stylesheet", href: panelStylesHref },
-];
+export const links = () => [{ rel: "stylesheet", href: panelStylesHref }];
 
 // Opening/closing the details panel only toggles the ?order search param, and
 // the panel reads its order from already-loaded data — skip the loader re-run
@@ -458,41 +454,6 @@ const FULFILLMENT_CREATE_MUTATION = `
   }
 `;
 
-const STAGED_UPLOADS_CREATE_MUTATION = `
-  mutation StagedUploadsCreate($input: [StagedUploadInput!]!) {
-    stagedUploadsCreate(input: $input) {
-      stagedTargets {
-        url
-        resourceUrl
-        parameters { name value }
-      }
-      userErrors { field message }
-    }
-  }
-`;
-
-const FILE_CREATE_MUTATION = `
-  mutation FileCreate($files: [FileCreateInput!]!) {
-    fileCreate(files: $files) {
-      files {
-        ... on MediaImage {
-          image { url }
-        }
-      }
-      userErrors { field message }
-    }
-  }
-`;
-
-const ORDER_UPDATE_METAFIELD_MUTATION = `
-  mutation OrderUpdateMetafield($input: OrderInput!) {
-    orderUpdate(input: $input) {
-      order { id }
-      userErrors { field message }
-    }
-  }
-`;
-
 // Rewrite raw Shopify access-denied / scope errors into something the merchant can act on.
 function scopeHint(msg: string): string {
   if (
@@ -501,72 +462,6 @@ function scopeHint(msg: string): string {
     return "Access denied — the app needs fulfillment-order permission. Please reinstall the app to grant the new scope.";
   }
   return msg;
-}
-
-async function uploadBouquetPhoto(
-  admin: Awaited<ReturnType<typeof authenticate.admin>>["admin"],
-  file: File,
-): Promise<string> {
-  const stagedRes = await admin.graphql(STAGED_UPLOADS_CREATE_MUTATION, {
-    variables: {
-      input: [
-        {
-          resource: "FILE",
-          filename: file.name,
-          mimeType: file.type,
-          httpMethod: "POST",
-          fileSize: String(file.size),
-        },
-      ],
-    },
-  });
-  const stagedJson = (await stagedRes.json()) as {
-    data?: {
-      stagedUploadsCreate?: {
-        stagedTargets: Array<{
-          url: string;
-          resourceUrl: string;
-          parameters: Array<{ name: string; value: string }>;
-        }>;
-        userErrors: Array<{ message: string }>;
-      };
-    };
-  };
-  const stagingErrors = stagedJson.data?.stagedUploadsCreate?.userErrors;
-  if (stagingErrors?.length) {
-    throw new Error(`Staged upload failed: ${stagingErrors.map((e) => e.message).join("; ")}`);
-  }
-  const target = stagedJson.data?.stagedUploadsCreate?.stagedTargets?.[0];
-  if (!target) throw new Error("Staged upload returned no target URL.");
-
-  const uploadForm = new FormData();
-  for (const { name, value } of target.parameters) {
-    uploadForm.append(name, value);
-  }
-  uploadForm.append("file", file);
-  const uploadRes = await fetch(target.url, { method: "POST", body: uploadForm });
-  if (!uploadRes.ok) throw new Error(`Photo upload failed (HTTP ${uploadRes.status}).`);
-
-  const fileRes = await admin.graphql(FILE_CREATE_MUTATION, {
-    variables: {
-      files: [{ originalSource: target.resourceUrl, contentType: "IMAGE" }],
-    },
-  });
-  const fileJson = (await fileRes.json()) as {
-    data?: {
-      fileCreate?: {
-        files: Array<{ image?: { url: string } }>;
-        userErrors: Array<{ message: string }>;
-      };
-    };
-  };
-  const fileErrors = fileJson.data?.fileCreate?.userErrors;
-  if (fileErrors?.length) {
-    throw new Error(`File creation failed: ${fileErrors.map((e) => e.message).join("; ")}`);
-  }
-  const url = fileJson.data?.fileCreate?.files?.[0]?.image?.url;
-  if (!url) throw new Error("File created but URL was not returned.");
-  return url;
 }
 
 // Batch current-delivery-state read for the merchant reschedule op: the
@@ -831,28 +726,6 @@ export const action = async ({
       );
     }
 
-    const bouquetPhotoFile =
-      fd.get("bouquetPhoto") instanceof File
-        ? (fd.get("bouquetPhoto") as File)
-        : null;
-    const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
-    if (bouquetPhotoFile && bouquetPhotoFile.size > MAX_PHOTO_BYTES) {
-      return Response.json(
-        { ...empty, message: "Bouquet photo must be 5 MB or smaller." },
-        { status: 400 },
-      );
-    }
-
-    let bouquetPhotoUrl: string | null = null;
-    let photoUploadWarning: string | null = null;
-    if (bouquetPhotoFile && bouquetPhotoFile.size > 0) {
-      try {
-        bouquetPhotoUrl = await uploadBouquetPhoto(admin, bouquetPhotoFile);
-      } catch (e: unknown) {
-        photoUploadWarning = e instanceof Error ? e.message : "Photo upload failed.";
-      }
-    }
-
     // ── Step 1: Batch-fetch fulfillment orders (single API call) ─────────────
     const SHOPIFY_ORDER_GID_RE = /^gid:\/\/shopify\/Order\/\d+$/;
     const safeIds = orderIds.filter((id) => SHOPIFY_ORDER_GID_RE.test(id));
@@ -951,31 +824,6 @@ export const action = async ({
         for (let i = before; i < results.length; i++) {
           const r = results[i];
           if (!r.success && r.message) r.message = scopeHint(r.message);
-          if (r.success && photoUploadWarning) {
-            r.message = `Fulfilled. Note: photo upload failed — ${photoUploadWarning}`;
-          }
-        }
-
-        if (bouquetPhotoUrl) {
-          try {
-            await admin.graphql(ORDER_UPDATE_METAFIELD_MUTATION, {
-              variables: {
-                input: {
-                  id,
-                  metafields: [
-                    {
-                      namespace: "custom",
-                      key: "bouquet_photo",
-                      type: "single_line_text_field",
-                      value: bouquetPhotoUrl,
-                    },
-                  ],
-                },
-              },
-            });
-          } catch {
-            // non-fatal — fulfillment already processed
-          }
         }
       }
     }
@@ -1333,9 +1181,6 @@ function Extension() {
     setFulfillTrackingUrl,
     fulfillNotify,
     setFulfillNotify,
-    fulfillPhotoPreview,
-    fulfillPhotoError,
-    handlePhotoChange,
     handleArchiveConfirm,
     handleUnarchiveConfirm,
     handleCancelConfirm,
@@ -2060,9 +1905,6 @@ function Extension() {
         setFulfillTrackingUrl={setFulfillTrackingUrl}
         fulfillNotify={fulfillNotify}
         setFulfillNotify={setFulfillNotify}
-        fulfillPhotoPreview={fulfillPhotoPreview}
-        fulfillPhotoError={fulfillPhotoError}
-        onPhotoChange={handlePhotoChange}
         onConfirm={handleMarkFulfilled}
       />
       <RescheduleModal

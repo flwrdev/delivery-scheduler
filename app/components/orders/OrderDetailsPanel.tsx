@@ -120,6 +120,9 @@ export function OrderDetailsPanel({
       content: "Send email",
       disabled: !customerEmail,
       url: customerEmail ? `mailto:${customerEmail}` : undefined,
+      // S8: external is required — a targetless mailto same-frame-navigates
+      // the embedded iframe, which App Bridge forbids (crashes the app).
+      external: true,
       onAction: () => setActionsOpen(false),
     },
     {

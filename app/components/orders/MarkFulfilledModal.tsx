@@ -1,4 +1,3 @@
-import type { ChangeEvent } from "react";
 import {
   Banner,
   BlockStack,
@@ -8,9 +7,9 @@ import {
   TextField,
 } from "@shopify/polaris";
 
-// Bulk "Mark as fulfilled" modal (Polaris React): tracking fields + optional
-// bouquet-photo upload with preview. Visibility is controlled by the parent
-// via `open`/`onClose`; all form state lives in useBulkActions.
+// Bulk "Mark as fulfilled" modal (Polaris React): tracking fields + notify
+// toggle. Visibility is controlled by the parent via `open`/`onClose`; all
+// form state lives in useBulkActions.
 export interface MarkFulfilledModalProps {
   open: boolean;
   onClose: () => void;
@@ -22,9 +21,6 @@ export interface MarkFulfilledModalProps {
   setFulfillTrackingUrl: (value: string) => void;
   fulfillNotify: boolean;
   setFulfillNotify: (value: boolean) => void;
-  fulfillPhotoPreview: string;
-  fulfillPhotoError: string;
-  onPhotoChange: (e: ChangeEvent<HTMLInputElement>) => void;
   onConfirm: () => void;
 }
 
@@ -39,9 +35,6 @@ export function MarkFulfilledModal({
   setFulfillTrackingUrl,
   fulfillNotify,
   setFulfillNotify,
-  fulfillPhotoPreview,
-  fulfillPhotoError,
-  onPhotoChange,
   onConfirm,
 }: MarkFulfilledModalProps) {
   return (
@@ -90,38 +83,6 @@ export function MarkFulfilledModal({
             checked={fulfillNotify}
             onChange={setFulfillNotify}
           />
-          <BlockStack gap="150">
-            <Text as="p" variant="bodyMd">
-              Bouquet Photo (optional)
-            </Text>
-            <input
-              id="fulfill-photo-input"
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              aria-label="Bouquet photo (optional)"
-              style={{ fontSize: 13 }}
-              onChange={onPhotoChange}
-            />
-            {fulfillPhotoError && (
-              <Text as="p" tone="critical" variant="bodySm">
-                {fulfillPhotoError}
-              </Text>
-            )}
-            {fulfillPhotoPreview && (
-              <img
-                src={fulfillPhotoPreview}
-                alt="Bouquet preview"
-                style={{
-                  marginTop: 4,
-                  maxWidth: 120,
-                  maxHeight: 120,
-                  objectFit: "cover",
-                  borderRadius: 6,
-                  border: "1px solid var(--p-color-border, #e1e3e5)",
-                }}
-              />
-            )}
-          </BlockStack>
         </BlockStack>
       </Modal.Section>
     </Modal>

@@ -2,18 +2,21 @@
 
 > Part of the docs set. Source of truth: [architecture.md](./architecture.md).
 >
-> ⚠️ **Presentation half fully superseded (Phase 1 + Phase 2 shipped
-> 2026-07-11):** the right-side detail surface is now
+> ⚠️ **Presentation half fully superseded (Phases 1–5 shipped 2026-07-11/12):**
+> the right-side detail surface is now
 > `app/components/orders/OrderDetailsPanel.tsx` (Polaris React, URL-driven via
 > `?order=`) and the list table is now
 > `app/components/orders/OrdersIndexTable.tsx` (Polaris React `IndexFilters` +
 > `IndexTable`; selection via `useIndexResourceState`; bulk modals are Polaris
 > `Modal`s with React open state) — see
-> [orders-ops-v2-ux.md §2–§4](./orders-ops-v2-ux.md). `OrderDrawer.tsx` is no
-> longer mounted (file deleted at Phase 5). The **data-flow half of this doc
-> (loader → GET_ORDERS_QUERY → shared `order-utils` helpers; drawer/panel reads
-> the same loader array by id; `tagsAdd` is the panel's only write) is still
-> accurate.
+> [orders-ops-v2-ux.md §2–§4](./orders-ops-v2-ux.md). **`OrderDrawer.tsx` and
+> `orders-dashboard.css` were DELETED at Phase 5 (2026-07-12)** — every
+> file-path reference to them below is historical. Two content updates since
+> this doc was written: the panel gained an "Update delivery slot" action
+> (Phase 4 — so `tagsAdd` is no longer the page's only delivery-relevant
+> write; see api.md §2) and the loader/data-flow half (loader →
+> GET_ORDERS_QUERY → shared `order-utils` helpers; panel reads the same
+> loader array by id) is still accurate.
 
 Frontend map of the embedded admin `/app/orders` surface: which files render the
 order list table and the right-side order detail drawer, where each gets its data,
