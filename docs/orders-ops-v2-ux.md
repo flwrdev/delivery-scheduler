@@ -265,6 +265,11 @@ The service's write sequence (defined once, same shape for both sources):
 - **Does NOT add the `resched` lock tag.** That tag is the customer self-service
   lock. A merchant updating the schedule is not the customer consuming their one
   online reschedule, so the customer keeps their remaining self-service window.
+  **Confirmed live + accepted by the merchant (2026-07-12, Phase 4 smoke test):
+  after a merchant reschedule, a still-eligible customer CAN reschedule once
+  more.** This is conscious behavior, not a regression — in normal operation
+  the ≥2-days rule or fulfillment closes the customer window anyway, so the
+  residual risk is low. Do not "fix" this without a new decision.
 - **Does NOT enforce any self-service gate or the date window** — see the
   validation matrix above.
 
@@ -496,12 +501,37 @@ app/styles/orders-dashboard.css             [SHRINK Phase 1: prune --p-* token o
   reschedule "Original" always duplicates Current. Fix (derive original from
   the **oldest history event's `from`** when history exists) ships with
   Phase 4.
-- **Phase 4** — Extract `rescheduleOrderDelivery()` shared service and refactor the
-  customer route onto it (with tests proving behavior parity + the new mirror
-  writes, REC-1/REC-2); then add the merchant `reschedule` op to the route action
-  with merchant-mode validation + capacity warn/override (§5); single + bulk
-  "Update delivery slot". Requires write-path table update (ADR-10 already
-  recorded).
+- **Phase 4 — DONE, live-verified 2026-07-12 (merchant smoke test PASSED on the
+  dev app: single + bulk reschedule, capacity override, blocked date/slot
+  rejection, customer-regression incl. mirror metafields, timeline
+  source-badged events + corrected Original row)** —
+  New shared service `app/services/reschedule-order-delivery.server.ts`
+  (`rescheduleOrderDelivery()`, REC-1): ONE write sequence — canonical
+  `metafieldsSet` (`custom.*` + the `delivery.*`/`sidekick.*` legacy mirrors,
+  REC-2, + `$app.reschedule_*`) → `reschedule_history` append (`source`
+  recorded) → customAttributes mirror → schedule-tag replacement (`resched`
+  added ONLY for `source: "customer"`). Customer route refactored onto it
+  (all self-service gates + `RECHECK_ORDER_STATE_QUERY` kept in the route;
+  response shape unchanged; behavior delta: mirrors now written, and a mirror
+  step that throws now reports `"failed"` instead of aborting the request).
+  Merchant `reschedule` op added to the `app.orders.tsx` action (§5
+  administrative override): `validateMerchantRescheduleSelection` (additive
+  in delivery-availability.ts) hard-enforces date format / slot-exists /
+  blocked date / blocked slot only; capacity = warn + explicit confirm
+  override (REC-4 — server responds `capacity_override_required` with the
+  projected load unless `capacityOverride=1`; orders already in the target
+  slot are not double-counted); per-order continue-on-error writes. UI: new
+  `RescheduleModal` (bulk "Update delivery slot" promoted action + the
+  panel's actions-menu item for single orders; prefills a single target's
+  current schedule; shows per-slot booked/capacity; overload flips the
+  primary button to a destructive "Reschedule anyway (N/M)"); rules load
+  lazily from the new read-only resource route
+  `/app/orders/reschedule-rules`. Also fixed the **timeline "Original
+  schedule" display bug** found in the Phase 3 smoke test: it now derives
+  from the oldest history event's `from` (attributes remain the fallback for
+  history-less orders). Unit tests: 13 new (service write-sequence/parity +
+  merchant validation matrix). NO new scopes (GraphQL MCP-validated:
+  read_orders/write_orders already held) — stop-and-ask gate not triggered.
 - **Phase 5** — Delete `OrderDrawer.tsx` + prune the rest of
   `orders-dashboard.css`; docs sync.
 

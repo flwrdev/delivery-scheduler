@@ -465,6 +465,70 @@ export function isSlotAvailable(
   return nowSerial < latestAllowedOrderSerial;
 }
 
+export type MerchantRescheduleValidationResult =
+  | {
+      ok: true;
+      // Capacity is merchant ops policy, not a hard gate (REC-4): the caller
+      // warns and lets the merchant explicitly override. null = no capacity
+      // configured for this date+slot.
+      capacity: DeliveryScheduleCapacity | null;
+    }
+  | {
+      ok: false;
+      code: "invalid_date" | "date_blocked" | "slot_unknown" | "slot_blocked";
+      message: string;
+    };
+
+// Merchant-mode validation (§5 validation matrix, locked 2026-07-11): only the
+// data-integrity checks bind the merchant path. The customer-facing
+// validateDeliverySelection bundles the cutoff/prep minDate and maxDays sales
+// window with those checks, so the merchant path uses this decomposed variant
+// instead — the customer/storefront engine above is deliberately untouched.
+export function validateMerchantRescheduleSelection(
+  rules: DeliveryScheduleRules,
+  dateStr: string,
+  slotValue: string,
+): MerchantRescheduleValidationResult {
+  if (!isIsoDateString(dateStr)) {
+    return {
+      ok: false,
+      code: "invalid_date",
+      message: "Enter a valid delivery date (YYYY-MM-DD).",
+    };
+  }
+
+  if (
+    !getAvailableTimeSlots(dateStr, rules).some(
+      (slot) => slot.value === slotValue,
+    )
+  ) {
+    return {
+      ok: false,
+      code: "slot_unknown",
+      message: "Selected time slot is not one of the configured slots.",
+    };
+  }
+
+  if (isDateBlocked(rules, dateStr)) {
+    return {
+      ok: false,
+      code: "date_blocked",
+      message: "That date is blocked in the delivery settings.",
+    };
+  }
+
+  if (isSlotBlocked(rules, dateStr, slotValue)) {
+    return {
+      ok: false,
+      code: "slot_blocked",
+      message: "That time slot is blocked for the selected date.",
+    };
+  }
+
+  const capacity = rules.slotCapacity?.[dateStr]?.[slotValue] ?? null;
+  return { ok: true, capacity: capacity ? { ...capacity } : null };
+}
+
 export function getTodayAvailabilityMessage(
   rules: DeliveryScheduleRules,
   selectedDate: string,

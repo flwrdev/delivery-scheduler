@@ -29,10 +29,22 @@ export function DeliveryTimeline({ order }: { order: Order }) {
   if (events.length === 0 && !hasRescheduleTag(order)) return null;
 
   const attrs = order.customAttributes || [];
-  const originalDelivery = formatTimelineDelivery(
-    getAttr(attrs, "Delivery Date"),
-    getAttr(attrs, "Delivery Time"),
-  );
+  // The reschedule write path overwrites the Delivery Date/Time
+  // customAttributes as a legacy mirror, so once an order has been
+  // rescheduled the attributes no longer hold the ORIGINAL schedule — the
+  // oldest history event's `from` does (events sort newest-first). The
+  // attributes stay as the fallback for history-less orders.
+  const oldestEvent = events.length > 0 ? events[events.length - 1] : null;
+  const originalFromHistory = oldestEvent
+    ? formatTimelineDelivery(oldestEvent.fromDate, oldestEvent.fromTimeSlot)
+    : "—";
+  const originalDelivery =
+    originalFromHistory !== "—"
+      ? originalFromHistory
+      : formatTimelineDelivery(
+          getAttr(attrs, "Delivery Date"),
+          getAttr(attrs, "Delivery Time"),
+        );
   const currentDelivery = formatTimelineDelivery(
     getDeliveryDateValue(order),
     getDeliveryTimeValue(order),

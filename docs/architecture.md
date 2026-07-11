@@ -55,7 +55,7 @@ flowchart TB
 
     subgraph ADMINUI["Shopify Admin — embedded app"]
         APP["/app (shell + nav) →<br/>orders · scheduler · schedule-rules"]:::ext
-        ORD["/app/orders<br/>(generic order bulk writes;<br/>no delivery writes)"]:::ext
+        ORD["/app/orders<br/>(order bulk writes + merchant<br/>reschedule op → shared service)"]:::ext
         SCH["/app/scheduler (read-only)"]:::rd
         RUL["/app/schedule-rules<br/>(writes DeliveryScheduleConfig)"]:::ext
     end
@@ -207,7 +207,7 @@ erDiagram
 - The Admin order-page extensions do **not** write delivery state. Anyone building on top of `delivery-reschedule-action` expecting it to edit a delivery is working off an outdated assumption — the file's only network call is a single `query GetReschedule`.
 - The `delivery-reschedule-customer` modal does **not** have an App Proxy fallback in its live code. The diagram no longer shows one.
 - The App Proxy reschedule route (`/apps/schedule-rules/reschedule`) is **not** currently called from any registered extension target. It still exists, still validates and writes if reached via a signed proxy URL, but no shipped UI wires to it.
-- The `/app/orders` admin page is **not** a delivery write path. Its `action` handler mutates generic order state, freeform tags, and one non-delivery metafield (`custom.bouquet_photo`, the mark-fulfilled photo attachment) — see the [api.md §2 caveat](./api.md) for the manual-override side channel and the full mutation list.
+- The `/app/orders` admin page **became the 4th delivery write path with Orders Ops V2 Phase 4** (2026-07-11, ADR-10): its `action` gained a `reschedule` op that calls the shared `rescheduleOrderDelivery()` service (`source: "merchant"`, administrative override — no `resched` lock tag, capacity warn+override). The OTHER bulk ops remain generic order state, freeform tags, and one non-delivery metafield (`custom.bouquet_photo`) — see the [api.md §2](./api.md) write-paths table + caveat.
 - Booking counts are **not** stored locally. They are computed by querying Shopify orders via Admin GraphQL on every `getScheduleRulesWithBookedCounts` call.
 - There is no local audit table. `delivery.reschedule_history` metafield is the only persistent audit trail for customer-initiated reschedules.
 

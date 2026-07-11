@@ -3,11 +3,10 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 import { RESCHEDULED_ORDER_TAG } from "../lib/constants";
 import {
-  buildDeliveryTags,
   canRescheduleDelivery,
-  isDeliveryScheduleTag,
   validateDeliverySelection,
 } from "../lib/delivery-availability";
+import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
 import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
 import { unauthenticated } from "../shopify.server";
 
@@ -36,65 +35,6 @@ const ORDER_CUSTOMER_QUERY = `#graphql
       }
       customer {
         id
-      }
-    }
-  }
-`;
-
-const SET_RESCHEDULE_METAFIELDS_MUTATION = `#graphql
-  mutation setRescheduleMetafields($metafields: [MetafieldsSetInput!]!) {
-    metafieldsSet(metafields: $metafields) {
-      metafields {
-        key
-        value
-        namespace
-      }
-      userErrors {
-        field
-        message
-        code
-      }
-    }
-  }
-`;
-
-const REMOVE_ORDER_DELIVERY_TAGS_MUTATION = `#graphql
-  mutation removeOrderDeliveryTags($id: ID!, $tags: [String!]!) {
-    tagsRemove(id: $id, tags: $tags) {
-      node {
-        id
-      }
-      userErrors {
-        field
-        message
-      }
-    }
-  }
-`;
-
-const ADD_ORDER_DELIVERY_TAGS_MUTATION = `#graphql
-  mutation addOrderDeliveryTags($id: ID!, $tags: [String!]!) {
-    tagsAdd(id: $id, tags: $tags) {
-      node {
-        id
-      }
-      userErrors {
-        field
-        message
-      }
-    }
-  }
-`;
-
-const UPDATE_ORDER_DELIVERY_ATTRIBUTES_MUTATION = `#graphql
-  mutation updateOrderDeliveryAttributes($input: OrderInput!) {
-    orderUpdate(input: $input) {
-      order {
-        id
-      }
-      userErrors {
-        field
-        message
       }
     }
   }
@@ -209,30 +149,6 @@ function getCurrentDeliveryTimeSlot(order: {
   );
 }
 
-type RescheduleHistoryEvent = {
-  fromDate: string;
-  fromTimeSlot: string;
-  toDate: string;
-  toTimeSlot: string;
-  requestedAt: string;
-  status: "confirmed";
-  source: "customer";
-};
-
-function parseRescheduleHistory(
-  value: string | null | undefined,
-): RescheduleHistoryEvent[] {
-  if (!isNonEmptyString(value)) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? (parsed as RescheduleHistoryEvent[]) : [];
-  } catch {
-    return [];
-  }
-}
-
 function isCurrentDeliveryDateTooCloseOrPast(
   currentDeliveryDate: string | null | undefined,
   now = new Date(),
@@ -258,97 +174,6 @@ function createHmacKey(secret: string): Uint8Array {
   }
   return key;
 }
-
-function extractExistingDeliveryTags(
-  currentTags: string[] | null | undefined,
-): string[] {
-  // Customer-account reschedules bypass the order-created Flow trigger, so this route
-  // removes only the canonical schedule tags and leaves every other order tag alone.
-  const deliveryTags: string[] = [];
-  const seenTags = new Set<string>();
-
-  for (const rawTag of currentTags ?? []) {
-    const tag = rawTag.trim();
-    if (!tag) continue;
-    if (!isDeliveryScheduleTag(tag)) {
-      continue;
-    }
-    if (seenTags.has(tag)) continue;
-    seenTags.add(tag);
-    deliveryTags.push(tag);
-  }
-
-  return deliveryTags;
-}
-
-function buildNextDeliveryTags(date: string, timeSlot: string): string[] {
-  return buildDeliveryTags(date, timeSlot);
-}
-
-function buildNextDeliveryCustomAttributes(
-  currentAttributes: OrderCustomAttribute[] | null | undefined,
-  date: string,
-  timeSlot: string,
-): OrderCustomAttribute[] {
-  const nextAttributes: OrderCustomAttribute[] = [];
-  let hasDeliveryDate = false;
-  let hasDeliveryTime = false;
-
-  for (const attribute of currentAttributes ?? []) {
-    const key = attribute.key.trim();
-    if (!key) continue;
-
-    if (key === DELIVERY_DATE_ATTRIBUTE_KEY) {
-      nextAttributes.push({ key, value: date });
-      hasDeliveryDate = true;
-      continue;
-    }
-
-    if (key === DELIVERY_TIME_ATTRIBUTE_KEY) {
-      nextAttributes.push({ key, value: timeSlot });
-      hasDeliveryTime = true;
-      continue;
-    }
-
-    nextAttributes.push({ key, value: attribute.value });
-  }
-
-  if (!hasDeliveryDate) {
-    nextAttributes.push({ key: DELIVERY_DATE_ATTRIBUTE_KEY, value: date });
-  }
-
-  if (!hasDeliveryTime) {
-    nextAttributes.push({ key: DELIVERY_TIME_ATTRIBUTE_KEY, value: timeSlot });
-  }
-
-  return nextAttributes;
-}
-
-type TagMutationError = {
-  field?: string[];
-  message: string;
-};
-
-type TagMutationResponse = {
-  data?: {
-    tagsAdd?: {
-      userErrors?: TagMutationError[];
-    };
-    tagsRemove?: {
-      userErrors?: TagMutationError[];
-    };
-  };
-  errors?: Array<{ message: string }>;
-};
-
-type OrderUpdateResponse = {
-  data?: {
-    orderUpdate?: {
-      userErrors?: TagMutationError[];
-    };
-  };
-  errors?: Array<{ message: string }>;
-};
 
 function buildResponseHeaders(request: Request): Headers {
   // Customer-account extensions post to this route from Shopify's CDN origin, so the
@@ -716,247 +541,59 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
-    const rescheduledAt = new Date().toISOString();
-    // Snapshot the pre-overwrite delivery selection and existing history so we can
-    // append a new event after the overwrite succeeds without losing prior reschedules.
-    const fromDate = currentDeliveryDate ?? "";
-    const fromTimeSlot = getCurrentDeliveryTimeSlot(order) ?? "";
-    const existingRescheduleHistory = parseRescheduleHistory(
-      order.rescheduleHistory?.value,
-    );
-
-    // Persist the confirmed selection onto order metafields so every downstream admin
-    // and customer-account surface can read the same delivery source of truth.
-    const metafields = [
-      {
-        ownerId: orderGid,
-        namespace: "custom",
-        key: "date",
-        value: date,
-        type: "date",
-      },
-      {
-        ownerId: orderGid,
-        namespace: "custom",
-        key: "time_slot",
-        value: timeSlot,
-        type: "single_line_text_field",
-      },
-      {
-        ownerId: orderGid,
-        namespace: "$app",
-        key: "reschedule_status",
-        value: "confirmed",
-        type: "single_line_text_field",
-      },
-      {
-        ownerId: orderGid,
-        namespace: "$app",
-        key: "reschedule_requested_at",
-        value: rescheduledAt,
-        type: "date_time",
-      },
-    ];
-
-    const response = await admin.graphql(SET_RESCHEDULE_METAFIELDS_MUTATION, {
-      variables: { metafields },
+    // The write orchestration lives in the shared rescheduleOrderDelivery()
+    // service (REC-1) — the same sequence the merchant op uses. This route
+    // keeps only the customer self-service gates above.
+    const result = await rescheduleOrderDelivery(admin, {
+      orderId: orderGid,
+      date,
+      timeSlot,
+      source: "customer",
+      currentDeliveryDate: currentDeliveryDate,
+      currentDeliveryTimeSlot: getCurrentDeliveryTimeSlot(order),
+      currentTags: order.tags ?? [],
+      currentCustomAttributes: order.customAttributes ?? [],
+      existingRescheduleHistoryValue: order.rescheduleHistory?.value ?? null,
     });
 
-    const result = (await response.json()) as {
-      data?: {
-        metafieldsSet?: {
-          userErrors: Array<{ field: string[]; message: string; code: string }>;
-        };
-      };
-      errors?: Array<{ message: string }>;
-    };
-
-    if (result.errors?.length) {
-      console.error(
-        "[customer-account reschedule] GraphQL errors:",
-        result.errors,
-      );
-      return jsonResponse(
-        request,
-        { ok: false, error: "Failed to save reschedule request" },
-        500,
-      );
-    }
-
-    const userErrors = result.data?.metafieldsSet?.userErrors ?? [];
-    if (userErrors.length > 0) {
+    if (!result.ok) {
+      if (result.canonicalErrors.graphql.length > 0) {
+        console.error(
+          "[customer-account reschedule] GraphQL errors:",
+          result.canonicalErrors.graphql,
+        );
+        return jsonResponse(
+          request,
+          { ok: false, error: "Failed to save reschedule request" },
+          500,
+        );
+      }
       console.warn(
         "[customer-account reschedule] metafieldsSet userErrors:",
-        userErrors,
+        result.canonicalErrors.user,
       );
       return jsonResponse(
         request,
         {
           ok: false,
-          error: userErrors[0].message ?? "Failed to save reschedule request",
+          error:
+            result.canonicalErrors.user[0] ??
+            "Failed to save reschedule request",
         },
         422,
       );
     }
 
-    // Append a new event to delivery.reschedule_history so the full audit trail of
-    // customer-initiated reschedules survives across multiple writes. The metafield
-    // value is fully replaced on each write, so we read-append-write here.
-    const newHistoryEvent: RescheduleHistoryEvent = {
-      fromDate,
-      fromTimeSlot,
-      toDate: date,
-      toTimeSlot: timeSlot,
-      requestedAt: rescheduledAt,
-      status: "confirmed",
-      source: "customer",
-    };
-    const updatedRescheduleHistory = [
-      ...existingRescheduleHistory,
-      newHistoryEvent,
-    ];
-
-    let rescheduleHistorySyncFailed = false;
-    try {
-      const historyResponse = await admin.graphql(
-        SET_RESCHEDULE_METAFIELDS_MUTATION,
-        {
-          variables: {
-            metafields: [
-              {
-                ownerId: orderGid,
-                namespace: "delivery",
-                key: "reschedule_history",
-                value: JSON.stringify(updatedRescheduleHistory),
-                type: "json",
-              },
-            ],
-          },
-        },
-      );
-      const historyResult = (await historyResponse.json()) as {
-        data?: {
-          metafieldsSet?: {
-            userErrors: Array<{
-              field: string[];
-              message: string;
-              code: string;
-            }>;
-          };
-        };
-        errors?: Array<{ message: string }>;
-      };
-      const historyUserErrors =
-        historyResult.data?.metafieldsSet?.userErrors ?? [];
-      if (historyResult.errors?.length || historyUserErrors.length > 0) {
-        rescheduleHistorySyncFailed = true;
-        console.warn(
-          "[customer-account reschedule] reschedule_history write errors:",
-          historyResult.errors ?? historyUserErrors,
-        );
-      }
-    } catch (historyError) {
-      rescheduleHistorySyncFailed = true;
-      console.warn(
-        "[customer-account reschedule] reschedule_history write threw:",
-        historyError,
-      );
-    }
-
-    const nextDeliveryAttributes = buildNextDeliveryCustomAttributes(
-      order.customAttributes,
-      date,
-      timeSlot,
-    );
-    let attributeSyncFailed = false;
-
-    const attributeSyncResponse = await admin.graphql(
-      UPDATE_ORDER_DELIVERY_ATTRIBUTES_MUTATION,
-      {
-        variables: {
-          input: {
-            id: orderGid,
-            customAttributes: nextDeliveryAttributes,
-          },
-        },
-      },
-    );
-
-    const attributeSyncResult =
-      (await attributeSyncResponse.json()) as OrderUpdateResponse;
-    const attributeSyncUserErrors =
-      attributeSyncResult.data?.orderUpdate?.userErrors ?? [];
-
-    if (
-      attributeSyncResult.errors?.length ||
-      attributeSyncUserErrors.length > 0
-    ) {
-      attributeSyncFailed = true;
-    }
-
-    // Mirror the canonical metafield values into the legacy order attributes and
-    // delivery schedule tags here because customer-account reschedules do not pass
-    // back through the order-created Flow.
-    const existingDeliveryTags = extractExistingDeliveryTags(
-      order.tags,
-    );
-    const nextDeliveryTags = buildNextDeliveryTags(date, timeSlot);
-    const nextOrderTags = Array.from(
-      new Set([...nextDeliveryTags, RESCHEDULED_ORDER_TAG]),
-    );
-    let tagSyncFailed = false;
-
-    if (existingDeliveryTags.length > 0) {
-      const removeTagsResponse = await admin.graphql(
-        REMOVE_ORDER_DELIVERY_TAGS_MUTATION,
-        {
-          variables: {
-            id: orderGid,
-            tags: existingDeliveryTags,
-          },
-        },
-      );
-
-      const removeTagsResult =
-        (await removeTagsResponse.json()) as TagMutationResponse;
-      const removeTagUserErrors =
-        removeTagsResult.data?.tagsRemove?.userErrors ?? [];
-
-      if (removeTagsResult.errors?.length || removeTagUserErrors.length > 0) {
-        tagSyncFailed = true;
-      }
-    }
-
-    if (!tagSyncFailed && nextOrderTags.length > 0) {
-      const addTagsResponse = await admin.graphql(
-        ADD_ORDER_DELIVERY_TAGS_MUTATION,
-        {
-          variables: {
-            id: orderGid,
-            tags: nextOrderTags,
-          },
-        },
-      );
-
-      const addTagsResult =
-        (await addTagsResponse.json()) as TagMutationResponse;
-      const addTagUserErrors = addTagsResult.data?.tagsAdd?.userErrors ?? [];
-
-      if (addTagsResult.errors?.length || addTagUserErrors.length > 0) {
-        tagSyncFailed = true;
-      }
-    }
-
     return jsonResponse(request, {
       ok: true,
       orderId: orderGid,
-      rescheduledAt,
+      rescheduledAt: result.rescheduledAt,
       rescheduleStatus: "confirmed",
       newDate: date,
       newTimeSlot: timeSlot,
-      deliveryAttributeSync: attributeSyncFailed ? "failed" : "updated",
-      deliveryTagSync: tagSyncFailed ? "failed" : "updated",
-      rescheduleHistorySync: rescheduleHistorySyncFailed ? "failed" : "updated",
+      deliveryAttributeSync: result.attributeSync,
+      deliveryTagSync: result.tagSync,
+      rescheduleHistorySync: result.historySync,
     });
   } catch (error) {
     console.error(

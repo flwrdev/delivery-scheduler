@@ -21,8 +21,9 @@
 > repro-needed. New (Phase 3 smoke test, pre-existing): the panel timeline's
 > "Original schedule" row duplicates Current after any reschedule — the
 > reschedule write path overwrites the `customAttributes` it derives from
-> (legacy mirror); fix ships with Phase 4 (derive from the oldest history
-> event's `from`).
+> (legacy mirror). **FIXED with Phase 4 (2026-07-11) — live re-check PASSED
+> 2026-07-12** (Original row correct after single + bulk merchant
+> reschedules).
 
 Purpose: use the current `/app/orders` implementation as a baseline but **do not
 assume its behavior is correct**. Reproduce the reported smoke-test issues, find the
