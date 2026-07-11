@@ -37,7 +37,9 @@ cannot drift.
 `custom.date`, `custom.time_slot`, `delivery.date`, `delivery.time_slot`,
 `sidekick.delivery_date`, `$app.reschedule_status`, `$app.reschedule_requested_at`,
 `delivery.reschedule_history`, the `Delivery Date`/`Delivery Time` customAttributes,
-the `resched` lock tag (`RESCHEDULED_ORDER_TAG`), and `custom.bouquet_photo`.
+and the `resched` lock tag (`RESCHEDULED_ORDER_TAG`). (2026-07-12:
+`custom.bouquet_photo` was dropped from this list — the Bouquet Photo feature
+was removed from scope and deleted; see audit §F.)
 
 ---
 
@@ -532,8 +534,59 @@ app/styles/orders-dashboard.css             [SHRINK Phase 1: prune --p-* token o
   history-less orders). Unit tests: 13 new (service write-sequence/parity +
   merchant validation matrix). NO new scopes (GraphQL MCP-validated:
   read_orders/write_orders already held) — stop-and-ask gate not triggered.
-- **Phase 5** — Delete `OrderDrawer.tsx` + prune the rest of
-  `orders-dashboard.css`; docs sync.
+- **Phase 5 — code DONE 2026-07-12; round-1 smoke test 2026-07-12: cleanup
+  part PASSED, ⚠️ phase NOT closed (see below)** —
+  Deleted `app/components/OrderDrawer.tsx` and the whole of
+  `app/styles/orders-dashboard.css` (grep-verified: after Phase 2 every
+  `ods-*`/`#orders-dashboard-page` selector was referenced ONLY by the
+  unmounted drawer; the page's `links()` now ships only
+  `order-details-panel.css`). **Live-confirmed in the round-1 smoke test:
+  `/app/orders` renders with no visual regression after the CSS deletion.**
+  Plus one merchant-requested UX addition from the Phase 4 test — a
+  one-reschedule reminder in the Customer Account reschedule modal.
+  **Reworked after round-1 merchant feedback (2026-07-12):** NOT a separate
+  reminder line (rejected — adds vertical space); the policy now rides inside
+  the intro subtext instead: *"Select a new delivery date and time slot. You
+  can reschedule your delivery only once, so please choose carefully."*
+  (display-only; the backend `resched`-tag limit is unchanged; the red
+  not-eligible validation banner is a separate, intentionally-kept surface).
+  NOTE: the reminder lives in the `delivery-reschedule-customer` extension —
+  it previews on the dev store via `npm run dev`, but reaching production
+  customers requires a `shopify app deploy` (merchant-only action).
+  **Phase close is gated on:** (1) audit **S8** — the panel "Send email"
+  action crashed the embedded app (same-frame `mailto:` navigation of the
+  iframe); root-caused 2026-07-12, fix (`external: true`) APPROVED + APPLIED
+  the same day — live re-test pending; (2) re-test of the reworked intro
+  reminder; (3) the Final Full Smoke Test below.
+
+### §8-FST. Final Full Smoke Test (V2 closeout gate — run before declaring Orders Ops V2 complete)
+
+Run on the dev app (`npm run dev -- --config delivery-scheduler-dev`) after the
+last code change. All items must pass in ONE session on the same build.
+
+1. **Regression sweep (condensed per-phase checks):** panel opens URL-driven via
+   `?order=` and survives refresh (P1); every bulk action opens/auto-closes its
+   Polaris modal + toast (P2); auto-refresh banner + New/Updated badges + ~3s
+   mark-fulfilled settle (P3); single + bulk merchant reschedule, capacity
+   warn→override, blocked date/slot inline rejection, customer reschedule
+   end-to-end incl. mirrors + timeline source badges (P4); no visual regression
+   with `orders-dashboard.css` deleted + reworked customer-modal intro reminder
+   visible (P5).
+2. **Communication actions (added 2026-07-12 after finding S8):** in the Order
+   Details panel, click EVERY action — "Update delivery slot", **"Send email"
+   (the S8 regression check)**, "Copy delivery info", "View order status page",
+   "Open in Shopify Admin", and the add-tag form. Expectation: **no action may
+   crash the embedded app or land it on a blocked page**; any external flow must
+   open via supported Shopify/App Bridge behavior (`target="_blank"` /
+   `shopify://admin/…` top-level nav) or fail gracefully without taking down
+   the app frame.
+3. **Bouquet photo email flow — REMOVED 2026-07-12 (feature descoped):** the
+   Bouquet Photo feature was removed from Orders Ops V2 scope and deleted from
+   the codebase after its round-1 email test (merchant decision — see audit
+   §F), so this item no longer applies. Instead verify the simplified Mark
+   Fulfilled modal: tracking number/URL + "Notify customer" only — **no photo
+   input at any selection size** — and single + bulk fulfillment still succeed
+   with the plain count toast.
 
 **Global build rules (locked 2026-07-11):**
 
