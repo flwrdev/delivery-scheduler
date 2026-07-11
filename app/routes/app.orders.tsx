@@ -8,27 +8,24 @@ const OrderDetailsPanel = lazy(() =>
   })),
 );
 import {
+  Banner,
+  BlockStack,
+  Button,
+  Card,
+  InlineGrid,
+  InlineStack,
+  Page,
+  Text,
+  useIndexResourceState,
+} from "@shopify/polaris";
+import {
   type Order,
   toLocalISODate,
   normalizeDateToISO,
-  formatDeliveryDate,
-  formatMoney,
-  financialStatusTone,
   isUnpaidStatus,
-  fulfillmentStatusTone,
-  isOpenFulfillmentStatus,
-  formatStatusLabel,
-  tagDisplayLabel,
   getMeaningfulTags,
-  getDeliveryRelativeLabel,
-  isDeliveryOverdue,
   getDeliveryDateValue,
   getDeliveryTimeValue,
-  getCustomerName,
-  getCity,
-  getInstructionValue,
-  getFirstItemImageUrl,
-  getFirstItemAltText,
 } from "../lib/order-utils";
 import {
   useLoaderData,
@@ -37,7 +34,10 @@ import {
   useNavigation,
 } from "react-router";
 import { useBulkActions } from "../hooks/useBulkActions";
-import { getSafeEventValue } from "../lib/get-safe-event-value";
+import {
+  OrdersIndexTable,
+  type OrdersTabDef,
+} from "../components/orders/OrdersIndexTable";
 import { CancelModal } from "../components/orders/CancelModal";
 import { ArchiveModal } from "../components/orders/ArchiveModal";
 import { UnarchiveModal } from "../components/orders/UnarchiveModal";
@@ -107,6 +107,7 @@ const GET_ORDERS_QUERY = `
     $last: Int
     $before: String
     $query: String
+    $reverse: Boolean!
   ) {
     orders(
       first: $first
@@ -115,7 +116,7 @@ const GET_ORDERS_QUERY = `
       before: $before
       query: $query
       sortKey: CREATED_AT
-      reverse: true
+      reverse: $reverse
     ) {
       edges {
         node {
@@ -236,6 +237,17 @@ function isHttpTrackingUrl(value: string): boolean {
   }
 }
 
+// Sort options (IndexFilters). Only the CREATED_AT direction is server-side —
+// the Admin API has no metafield sort key, so the deliveryDate options keep
+// the server default order and are sorted client-side on the loaded page.
+const SORT_PARAM_VALUES = new Set([
+  "orderDate asc",
+  "orderDate desc",
+  "deliveryDate asc",
+  "deliveryDate desc",
+]);
+const DEFAULT_SORT = "orderDate desc";
+
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
 type LoaderData = {
@@ -246,6 +258,7 @@ type LoaderData = {
   searchParam: string;
   timeWindowParam: string;
   tabParam: string;
+  sortParam: string;
 };
 
 export const loader = async ({
@@ -264,21 +277,29 @@ export const loader = async ({
   const searchParam = url.searchParams.get("search")?.trim() ?? "";
   const timeWindowParam = url.searchParams.get("timeWindow")?.trim() ?? "";
   const tabParam = url.searchParams.get("tab") ?? "all";
+  const rawSortParam = url.searchParams.get("sort")?.trim() ?? "";
+  const sortParam = SORT_PARAM_VALUES.has(rawSortParam)
+    ? rawSortParam
+    : DEFAULT_SORT;
 
   const after = url.searchParams.get("after") || null;
   const before = url.searchParams.get("before") || null;
 
-  // Build composite Shopify query string from all active filters
+  // Build composite Shopify query string from the SERVER-supported filters.
+  //
+  // ⚠️ Delivery date / time-slot terms (`metafields.custom.date` /
+  // `metafields.custom.time_slot`) are deliberately NOT sent: Shopify silently
+  // ignores metafield search terms on the orders query unless the metafield
+  // definition is indexed as filterable (verified live 2026-07-11 — an applied
+  // time-slot filter returned every order unfiltered). All delivery-date /
+  // time-slot filtering (Today/Tomorrow tabs, the two toolbar filters) is done
+  // CLIENT-side over an enlarged page, same as the pre-existing thisWeek
+  // pattern. Enabling the filterable capability on those definitions could
+  // move this server-side later — documented in the verification log.
   const queryParts: string[] = [];
 
-  if (deliveryDateParam) {
-    queryParts.push(`metafields.custom.date:${deliveryDateParam}`);
-  }
   if (searchParam) {
     queryParts.push(searchParam);
-  }
-  if (timeWindowParam) {
-    queryParts.push(`metafields.custom.time_slot:${timeWindowParam}`);
   }
   if (tabParam === "unfulfilled") {
     queryParts.push("fulfillment_status:unfulfilled");
@@ -286,20 +307,18 @@ export const loader = async ({
     queryParts.push(
       "financial_status:pending OR financial_status:authorized OR financial_status:partially_paid",
     );
-  } else if (tabParam === "today") {
-    const todayISO = new Date().toLocaleDateString("en-CA");
-    queryParts.push(`metafields.custom.date:${todayISO}`);
-  } else if (tabParam === "tomorrow") {
-    const tom = new Date();
-    tom.setDate(tom.getDate() + 1);
-    queryParts.push(`metafields.custom.date:${tom.toLocaleDateString("en-CA")}`);
   }
-  // "thisWeek" and "all" tabs: no server-side date fragment; client filters thisWeek
 
   const compositeQuery = queryParts.join(" ") || null;
 
-  // thisWeek tab needs more orders since client must filter by date range
-  const pageSize = tabParam === "thisWeek" ? 250 : 25;
+  // Client-side date/slot filtering needs more rows to filter from.
+  const needsClientFilter =
+    tabParam === "today" ||
+    tabParam === "tomorrow" ||
+    tabParam === "thisWeek" ||
+    Boolean(deliveryDateParam) ||
+    Boolean(timeWindowParam);
+  const pageSize = needsClientFilter ? 250 : 25;
 
   const variables = {
     first: before ? null : pageSize,
@@ -307,6 +326,7 @@ export const loader = async ({
     last: before ? pageSize : null,
     before,
     query: compositeQuery,
+    reverse: sortParam !== "orderDate asc",
   };
 
   const response = await admin.graphql(GET_ORDERS_QUERY, { variables });
@@ -331,6 +351,7 @@ export const loader = async ({
       searchParam,
       timeWindowParam,
       tabParam,
+      sortParam,
     } satisfies LoaderData,
     { headers: { "Cache-Control": "no-store" } },
   );
@@ -937,22 +958,6 @@ type ActiveTab =
   | "unfulfilled"
   | "unpaid";
 
-// ─── useFilteredSelection ─────────────────────────────────────────────────────
-
-function useFilteredSelection(
-  displayedOrders: Order[],
-  setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>,
-) {
-  useEffect(() => {
-    const visibleIds = new Set(displayedOrders.map((o) => o.id));
-    setSelectedIds((prev) => {
-      if (prev.size === 0) return prev;
-      const pruned = new Set([...prev].filter((id) => visibleIds.has(id)));
-      return pruned.size === prev.size ? prev : pruned;
-    });
-  }, [displayedOrders, setSelectedIds]);
-}
-
 // ─── Main Extension ───────────────────────────────────────────────────────────
 
 function Extension() {
@@ -970,6 +975,7 @@ function Extension() {
   const searchParam = loaderData.searchParam;
   const timeWindowParam = loaderData.timeWindowParam;
   const tabParam = loaderData.tabParam as ActiveTab;
+  const sortParam = loaderData.sortParam;
 
   const [error] = useState<string | null>(
     loaderData.errors
@@ -982,8 +988,149 @@ function Extension() {
   const [searchTerm, setSearchTerm] = useState<string>(searchParam);
   const searchParamRef = useRef(searchParam);
 
-  // Row selection state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Stable date references for tab filtering (computed once per mount)
+  const dateRefs = useMemo(() => {
+    const now = new Date();
+    const todayISO = toLocalISODate(now);
+    const tom = new Date(now);
+    tom.setDate(now.getDate() + 1);
+    const tomorrowISO = toLocalISODate(tom);
+    const dow = now.getDay();
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + (dow === 0 ? -6 : 1 - dow));
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return {
+      todayISO,
+      tomorrowISO,
+      startWeekISO: toLocalISODate(monday),
+      endWeekISO: toLocalISODate(sunday),
+    };
+  }, []);
+
+  // ── Client-side view shaping — every delivery-date/time-slot constraint is
+  //    applied HERE, not in the loader query: Shopify ignores metafield search
+  //    terms on orders unless the definition is indexed as filterable
+  //    (verified live 2026-07-11), so the loader fetches an enlarged page and
+  //    the date tabs + both toolbar filters narrow it locally (the original
+  //    thisWeek pattern, extended). The deliveryDate sort options also apply
+  //    here because the Admin API has no metafield sort key. ─────────────────
+
+  const displayedOrders: Order[] = useMemo(() => {
+    let list = orders;
+    if (tabParam === "today") {
+      list = list.filter(
+        (order) => getDeliveryDateValue(order) === dateRefs.todayISO,
+      );
+    } else if (tabParam === "tomorrow") {
+      list = list.filter(
+        (order) => getDeliveryDateValue(order) === dateRefs.tomorrowISO,
+      );
+    } else if (tabParam === "thisWeek") {
+      list = list.filter((order) => {
+        const d = getDeliveryDateValue(order);
+        return (
+          d !== "—" && d >= dateRefs.startWeekISO && d <= dateRefs.endWeekISO
+        );
+      });
+    }
+    if (deliveryDateFilter) {
+      list = list.filter(
+        (order) => getDeliveryDateValue(order) === deliveryDateFilter,
+      );
+    }
+    if (timeWindowParam) {
+      list = list.filter(
+        (order) => getDeliveryTimeValue(order) === timeWindowParam,
+      );
+    }
+    if (sortParam === "deliveryDate asc" || sortParam === "deliveryDate desc") {
+      const dir = sortParam.endsWith("asc") ? 1 : -1;
+      list = [...list].sort((a, b) => {
+        const da = getDeliveryDateValue(a);
+        const db = getDeliveryDateValue(b);
+        if (da === "—" && db === "—") return 0;
+        if (da === "—") return 1; // undated orders always sink to the bottom
+        if (db === "—") return -1;
+        return da < db ? -dir : da > db ? dir : 0;
+      });
+    }
+    return list;
+  }, [orders, tabParam, dateRefs, sortParam, deliveryDateFilter, timeWindowParam]);
+
+  // ── Row selection — Polaris useIndexResourceState replaces the manual
+  //    selectedIds Set (+ useFilteredSelection) ───────────────────────────────
+
+  const {
+    selectedResources,
+    allResourcesSelected,
+    handleSelectionChange,
+    clearSelection,
+    removeSelectedResources,
+  } = useIndexResourceState(
+    displayedOrders as unknown as { [key: string]: unknown }[],
+    { resourceIDResolver: (resource) => String(resource.id) },
+  );
+
+  // Prune selected ids that are no longer in the displayed set (filter/tab/
+  // pagination/revalidation changes) — same behavior as the old
+  // useFilteredSelection.
+  useEffect(() => {
+    const visible = new Set(displayedOrders.map((o) => o.id));
+    const gone = selectedResources.filter((id) => !visible.has(id));
+    if (gone.length > 0) removeSelectedResources(gone);
+  }, [displayedOrders, selectedResources, removeSelectedResources]);
+
+  // Clear selection when tab changes (tabParam is URL-driven). clearSelection
+  // comes from useIndexResourceState with no stable-identity guarantee, so it
+  // is read through a ref to keep this effect keyed on tabParam only.
+  const clearSelectionRef = useRef(clearSelection);
+  clearSelectionRef.current = clearSelection;
+  useEffect(() => {
+    clearSelectionRef.current();
+  }, [tabParam]);
+
+  // ── Bulk actions (archive / unarchive / cancel / tags / fulfill) ───────────
+  //    Submission, toast handling, and modal visibility live in useBulkActions.
+
+  const {
+    isSubmitting,
+    activeModal,
+    openModal,
+    closeModal,
+    cancelReason,
+    setCancelReason,
+    cancelRestock,
+    setCancelRestock,
+    cancelNotify,
+    setCancelNotify,
+    cancelStaffNote,
+    setCancelStaffNote,
+    addTagsInput,
+    setAddTagsInput,
+    removeTagsInput,
+    setRemoveTagsInput,
+    fulfillTrackingNumber,
+    setFulfillTrackingNumber,
+    fulfillTrackingUrl,
+    setFulfillTrackingUrl,
+    fulfillNotify,
+    setFulfillNotify,
+    fulfillPhotoPreview,
+    fulfillPhotoError,
+    handlePhotoChange,
+    handleArchiveConfirm,
+    handleUnarchiveConfirm,
+    handleCancelConfirm,
+    handleAddTags,
+    handleRemoveTags,
+    handleMarkFulfilled,
+  } = useBulkActions(selectedResources, clearSelection, removeSelectedResources);
+
+  // Shared row-level tags modal + KPI items-to-prepare modal — plain React
+  // open state (the old counter/ref + command-API patterns are gone).
+  const [tagsModalOrderId, setTagsModalOrderId] = useState<string | null>(null);
+  const [kpiProductsOpen, setKpiProductsOpen] = useState(false);
 
   // Right-side panel state — URL-driven via ?order=<numeric id> (REC-7) so the
   // open panel deep-links, survives refresh, and persists across revalidation.
@@ -995,19 +1142,21 @@ function Extension() {
       ) ?? null)
     : null;
 
-  // PUSH (not replace) navigations here: App Bridge mirrors pushed history
-  // entries to the outer admin URL, but replace-based ones were observed NOT
-  // to reach the address bar (2026-07-11 smoke test), which broke the ?order=
-  // deep link. Push also means the browser Back button closes the panel.
+  // PUSH (not replace) navigations here: pushed history entries mirror to the
+  // outer admin URL, and Back closes the panel (verified live 2026-07-11).
+  // Opening the panel also closes any open modal (§4 of the V2 design).
   const openOrderPanel = useCallback(
     (orderId: string) => {
+      closeModal();
+      setTagsModalOrderId(null);
+      setKpiProductsOpen(false);
       const params = new URLSearchParams(searchParams);
       const numericId = orderId.split("/").pop() || orderId;
       if (params.get("order") === numericId) return;
       params.set("order", numericId);
       navigate(`?${params.toString()}`, { preventScrollReset: true });
     },
-    [searchParams, navigate],
+    [searchParams, navigate, closeModal],
   );
 
   const handleCloseDrawer = useCallback(() => {
@@ -1016,20 +1165,6 @@ function Extension() {
     params.delete("order");
     navigate(`?${params.toString()}`, { preventScrollReset: true });
   }, [searchParams, navigate]);
-
-  // Shared tags modal state — single modal instance reused for all rows
-  const [tagsModalOrderId, setTagsModalOrderId] = useState<string | null>(null);
-  const [tagsModalTrigger, setTagsModalTrigger] = useState(0);
-
-  const showTagsModal = useCallback((orderId: string) => {
-    setTagsModalOrderId(orderId);
-    setTagsModalTrigger((n) => n + 1);
-  }, []);
-
-  // Clear selection when tab changes (tabParam is URL-driven)
-  useEffect(() => {
-    setSelectedIds(new Set());
-  }, [tabParam]);
 
   // Sync local search draft when loader returns a new searchParam (e.g., back navigation)
   useEffect(() => {
@@ -1055,36 +1190,24 @@ function Extension() {
     return () => clearTimeout(timer);
   }, [searchTerm, searchParams, navigate]);
 
-  // Stable date references for tab filtering (computed once per mount)
-  const dateRefs = useMemo(() => {
-    const now = new Date();
-    const todayISO = toLocalISODate(now);
-    const tom = new Date(now);
-    tom.setDate(now.getDate() + 1);
-    const tomorrowISO = toLocalISODate(tom);
-    const dow = now.getDay();
-    const monday = new Date(now);
-    monday.setDate(now.getDate() + (dow === 0 ? -6 : 1 - dow));
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
-    return {
-      todayISO,
-      tomorrowISO,
-      startWeekISO: toLocalISODate(monday),
-      endWeekISO: toLocalISODate(sunday),
-    };
-  }, []);
+  // Clearing search (the ✕ button) commits IMMEDIATELY instead of waiting for
+  // the 300ms debounce — the deferred commit was observed to occasionally get
+  // lost between navigations (2026-07-11 smoke test round 2).
+  const handleQueryClear = useCallback((): void => {
+    setSearchTerm("");
+    searchParamRef.current = "";
+    const params = new URLSearchParams(searchParams);
+    if (!params.has("search")) return;
+    params.delete("search");
+    params.delete("after");
+    params.delete("before");
+    navigate(`?${params.toString()}`, { replace: true });
+  }, [searchParams, navigate]);
 
-  // ── Search handler ─────────────────────────────────────────────────────────
-
-  const handleSearchInput = (e: Event): void => {
-    setSearchTerm(getSafeEventValue(e));
-  };
-
-  // ── Tab handler — navigates to ?tab=VALUE and clears cursors ────────────────
+  // ── Tab / filter / sort handlers — all map onto URL params ─────────────────
 
   const handleTabChange = useCallback(
-    (tab: ActiveTab): void => {
+    (tab: string): void => {
       const params = new URLSearchParams(searchParams);
       if (tab === "all") {
         params.delete("tab");
@@ -1093,29 +1216,61 @@ function Extension() {
       }
       params.delete("after");
       params.delete("before");
-      setSelectedIds(new Set());
+      clearSelection();
+      navigate(`?${params.toString()}`, { replace: true });
+    },
+    [searchParams, navigate, clearSelection],
+  );
+
+  const handleDateChange = useCallback(
+    (value: string): void => {
+      const iso = normalizeDateToISO(value);
+      const params = new URLSearchParams(searchParams);
+      if (iso) {
+        params.set("deliveryDate", iso);
+      } else {
+        params.delete("deliveryDate");
+      }
+      params.delete("after");
+      params.delete("before");
+      clearSelection();
+      navigate(`?${params.toString()}`, { replace: true });
+    },
+    [searchParams, navigate, clearSelection],
+  );
+
+  const handleTimeWindowChange = useCallback(
+    (value: string): void => {
+      const params = new URLSearchParams(searchParams);
+      if (value) {
+        params.set("timeWindow", value);
+      } else {
+        params.delete("timeWindow");
+      }
+      params.delete("after");
+      params.delete("before");
+      clearSelection();
+      navigate(`?${params.toString()}`, { replace: true });
+    },
+    [searchParams, navigate, clearSelection],
+  );
+
+  const handleSortChange = useCallback(
+    (value: string): void => {
+      const params = new URLSearchParams(searchParams);
+      if (value === DEFAULT_SORT) {
+        params.delete("sort");
+      } else {
+        params.set("sort", value);
+      }
+      params.delete("after");
+      params.delete("before");
       navigate(`?${params.toString()}`, { replace: true });
     },
     [searchParams, navigate],
   );
 
-  // ── Filter handlers ─────────────────────────────────────────────────────────
-
-  const handleDateChange = (value: string): void => {
-    const iso = normalizeDateToISO(value);
-    const params = new URLSearchParams(searchParams);
-    if (iso) {
-      params.set("deliveryDate", iso);
-    } else {
-      params.delete("deliveryDate");
-    }
-    params.delete("after");
-    params.delete("before");
-    setSelectedIds(new Set());
-    navigate(`?${params.toString()}`, { replace: true });
-  };
-
-  const handleClearFilters = (): void => {
+  const handleClearFilters = useCallback((): void => {
     const params = new URLSearchParams(searchParams);
     params.delete("search");
     params.delete("tab");
@@ -1124,78 +1279,29 @@ function Extension() {
     params.delete("after");
     params.delete("before");
     setSearchTerm("");
-    setSelectedIds(new Set());
+    clearSelection();
     navigate(`?${params.toString()}`, { replace: true });
-  };
+  }, [searchParams, navigate, clearSelection]);
 
-  // ── Row selection handlers ─────────────────────────────────────────────────
+  // ── Pagination handlers — update URL cursors to trigger loader refetch ──────
 
-  const handleToggleRow = (id: string, checked: boolean): void => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
-
-  const handleToggleAll = (checked: boolean): void => {
-    if (checked) {
-      setSelectedIds(new Set(displayedOrders.map((o) => o.id)));
-    } else {
-      setSelectedIds(new Set());
-    }
-  };
-
-  const handleClearSelection = (): void => {
-    setSelectedIds(new Set());
-  };
-
-  // ── Pagination handlers — update URL cursors to trigger loader refetch ───────
-
-  const handleNextPage = (): void => {
+  const handleNextPage = useCallback((): void => {
     if (!pageInfo?.hasNextPage || !pageInfo.endCursor) return;
     const params = new URLSearchParams(searchParams);
     params.set("after", pageInfo.endCursor);
     params.delete("before");
     navigate(`?${params.toString()}`, { replace: true });
-  };
+  }, [pageInfo, searchParams, navigate]);
 
-  const handlePreviousPage = (): void => {
+  const handlePreviousPage = useCallback((): void => {
     if (!pageInfo?.hasPreviousPage || !pageInfo.startCursor) return;
     const params = new URLSearchParams(searchParams);
     params.set("before", pageInfo.startCursor);
     params.delete("after");
     navigate(`?${params.toString()}`, { replace: true });
-  };
+  }, [pageInfo, searchParams, navigate]);
 
-  // ── Client-side filter — only thisWeek needs local date-range filtering;
-  //    all other filters are handled server-side via GraphQL query param ──────
-
-  const filteredOrders: Order[] = useMemo(() => {
-    if (tabParam !== "thisWeek") return orders;
-    return orders.filter((order) => {
-      const d = getDeliveryDateValue(order);
-      return (
-        d !== "—" &&
-        d >= dateRefs.startWeekISO &&
-        d <= dateRefs.endWeekISO
-      );
-    });
-  }, [orders, tabParam, dateRefs]);
-
-  const displayedOrders: Order[] = filteredOrders;
-
-  useFilteredSelection(displayedOrders, setSelectedIds);
-
-  // Selection derived values
-  const selectedCount: number = selectedIds.size;
-  const allSelected: boolean =
-    displayedOrders.length > 0 &&
-    displayedOrders.every((o) => selectedIds.has(o.id));
-  const someSelected: boolean = selectedCount > 0 && !allSelected;
-
-  // ── KPI computations ────────────────────────────────────────────────────────
+  // ── KPI computations (this page only — REC-8) ──────────────────────────────
 
   const kpiOrderCount: number = displayedOrders.length;
 
@@ -1310,7 +1416,7 @@ function Extension() {
     };
   }, [displayedOrders]);
 
-  // ── Tab counts (for badge pills) ──────────────────────────────────────────
+  // ── Tab counts (for tab labels) ────────────────────────────────────────────
 
   const tabCounts = useMemo(() => {
     return {
@@ -1333,46 +1439,26 @@ function Extension() {
     };
   }, [orders, dateRefs]);
 
+  // Union of the selected orders' meaningful tags — clickable suggestions in
+  // the Remove-tags modal (audit S4; client-side only, no server change).
+  const removeTagSuggestions = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of displayedOrders) {
+      if (!selectedResources.includes(o.id)) continue;
+      for (const tag of getMeaningfulTags(o.tags || [])) set.add(tag);
+    }
+    return Array.from(set).sort();
+  }, [displayedOrders, selectedResources]);
 
-  // ── Bulk actions (archive / unarchive / cancel / tags / fulfill) ───────────
-  //    State + submission + toast handling moved verbatim to useBulkActions.
-
-  const {
-    isSubmitting,
-    cancelReason,
-    setCancelReason,
-    cancelRestock,
-    setCancelRestock,
-    cancelNotify,
-    setCancelNotify,
-    cancelStaffNote,
-    setCancelStaffNote,
-    addTagsInput,
-    setAddTagsInput,
-    removeTagsInput,
-    setRemoveTagsInput,
-    fulfillTrackingNumber,
-    setFulfillTrackingNumber,
-    fulfillTrackingUrl,
-    setFulfillTrackingUrl,
-    fulfillNotify,
-    setFulfillNotify,
-    fulfillPhotoPreview,
-    fulfillPhotoError,
-    handlePhotoChange,
-    handleArchive,
-    handleUnarchive,
-    handleArchiveConfirm,
-    handleUnarchiveConfirm,
-    handleCancelConfirm,
-    handleAddTags,
-    handleRemoveTags,
-    handleMarkFulfilled,
-  } = useBulkActions(selectedIds, setSelectedIds);
+  const sharedTagsModalTags = tagsModalOrderId
+    ? getMeaningfulTags(
+        orders.find((o) => o.id === tagsModalOrderId)?.tags || [],
+      )
+    : [];
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  const tabDefs: { id: ActiveTab; label: string; count: number }[] = [
+  const tabDefs: OrdersTabDef[] = [
     { id: "all", label: "All", count: orders.length },
     { id: "today", label: "Today", count: tabCounts.today },
     { id: "tomorrow", label: "Tomorrow", count: tabCounts.tomorrow },
@@ -1387,57 +1473,183 @@ function Extension() {
     deliveryDateFilter ||
     tabParam !== "all",
   );
-  const hasActiveViewControls = hasActiveFilters;
+
+  const selectedCount = selectedResources.length;
 
   return (
-    <s-page
-      id="orders-dashboard-page"
-      heading="Orders Operations"
-      inlineSize="large"
-    >
-      {/* ── Global modals ──────────────────────────────────────────────────── */}
+    <Page title="Orders Operations" fullWidth>
+      <BlockStack gap="400">
+        {/* ── Error banner ──────────────────────────────────────────────────── */}
+        {error && !errorDismissed && (
+          <Banner
+            title="Failed to load orders"
+            tone="critical"
+            onDismiss={() => setErrorDismissed(true)}
+          >
+            <Text as="p">{error}</Text>
+          </Banner>
+        )}
 
-      {/* Bulk actions menu */}
-      <s-menu id="bulk-actions-menu" accessibilityLabel="Bulk actions">
-        <s-button onClick={handleArchive} disabled={isSubmitting}>
-          Archive orders
-        </s-button>
-        <s-button onClick={handleUnarchive} disabled={isSubmitting}>
-          Unarchive orders
-        </s-button>
-        <s-button
-          commandFor="modal-add-tags"
-          command="--show"
-          disabled={isSubmitting}
-        >
-          Add tags…
-        </s-button>
-        <s-button
-          commandFor="modal-remove-tags"
-          command="--show"
-          disabled={isSubmitting}
-        >
-          Remove tags…
-        </s-button>
-        <s-button
-          commandFor="modal-mark-fulfilled"
-          command="--show"
-          disabled={isSubmitting}
-        >
-          Mark as fulfilled…
-        </s-button>
-        <s-button
-          commandFor="modal-cancel-orders"
-          command="--show"
-          tone="critical"
-          disabled={isSubmitting}
-        >
-          Cancel orders…
-        </s-button>
-      </s-menu>
+        {/* ── KPI band — values are computed from the loaded page only (REC-8) ── */}
+        <InlineGrid columns={{ xs: 1, sm: 2, md: 5 }} gap="300">
+          <Card>
+            <BlockStack gap="100">
+              <Text as="p" variant="bodySm" tone="subdued">
+                Orders · this page
+              </Text>
+              <Text as="p" variant="headingLg">
+                {kpiOrderCount}
+              </Text>
+              <InlineStack gap="200" blockAlign="center">
+                {tabCounts.today > 0 && (
+                  <Text as="span" variant="bodySm" tone="subdued">
+                    {tabCounts.today} delivering today
+                  </Text>
+                )}
+                <Button
+                  variant="plain"
+                  onClick={() => setKpiProductsOpen(true)}
+                >
+                  Items to prepare
+                </Button>
+              </InlineStack>
+            </BlockStack>
+          </Card>
 
-      {/* Cancel orders confirmation modal */}
+          <Card>
+            <BlockStack gap="100">
+              <Text as="p" variant="bodySm" tone="subdued">
+                Revenue · this page
+              </Text>
+              <Text as="p" variant="headingLg">
+                {kpiRevenue}
+              </Text>
+              {kpiAvgRevenue && (
+                <Text as="p" variant="bodySm" tone="subdued">
+                  {kpiAvgRevenue}
+                </Text>
+              )}
+            </BlockStack>
+          </Card>
+
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="Show unpaid orders"
+            onClick={() => handleTabChange("unpaid")}
+            onKeyDown={(e) =>
+              (e.key === "Enter" || e.key === " ") && handleTabChange("unpaid")
+            }
+            style={{ cursor: "pointer" }}
+          >
+            <Card>
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Unpaid · this page
+                </Text>
+                <Text
+                  as="p"
+                  variant="headingLg"
+                  tone={kpiUnpaidCount > 0 ? "critical" : undefined}
+                >
+                  {kpiUnpaidCount}
+                </Text>
+                {kpiUnpaidTotal && (
+                  <Text
+                    as="p"
+                    variant="bodySm"
+                    tone={kpiUnpaidCount > 0 ? "critical" : "subdued"}
+                  >
+                    {kpiUnpaidTotal}
+                  </Text>
+                )}
+              </BlockStack>
+            </Card>
+          </div>
+
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="Show unfulfilled orders"
+            onClick={() => handleTabChange("unfulfilled")}
+            onKeyDown={(e) =>
+              (e.key === "Enter" || e.key === " ") &&
+              handleTabChange("unfulfilled")
+            }
+            style={{ cursor: "pointer" }}
+          >
+            <Card>
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Unfulfilled · this page
+                </Text>
+                <Text
+                  as="p"
+                  variant="headingLg"
+                  tone={kpiUnfulfilledCount > 0 ? "critical" : undefined}
+                >
+                  {kpiUnfulfilledCount}
+                </Text>
+                {kpiUnfulfilledDueToday > 0 && (
+                  <Text as="p" variant="bodySm" tone="critical">
+                    {kpiUnfulfilledDueToday} due today or earlier
+                  </Text>
+                )}
+              </BlockStack>
+            </Card>
+          </div>
+
+          <Card>
+            <BlockStack gap="100">
+              <Text as="p" variant="bodySm" tone="subdued">
+                Delivery Fees · this page
+              </Text>
+              <Text as="p" variant="headingLg">
+                {kpiDeliveryFees}
+              </Text>
+            </BlockStack>
+          </Card>
+        </InlineGrid>
+
+        {/* ── Filters + table ───────────────────────────────────────────────── */}
+        <Card padding="0">
+          <OrdersIndexTable
+            orders={displayedOrders}
+            todayISO={dateRefs.todayISO}
+            loading={loading}
+            isSubmitting={isSubmitting}
+            hasNextPage={pageInfo?.hasNextPage || false}
+            hasPreviousPage={pageInfo?.hasPreviousPage || false}
+            onNextPage={handleNextPage}
+            onPreviousPage={handlePreviousPage}
+            tabs={tabDefs}
+            activeTab={tabParam}
+            onTabChange={handleTabChange}
+            queryValue={searchTerm}
+            onQueryChange={setSearchTerm}
+            onQueryClear={handleQueryClear}
+            deliveryDateFilter={deliveryDateFilter}
+            onDeliveryDateChange={handleDateChange}
+            timeWindow={timeWindowParam}
+            onTimeWindowChange={handleTimeWindowChange}
+            sortSelected={sortParam}
+            onSortChange={handleSortChange}
+            onClearFilters={handleClearFilters}
+            hasActiveFilters={hasActiveFilters}
+            selectedResources={selectedResources}
+            allResourcesSelected={allResourcesSelected}
+            onSelectionChange={handleSelectionChange}
+            onOpenOrder={openOrderPanel}
+            onShowTags={(orderId) => setTagsModalOrderId(orderId)}
+            onOpenBulkModal={openModal}
+          />
+        </Card>
+      </BlockStack>
+
+      {/* ── Bulk-action modals — visibility driven by useBulkActions state ──── */}
       <CancelModal
+        open={activeModal === "cancel"}
+        onClose={closeModal}
         selectedCount={selectedCount}
         isSubmitting={isSubmitting}
         cancelReason={cancelReason}
@@ -1450,23 +1662,23 @@ function Extension() {
         setCancelStaffNote={setCancelStaffNote}
         onConfirm={handleCancelConfirm}
       />
-
-      {/* Archive orders confirmation modal */}
       <ArchiveModal
+        open={activeModal === "archive"}
+        onClose={closeModal}
         selectedCount={selectedCount}
         isSubmitting={isSubmitting}
         onConfirm={handleArchiveConfirm}
       />
-
-      {/* Unarchive orders confirmation modal */}
       <UnarchiveModal
+        open={activeModal === "unarchive"}
+        onClose={closeModal}
         selectedCount={selectedCount}
         isSubmitting={isSubmitting}
         onConfirm={handleUnarchiveConfirm}
       />
-
-      {/* Mark as fulfilled modal */}
       <MarkFulfilledModal
+        open={activeModal === "markFulfilled"}
+        onClose={closeModal}
         selectedCount={selectedCount}
         isSubmitting={isSubmitting}
         fulfillTrackingNumber={fulfillTrackingNumber}
@@ -1480,634 +1692,35 @@ function Extension() {
         onPhotoChange={handlePhotoChange}
         onConfirm={handleMarkFulfilled}
       />
-
-      {/* Add tags modal */}
       <AddTagsModal
+        open={activeModal === "addTags"}
+        onClose={closeModal}
         selectedCount={selectedCount}
         isSubmitting={isSubmitting}
         addTagsInput={addTagsInput}
         setAddTagsInput={setAddTagsInput}
         onConfirm={handleAddTags}
       />
-
-      {/* Remove tags modal */}
       <RemoveTagsModal
+        open={activeModal === "removeTags"}
+        onClose={closeModal}
         selectedCount={selectedCount}
         isSubmitting={isSubmitting}
         removeTagsInput={removeTagsInput}
         setRemoveTagsInput={setRemoveTagsInput}
+        suggestedTags={removeTagSuggestions}
         onConfirm={handleRemoveTags}
       />
-
-      {/* Items to prep modal (triggered by KPI card button) */}
-      <KpiProductsModal kpiProducts={kpiProducts} />
-
-      {/* Shared row-level tags/attributes modal — one instance for all rows */}
-      <SharedTagsModal
-        tags={
-          tagsModalOrderId
-            ? getMeaningfulTags(
-                orders.find((o) => o.id === tagsModalOrderId)?.tags || [],
-              )
-            : []
-        }
-        openTrigger={tagsModalTrigger}
+      <KpiProductsModal
+        open={kpiProductsOpen}
+        onClose={() => setKpiProductsOpen(false)}
+        kpiProducts={kpiProducts}
       />
-
-      {/* ── Error banner ────────────────────────────────────────────────────── */}
-      {error && !errorDismissed && (
-        <s-banner
-          id="error-banner"
-          tone="critical"
-          heading="Failed to load orders"
-          dismissible
-          onDismiss={() => setErrorDismissed(true)}
-        >
-          <s-paragraph>{error}</s-paragraph>
-        </s-banner>
-      )}
-
-      {/* ── KPI grid ─────────────────────────────────────────────────────────── */}
-      <div className="ods-kpi-grid">
-        <div className="ods-kpi-card">
-          <p className="ods-kpi-label">Orders</p>
-          <s-button
-            variant="tertiary"
-            commandFor="modal-kpi-products"
-            command="--show"
-            aria-live="polite"
-          >
-            <span className="ods-kpi-value ods-kpi-value--link">
-              {kpiOrderCount}
-            </span>
-          </s-button>
-          {tabCounts.today > 0 && (
-            <p className="ods-kpi-sublabel">
-              • {tabCounts.today} delivering today
-            </p>
-          )}
-        </div>
-        <div className="ods-kpi-card">
-          <p className="ods-kpi-label">Revenue</p>
-          <p className="ods-kpi-value" aria-live="polite">
-            {kpiRevenue}
-          </p>
-          {kpiAvgRevenue && (
-            <p className="ods-kpi-sublabel">• {kpiAvgRevenue}</p>
-          )}
-        </div>
-        <div
-          className="ods-kpi-card ods-kpi-card--clickable"
-          onClick={() => handleTabChange("unpaid")}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) =>
-            (e.key === "Enter" || e.key === " ") && handleTabChange("unpaid")
-          }
-        >
-          <p className="ods-kpi-label">Unpaid</p>
-          <p
-            className={`ods-kpi-value${kpiUnpaidCount > 0 ? " ods-kpi-value--danger" : ""}`}
-            aria-live="polite"
-          >
-            {kpiUnpaidCount}
-          </p>
-          {kpiUnpaidTotal && (
-            <p
-              className={`ods-kpi-sublabel${kpiUnpaidCount > 0 ? " ods-kpi-sublabel--danger" : ""}`}
-            >
-              {kpiUnpaidTotal}
-            </p>
-          )}
-        </div>
-        <div
-          className="ods-kpi-card ods-kpi-card--clickable"
-          onClick={() => handleTabChange("unfulfilled")}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) =>
-            (e.key === "Enter" || e.key === " ") && handleTabChange("unfulfilled")
-          }
-        >
-          <p className="ods-kpi-label">Unfulfilled</p>
-          <p
-            className={`ods-kpi-value${kpiUnfulfilledCount > 0 ? " ods-kpi-value--danger" : ""}`}
-            aria-live="polite"
-          >
-            {kpiUnfulfilledCount}
-          </p>
-          {kpiUnfulfilledDueToday > 0 && (
-            <p className="ods-kpi-sublabel ods-kpi-sublabel--danger">
-              {kpiUnfulfilledDueToday} due today or earlier
-            </p>
-          )}
-        </div>
-        <div className="ods-kpi-card">
-          <p className="ods-kpi-label">Delivery Fees</p>
-          <p className="ods-kpi-value" aria-live="polite">
-            {kpiDeliveryFees}
-          </p>
-        </div>
-      </div>
-
-      {/* ── Tabs + Table (single child so s-page adds no gap between them) ──── */}
-      <div className="ods-tabs-table">
-        <div className="ods-tabs" role="tablist" aria-label="Filter orders">
-          {tabDefs.map((tab) => (
-            <button
-              key={tab.id}
-              role="tab"
-              aria-selected={tabParam === tab.id}
-              className={`ods-tab${tabParam === tab.id ? " ods-tab--active" : ""}`}
-              onClick={() => handleTabChange(tab.id)}
-            >
-              {tab.label}
-              {tab.count > 0 && (
-                <span className="ods-tab-count">{tab.count}</span>
-              )}
-            </button>
-          ))}
-        </div>
-
-        {/* ── Table section ────────────────────────────────────────────────────── */}
-        <s-section id="orders-table-section" padding="none">
-          {selectedCount > 0 && (
-            <div
-              id="selection-bar"
-              className="ods-selection-bar"
-              aria-busy={isSubmitting}
-            >
-              <span className="ods-selection-count">
-                {selectedCount} selected
-              </span>
-              <s-button
-                variant="secondary"
-                icon="menu-horizontal"
-                commandFor="bulk-actions-menu"
-                disabled={isSubmitting}
-                accessibilityLabel="Bulk actions"
-              >
-                {isSubmitting ? "Working…" : "Bulk actions"}
-              </s-button>
-              <s-button
-                variant="tertiary"
-                onClick={handleClearSelection}
-                disabled={isSubmitting}
-              >
-                Clear selection
-              </s-button>
-              {isSubmitting && (
-                <span className="ods-selection-status" aria-live="polite">
-                  Submitting selected orders...
-                </span>
-              )}
-            </div>
-          )}
-
-          <div className="ods-table-frame">
-            <s-table
-              id="orders-table"
-              paginate={true}
-              loading={loading}
-              hasNextPage={pageInfo?.hasNextPage || false}
-              hasPreviousPage={pageInfo?.hasPreviousPage || false}
-              onNextPage={handleNextPage}
-              onPreviousPage={handlePreviousPage}
-            >
-              {/* Toolbar — single compact row */}
-              <div slot="filters" className="ods-toolbar">
-                <div className="ods-toolbar-search">
-                  <s-search-field
-                    id="search-field"
-                    label="Search orders"
-                    labelAccessibilityVisibility="exclusive"
-                    placeholder="Search by order, customer, phone, city"
-                    value={searchTerm}
-                    onInput={handleSearchInput}
-                    onChange={handleSearchInput}
-                  />
-                </div>
-                <div className="ods-toolbar-date">
-                  <s-date-field
-                    id="toolbar-delivery-date-filter"
-                    label="Delivery date"
-                    labelAccessibilityVisibility="exclusive"
-                    value={deliveryDateFilter}
-                    onInput={(e: Event) =>
-                      handleDateChange(getSafeEventValue(e))
-                    }
-                    onChange={(e: Event) =>
-                      handleDateChange(getSafeEventValue(e))
-                    }
-                  />
-                </div>
-                <div className="ods-toolbar-slot">
-                  <s-select
-                    id="toolbar-time-slot-filter"
-                    label="Time slot"
-                    labelAccessibilityVisibility="exclusive"
-                    value={timeWindowParam}
-                    onChange={(e: Event) => {
-                      const val = getSafeEventValue(e);
-                      const params = new URLSearchParams(searchParams);
-                      if (val) {
-                        params.set("timeWindow", val);
-                      } else {
-                        params.delete("timeWindow");
-                      }
-                      params.delete("after");
-                      params.delete("before");
-                      setSelectedIds(new Set());
-                      navigate(`?${params.toString()}`, { replace: true });
-                    }}
-                  >
-                    <s-option value="">All time slots</s-option>
-                    <s-option value="9AM-12PM">9AM–12PM</s-option>
-                    <s-option value="12PM-3PM">12PM–3PM</s-option>
-                    <s-option value="3PM-6PM">3PM–6PM</s-option>
-                    <s-option value="6PM-11PM">6PM–11PM</s-option>
-                  </s-select>
-                </div>
-                <div className="ods-toolbar-actions">
-                  <s-button
-                    variant={hasActiveViewControls ? "secondary" : "tertiary"}
-                    onClick={handleClearFilters}
-                    disabled={!hasActiveViewControls}
-                  >
-                    Reset
-                  </s-button>
-                </div>
-              </div>
-
-              {/* Table header */}
-              <s-table-header-row id="orders-header-row">
-                <s-table-header id="header-select" listSlot="kicker">
-                  <s-checkbox
-                    id="checkbox-select-all"
-                    accessibilityLabel="Select all orders"
-                    checked={allSelected}
-                    indeterminate={someSelected}
-                    onChange={(e: Event) =>
-                      handleToggleAll(
-                        (e.currentTarget as HTMLInputElement).checked,
-                      )
-                    }
-                  />
-                </s-table-header>
-                <s-table-header id="header-order" listSlot="primary">
-                  Order
-                </s-table-header>
-                <s-table-header id="header-item" listSlot="labeled">
-                  Items
-                </s-table-header>
-                <s-table-header id="header-customer" listSlot="secondary">
-                  Customer
-                </s-table-header>
-                <s-table-header id="header-city" listSlot="labeled">City</s-table-header>
-                <s-table-header id="header-delivery-date" listSlot="labeled">Delivery date</s-table-header>
-                <s-table-header id="header-time-window" listSlot="labeled">Time window</s-table-header>
-                <s-table-header id="header-payment" listSlot="labeled">
-                  Payment
-                </s-table-header>
-                <s-table-header id="header-fulfillment" listSlot="labeled">Fulfillment</s-table-header>
-                <s-table-header id="header-total" listSlot="labeled">
-                  Total
-                </s-table-header>
-                <s-table-header id="header-tags" listSlot="labeled">
-                  Tags
-                </s-table-header>
-              </s-table-header-row>
-
-              {/* Table body */}
-              <s-table-body id="orders-table-body">
-                {!loading && displayedOrders.length === 0 ? (
-                  <s-table-row id="empty-row">
-                    <s-table-cell id="empty-cell">
-                      <s-stack gap="base" alignItems="center">
-                        <s-icon type="order" />
-                        <s-stack gap="small" alignItems="center">
-                          <s-text type="strong">
-                            {hasActiveFilters
-                              ? "No orders match this view"
-                              : "No orders found"}
-                          </s-text>
-                          <s-text color="subdued">
-                            {hasActiveFilters
-                              ? "Try adjusting or clearing your filters."
-                              : "Orders will appear here after customers place them."}
-                          </s-text>
-                        </s-stack>
-                        {hasActiveFilters && (
-                          <s-button variant="secondary" onClick={handleClearFilters}>
-                            Clear filters
-                          </s-button>
-                        )}
-                      </s-stack>
-                    </s-table-cell>
-                  </s-table-row>
-                ) : (
-                  displayedOrders.map((order) => {
-                    const orderId = order.id.split("/").pop() || order.id;
-                    const isChecked: boolean = selectedIds.has(order.id);
-                    const customerName =
-                      getCustomerName(order) === "—"
-                        ? "Guest"
-                        : getCustomerName(order);
-                    const instructionText = getInstructionValue(order);
-                    const rawDeliveryDate = getDeliveryDateValue(order);
-                    const deliveryDateDisplay =
-                      rawDeliveryDate !== "—"
-                        ? formatDeliveryDate(rawDeliveryDate)
-                        : "—";
-                    const timeWindow = getDeliveryTimeValue(order);
-                    const isOpenOrder = isOpenFulfillmentStatus(
-                      order.displayFulfillmentStatus,
-                    );
-                    const deliveryRelative =
-                      rawDeliveryDate !== "—" && isOpenOrder
-                        ? getDeliveryRelativeLabel(
-                            rawDeliveryDate,
-                            dateRefs.todayISO,
-                          )
-                        : "";
-                    const deliveryOverdue =
-                      rawDeliveryDate !== "—" &&
-                      isOpenOrder &&
-                      isDeliveryOverdue(rawDeliveryDate, dateRefs.todayISO);
-                    const paymentNeedsAttention = isUnpaidStatus(
-                      order.displayFinancialStatus,
-                    );
-                    const fulfillmentNeedsAttention = isOpenOrder;
-                    const total = order.currentTotalPriceSet
-                      ? formatMoney(
-                          order.currentTotalPriceSet.shopMoney.amount,
-                          order.currentTotalPriceSet.shopMoney.currencyCode,
-                        )
-                      : "—";
-
-                    return (
-                      <s-table-row id={`order-row-${orderId}`} key={order.id}>
-                        {/* Checkbox */}
-                        <s-table-cell id={`cell-select-${orderId}`}>
-                          <s-checkbox
-                            id={`checkbox-row-${orderId}`}
-                            accessibilityLabel={`Select order ${order.name}`}
-                            checked={isChecked}
-                            onChange={(e: Event) =>
-                              handleToggleRow(
-                                order.id,
-                                (e.currentTarget as HTMLInputElement).checked,
-                              )
-                            }
-                          />
-                        </s-table-cell>
-
-                        {/* Order name — opens drawer */}
-                        <s-table-cell id={`cell-name-${orderId}`}>
-                          <div className="ods-name-cell-wrap">
-                          <span className="ods-name-cell">
-                            <s-button
-                              id={`btn-name-${orderId}`}
-                              variant="tertiary"
-                              onClick={() => openOrderPanel(order.id)}
-                              accessibilityLabel={`View order ${order.name} details`}
-                            >
-                              <s-text type="strong">{order.name}</s-text>
-                            </s-button>
-                            {instructionText !== "—" && (
-                              <span
-                                className="ods-note-icon"
-                                title={instructionText}
-                                aria-label={`Note: ${instructionText}`}
-                                role="img"
-                              >
-                                <svg
-                                  width="13"
-                                  height="13"
-                                  viewBox="0 0 14 14"
-                                  fill="none"
-                                  aria-hidden="true"
-                                  xmlns="http://www.w3.org/2000/svg"
-                                >
-                                  <rect
-                                    x="1"
-                                    y="1"
-                                    width="12"
-                                    height="12"
-                                    rx="2"
-                                    stroke="currentColor"
-                                    strokeWidth="1.4"
-                                  />
-                                  <line
-                                    x1="3.5"
-                                    y1="4.5"
-                                    x2="10.5"
-                                    y2="4.5"
-                                    stroke="currentColor"
-                                    strokeWidth="1.2"
-                                    strokeLinecap="round"
-                                  />
-                                  <line
-                                    x1="3.5"
-                                    y1="7"
-                                    x2="10.5"
-                                    y2="7"
-                                    stroke="currentColor"
-                                    strokeWidth="1.2"
-                                    strokeLinecap="round"
-                                  />
-                                  <line
-                                    x1="3.5"
-                                    y1="9.5"
-                                    x2="7.5"
-                                    y2="9.5"
-                                    stroke="currentColor"
-                                    strokeWidth="1.2"
-                                    strokeLinecap="round"
-                                  />
-                                </svg>
-                              </span>
-                            )}
-                          </span>
-                          {order.createdAt && (
-                            <span className="ods-name-date">
-                              {new Date(order.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                            </span>
-                          )}
-                          </div>
-                        </s-table-cell>
-
-                        {/* Items — thumbnail + summary */}
-                        <s-table-cell id={`cell-item-${orderId}`}>
-                          {(() => {
-                            const items = order.lineItems?.edges || [];
-                            const itemCount = items.length;
-                            const totalQty = items.reduce(
-                              (sum, item) => sum + (item.node.quantity || 0),
-                              0,
-                            );
-                            const hasMore = itemCount >= 10;
-                            const displayText =
-                              itemCount === 0
-                                ? "—"
-                                : itemCount === 1
-                                  ? `×${totalQty}`
-                                  : hasMore
-                                    ? "10+ items"
-                                    : `${itemCount} items`;
-                            return (
-                              <s-button
-                                variant="tertiary"
-                                id={`btn-item-${orderId}`}
-                                onClick={() => openOrderPanel(order.id)}
-                              >
-                                <s-stack
-                                  direction="inline"
-                                  gap="small"
-                                  alignItems="center"
-                                >
-                                  <s-thumbnail
-                                    id={`thumbnail-item-${orderId}`}
-                                    src={getFirstItemImageUrl(order)}
-                                    alt={getFirstItemAltText(order)}
-                                    size="small-200"
-                                  />
-                                  <s-text>{displayText}</s-text>
-                                </s-stack>
-                              </s-button>
-                            );
-                          })()}
-                        </s-table-cell>
-
-                        {/* Customer */}
-                        <s-table-cell id={`cell-customer-${orderId}`}>
-                          <s-button
-                            variant="tertiary"
-                            id={`btn-customer-${orderId}`}
-                            onClick={() => openOrderPanel(order.id)}
-                          >
-                            <s-stack direction="block" gap="small-100">
-                              <s-text type="strong">{customerName}</s-text>
-                              {order.customer?.defaultEmailAddress
-                                ?.emailAddress && (
-                                <s-text color="subdued">
-                                  {order.customer.defaultEmailAddress.emailAddress}
-                                </s-text>
-                              )}
-                            </s-stack>
-                          </s-button>
-                        </s-table-cell>
-
-                        {/* City */}
-                        <s-table-cell id={`cell-city-${orderId}`}>
-                          <s-text>{getCity(order)}</s-text>
-                        </s-table-cell>
-
-                        {/* Delivery date */}
-                        <s-table-cell id={`cell-delivery-${orderId}`}>
-                          <s-stack direction="block" gap="small-100">
-                            {rawDeliveryDate !== "—" ? (
-                              <s-text type="strong">{deliveryDateDisplay}</s-text>
-                            ) : (
-                              <s-text color="subdued">{deliveryDateDisplay}</s-text>
-                            )}
-                            {deliveryRelative && (
-                              deliveryOverdue ? (
-                                <s-badge tone="critical">{deliveryRelative}</s-badge>
-                              ) : (
-                                <s-badge>{deliveryRelative}</s-badge>
-                              )
-                            )}
-                          </s-stack>
-                        </s-table-cell>
-
-                        {/* Time window */}
-                        <s-table-cell id={`cell-time-window-${orderId}`}>
-                          {timeWindow === "—" ? (
-                            <s-text color="subdued">{timeWindow}</s-text>
-                          ) : (
-                            <s-text>{timeWindow}</s-text>
-                          )}
-                        </s-table-cell>
-
-                        {/* Payment */}
-                        <s-table-cell id={`cell-payment-${orderId}`}>
-                          <span
-                            className={`ods-status-cell${paymentNeedsAttention ? " ods-status-cell--attention" : ""}`}
-                          >
-                            <s-badge
-                              tone={financialStatusTone(
-                                order.displayFinancialStatus,
-                              )}
-                            >
-                              {formatStatusLabel(
-                                order.displayFinancialStatus,
-                              )}
-                            </s-badge>
-                          </span>
-                        </s-table-cell>
-
-                        {/* Fulfillment */}
-                        <s-table-cell id={`cell-fulfillment-${orderId}`}>
-                          <span
-                            className={`ods-status-cell${fulfillmentNeedsAttention ? " ods-status-cell--attention" : ""}`}
-                          >
-                            <s-badge
-                              tone={fulfillmentStatusTone(
-                                order.displayFulfillmentStatus,
-                              )}
-                            >
-                              {formatStatusLabel(
-                                order.displayFulfillmentStatus,
-                              )}
-                            </s-badge>
-                          </span>
-                        </s-table-cell>
-
-                        {/* Total */}
-                        <s-table-cell id={`cell-total-${orderId}`}>
-                          <s-text>{total}</s-text>
-                        </s-table-cell>
-
-                        {/* Tags */}
-                        <s-table-cell id={`cell-tags-${orderId}`}>
-                          {(() => {
-                            const meaningful = getMeaningfulTags(
-                              order.tags || [],
-                            );
-                            if (meaningful.length === 0) {
-                              return <s-text color="subdued">—</s-text>;
-                            }
-                            const shown = meaningful.slice(0, 2);
-                            const extra = meaningful.length - shown.length;
-                            return (
-                              <s-stack direction="inline" gap="small">
-                                {shown.map((tag) => (
-                                  <s-chip key={tag}>{tagDisplayLabel(tag)}</s-chip>
-                                ))}
-                                {extra > 0 && (
-                                  <s-button
-                                    variant="tertiary"
-                                    id={`btn-tags-${orderId}`}
-                                    onClick={() => showTagsModal(order.id)}
-                                  >
-                                    +{extra}
-                                  </s-button>
-                                )}
-                              </s-stack>
-                            );
-                          })()}
-                        </s-table-cell>
-                      </s-table-row>
-                    );
-                  })
-                )}
-              </s-table-body>
-            </s-table>
-          </div>
-        </s-section>
-      </div>
-      {/* end ods-tabs-table */}
+      <SharedTagsModal
+        open={tagsModalOrderId !== null}
+        onClose={() => setTagsModalOrderId(null)}
+        tags={sharedTagsModalTags}
+      />
 
       {/* ── Right-side order details panel (URL-driven, ?order=) ───────────── */}
       {selectedOrder && (
@@ -2118,7 +1731,7 @@ function Extension() {
           />
         </Suspense>
       )}
-    </s-page>
+    </Page>
   );
 }
 

@@ -1,52 +1,47 @@
-// Bulk "Unarchive selected orders" confirmation modal. JSX moved verbatim
-// from app.orders.tsx Extension(); keeps its document-wide id
-// ("modal-unarchive-orders") so useBulkActions' showModal()/hideModal() calls
-// keep working unchanged.
+import { Banner, Modal, Text } from "@shopify/polaris";
+
+// Bulk "Unarchive selected orders" confirmation modal (Polaris React).
+// Visibility is controlled by the parent via `open`/`onClose`.
 export interface UnarchiveModalProps {
+  open: boolean;
+  onClose: () => void;
   selectedCount: number;
   isSubmitting: boolean;
   onConfirm: () => void;
 }
 
 export function UnarchiveModal({
+  open,
+  onClose,
   selectedCount,
   isSubmitting,
   onConfirm,
 }: UnarchiveModalProps) {
   return (
-    <s-modal
-      id="modal-unarchive-orders"
-      heading="Unarchive selected orders?"
-      size="small"
-    >
-      <s-box padding="base">
-        <s-stack direction="block" gap="base">
-          <s-banner tone="info">
-            <s-paragraph>
-              {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
-              be unarchived and returned to the main orders view.
-            </s-paragraph>
-          </s-banner>
-        </s-stack>
-      </s-box>
-      <s-button
-        slot="secondary-actions"
-        commandFor="modal-unarchive-orders"
-        command="--hide"
-        disabled={isSubmitting}
-      >
-        Cancel
-      </s-button>
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        disabled={isSubmitting || selectedCount === 0}
-        onClick={onConfirm}
-      >
-        {isSubmitting
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Unarchive selected orders?"
+      primaryAction={{
+        content: isSubmitting
           ? "Unarchiving…"
-          : `Unarchive ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
-      </s-button>
-    </s-modal>
+          : `Unarchive ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`,
+        onAction: onConfirm,
+        loading: isSubmitting,
+        disabled: isSubmitting || selectedCount === 0,
+      }}
+      secondaryActions={[
+        { content: "Cancel", onAction: onClose, disabled: isSubmitting },
+      ]}
+    >
+      <Modal.Section>
+        <Banner tone="info">
+          <Text as="p">
+            {selectedCount} {selectedCount === 1 ? "order" : "orders"} will be
+            unarchived and returned to the main orders view.
+          </Text>
+        </Banner>
+      </Modal.Section>
+    </Modal>
   );
 }

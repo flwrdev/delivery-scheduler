@@ -1,54 +1,37 @@
-import { useEffect, useRef, type ElementRef } from "react";
+import { InlineStack, Modal, Tag, Text } from "@shopify/polaris";
 import { tagDisplayLabel } from "../../lib/order-utils";
 
 // Shared row-level tags/attributes modal — one instance reused by every table
-// row's "+N" button. JSX moved verbatim from app.orders.tsx Extension().
-// The open trigger is a counter prop: each increment opens the modal via a
-// ref to the s-modal element (replaces the former document.getElementById
-// poke in the route; same effect timing, id "modal-tags-shared" unchanged so
-// the close button's commandFor keeps working).
+// row's "+N" button (Polaris React). Visibility is controlled by the parent
+// via `open`/`onClose`; the old counter-prop + ref show() hack is gone
+// (audit B1: third modal-trigger pattern).
 export interface SharedTagsModalProps {
+  open: boolean;
+  onClose: () => void;
   tags: string[];
-  openTrigger: number;
 }
 
-type SModalElement = ElementRef<"s-modal"> & {
-  show?: () => void;
-  setAttribute: (name: string, value: string) => void;
-};
-
-export function SharedTagsModal({ tags, openTrigger }: SharedTagsModalProps) {
-  const modalRef = useRef<SModalElement | null>(null);
-
-  useEffect(() => {
-    if (openTrigger > 0) {
-      const el = modalRef.current;
-      if (el && typeof el.show === "function") el.show();
-      else el?.setAttribute("open", "");
-    }
-  }, [openTrigger]);
-
+export function SharedTagsModal({ open, onClose, tags }: SharedTagsModalProps) {
   return (
-    <s-modal
-      ref={modalRef}
-      id="modal-tags-shared"
-      heading="Attributes"
-      size="small"
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Attributes"
+      primaryAction={{ content: "Close", onAction: onClose }}
     >
-      <s-box padding="base">
-        <s-stack direction="inline" gap="small">
-          {tags.map((tag) => (
-            <s-chip key={tag}>{tagDisplayLabel(tag)}</s-chip>
-          ))}
-        </s-stack>
-      </s-box>
-      <s-button
-        slot="primary-action"
-        commandFor="modal-tags-shared"
-        command="--hide"
-      >
-        Close
-      </s-button>
-    </s-modal>
+      <Modal.Section>
+        {tags.length === 0 ? (
+          <Text as="p" tone="subdued">
+            No tags on this order.
+          </Text>
+        ) : (
+          <InlineStack gap="100" wrap>
+            {tags.map((tag) => (
+              <Tag key={tag}>{tagDisplayLabel(tag)}</Tag>
+            ))}
+          </InlineStack>
+        )}
+      </Modal.Section>
+    </Modal>
   );
 }

@@ -1,12 +1,19 @@
 import type { ChangeEvent } from "react";
-import { getSafeEventValue } from "../../lib/get-safe-event-value";
+import {
+  Banner,
+  BlockStack,
+  Checkbox,
+  Modal,
+  Text,
+  TextField,
+} from "@shopify/polaris";
 
-// Bulk "Mark as fulfilled" modal (tracking fields + optional bouquet-photo
-// upload with preview). JSX moved verbatim from app.orders.tsx Extension();
-// all form state lives in useBulkActions and arrives via props. Keeps its
-// document-wide id ("modal-mark-fulfilled") so the bulk-menu commandFor
-// trigger and useBulkActions hideModal() keep working unchanged.
+// Bulk "Mark as fulfilled" modal (Polaris React): tracking fields + optional
+// bouquet-photo upload with preview. Visibility is controlled by the parent
+// via `open`/`onClose`; all form state lives in useBulkActions.
 export interface MarkFulfilledModalProps {
+  open: boolean;
+  onClose: () => void;
   selectedCount: number;
   isSubmitting: boolean;
   fulfillTrackingNumber: string;
@@ -22,6 +29,8 @@ export interface MarkFulfilledModalProps {
 }
 
 export function MarkFulfilledModal({
+  open,
+  onClose,
   selectedCount,
   isSubmitting,
   fulfillTrackingNumber,
@@ -36,70 +45,67 @@ export function MarkFulfilledModal({
   onConfirm,
 }: MarkFulfilledModalProps) {
   return (
-    <s-modal
-      id="modal-mark-fulfilled"
-      heading="Mark selected orders as fulfilled?"
-      size="small"
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Mark selected orders as fulfilled?"
+      primaryAction={{
+        content: isSubmitting
+          ? "Fulfilling…"
+          : `Mark ${selectedCount} ${selectedCount === 1 ? "order" : "orders"} fulfilled`,
+        onAction: onConfirm,
+        loading: isSubmitting,
+        disabled: isSubmitting || selectedCount === 0,
+      }}
+      secondaryActions={[
+        { content: "Cancel", onAction: onClose, disabled: isSubmitting },
+      ]}
     >
-      <s-box padding="base">
-        <s-stack direction="block" gap="base">
-          <s-banner tone="warning">
-            <s-paragraph>
+      <Modal.Section>
+        <BlockStack gap="400">
+          <Banner tone="warning">
+            <Text as="p">
               This creates a real Shopify fulfillment for {selectedCount}{" "}
               {selectedCount === 1 ? "order" : "orders"}. Customers will
               receive a notification email if &quot;Notify customer&quot; is
               enabled.
-            </s-paragraph>
-          </s-banner>
-          <s-text-field
-            id="fulfill-tracking-number"
+            </Text>
+          </Banner>
+          <TextField
             label="Tracking number (optional)"
             placeholder="e.g. 1Z999AA10123456784"
             value={fulfillTrackingNumber}
-            onInput={(e: Event) =>
-              setFulfillTrackingNumber(getSafeEventValue(e))
-            }
-            onChange={(e: Event) =>
-              setFulfillTrackingNumber(getSafeEventValue(e))
-            }
+            onChange={setFulfillTrackingNumber}
+            autoComplete="off"
           />
-          <s-text-field
-            id="fulfill-tracking-url"
+          <TextField
             label="Tracking URL (optional)"
             placeholder="https://tracking.example.com/…"
             value={fulfillTrackingUrl}
-            onInput={(e: Event) =>
-              setFulfillTrackingUrl(getSafeEventValue(e))
-            }
-            onChange={(e: Event) =>
-              setFulfillTrackingUrl(getSafeEventValue(e))
-            }
+            onChange={setFulfillTrackingUrl}
+            autoComplete="off"
           />
-          <s-checkbox
+          <Checkbox
             label="Notify customer by email"
             checked={fulfillNotify}
-            onChange={(e: Event) =>
-              setFulfillNotify((e.currentTarget as HTMLInputElement).checked)
-            }
+            onChange={setFulfillNotify}
           />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <label
-              htmlFor="fulfill-photo-input"
-              style={{ fontSize: 13, fontWeight: 500, color: "#202223" }}
-            >
+          <BlockStack gap="150">
+            <Text as="p" variant="bodyMd">
               Bouquet Photo (optional)
-            </label>
+            </Text>
             <input
               id="fulfill-photo-input"
               type="file"
               accept="image/jpeg,image/png,image/webp"
+              aria-label="Bouquet photo (optional)"
               style={{ fontSize: 13 }}
               onChange={onPhotoChange}
             />
             {fulfillPhotoError && (
-              <p style={{ margin: 0, fontSize: 13, color: "#d72c0d" }}>
+              <Text as="p" tone="critical" variant="bodySm">
                 {fulfillPhotoError}
-              </p>
+              </Text>
             )}
             {fulfillPhotoPreview && (
               <img
@@ -111,31 +117,13 @@ export function MarkFulfilledModal({
                   maxHeight: 120,
                   objectFit: "cover",
                   borderRadius: 6,
-                  border: "1px solid #e1e3e5",
+                  border: "1px solid var(--p-color-border, #e1e3e5)",
                 }}
               />
             )}
-          </div>
-        </s-stack>
-      </s-box>
-      <s-button
-        slot="secondary-actions"
-        commandFor="modal-mark-fulfilled"
-        command="--hide"
-        disabled={isSubmitting}
-      >
-        Cancel
-      </s-button>
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        disabled={isSubmitting || selectedCount === 0}
-        onClick={onConfirm}
-      >
-        {isSubmitting
-          ? "Fulfilling…"
-          : `Mark ${selectedCount} ${selectedCount === 1 ? "order" : "orders"} fulfilled`}
-      </s-button>
-    </s-modal>
+          </BlockStack>
+        </BlockStack>
+      </Modal.Section>
+    </Modal>
   );
 }
