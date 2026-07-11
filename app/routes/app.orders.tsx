@@ -32,8 +32,11 @@ import {
   useNavigate,
   useSearchParams,
   useNavigation,
+  useFetcher,
   useFetchers,
 } from "react-router";
+import type { RescheduleTarget } from "../components/orders/RescheduleModal";
+import type { RescheduleRulesData } from "./app.orders_.reschedule-rules";
 import { useBulkActions } from "../hooks/useBulkActions";
 import { useSmartRefresh } from "../hooks/useSmartRefresh";
 import { useOrdersDiff } from "../hooks/useOrdersDiff";
@@ -49,6 +52,10 @@ import { RemoveTagsModal } from "../components/orders/RemoveTagsModal";
 import { SharedTagsModal } from "../components/orders/SharedTagsModal";
 import { KpiProductsModal } from "../components/orders/KpiProductsModal";
 import { MarkFulfilledModal } from "../components/orders/MarkFulfilledModal";
+import { RescheduleModal } from "../components/orders/RescheduleModal";
+import { validateMerchantRescheduleSelection } from "../lib/delivery-availability";
+import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
+import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
 import { authenticate } from "../shopify.server";
 import stylesHref from "../styles/orders-dashboard.css?url";
 import panelStylesHref from "../styles/order-details-panel.css?url";
@@ -562,6 +569,33 @@ async function uploadBouquetPhoto(
   return url;
 }
 
+// Batch current-delivery-state read for the merchant reschedule op: the
+// from→to history values, attribute rewrite, and tag replacement all derive
+// from the order state at write time (single call for the whole selection).
+const RESCHEDULE_ORDER_STATE_QUERY = `#graphql
+  query RescheduleOrderStates($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Order {
+        id
+        tags
+        customAttributes {
+          key
+          value
+        }
+        currentDeliveryDate: metafield(namespace: "custom", key: "date") {
+          value
+        }
+        currentDeliveryTimeSlot: metafield(namespace: "custom", key: "time_slot") {
+          value
+        }
+        rescheduleHistory: metafield(namespace: "delivery", key: "reschedule_history") {
+          value
+        }
+      }
+    }
+  }
+`;
+
 // ─── Action result types ──────────────────────────────────────────────────────
 
 export type BulkActionName =
@@ -570,7 +604,8 @@ export type BulkActionName =
   | "cancel"
   | "tagsAdd"
   | "tagsRemove"
-  | "markFulfilled";
+  | "markFulfilled"
+  | "reschedule";
 
 const BULK_ACTION_NAMES: readonly BulkActionName[] = [
   "archive",
@@ -579,6 +614,7 @@ const BULK_ACTION_NAMES: readonly BulkActionName[] = [
   "tagsAdd",
   "tagsRemove",
   "markFulfilled",
+  "reschedule",
 ];
 const MAX_SELECTED_ORDER_IDS = 100;
 const MAX_TAG_LENGTH = 255;
@@ -599,6 +635,16 @@ export interface BulkActionResponse {
   message?: string;
   results: BulkActionItemResult[];
   summary: { ok: number; failed: number };
+  // Reschedule only (REC-4): the target slot's capacity would be exceeded and
+  // the submit did not carry the explicit override — the modal re-renders as
+  // a confirm step showing the projected load instead of a toast.
+  code?: "capacity_override_required";
+  capacity?: {
+    capacity: number;
+    booked: number;
+    moving: number;
+    projected: number;
+  };
 }
 
 // ─── Action handler ───────────────────────────────────────────────────────────
@@ -608,7 +654,7 @@ export const action = async ({
 }: {
   request: Request;
 }): Promise<Response> => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   if (request.method.toUpperCase() !== "POST") {
     return Response.json(
       {
@@ -933,6 +979,172 @@ export const action = async ({
         }
       }
     }
+  } else if (op === "reschedule") {
+    // Merchant reschedule = administrative override (§5, ADR-10). Only the
+    // data-integrity checks bind this path; the customer self-service gates
+    // (resched lock, ≥2-days, FULFILLED, cutoff/prep window) deliberately do
+    // not. Capacity is warn + explicit confirm override (REC-4).
+    const date = String(fd.get("date") || "").trim();
+    const timeSlot = String(fd.get("timeSlot") || "").trim();
+    const override = fd.get("capacityOverride") === "1";
+
+    const rules = await getScheduleRulesWithBookedCounts(session.shop, admin);
+    const check = validateMerchantRescheduleSelection(rules, date, timeSlot);
+    if (!check.ok) {
+      return Response.json(
+        { ...empty, message: check.message },
+        { status: 400 },
+      );
+    }
+
+    const SHOPIFY_ORDER_GID_RE = /^gid:\/\/shopify\/Order\/\d+$/;
+    const safeIds = orderIds.filter((id) => SHOPIFY_ORDER_GID_RE.test(id));
+    for (const id of orderIds) {
+      if (!SHOPIFY_ORDER_GID_RE.test(id)) {
+        results.push({ orderId: id, success: false, message: "Invalid order ID." });
+      }
+    }
+
+    type RescheduleOrderState = {
+      id: string;
+      tags?: string[] | null;
+      customAttributes?: Array<{ key: string; value: string }> | null;
+      currentDeliveryDate?: { value?: string | null } | null;
+      currentDeliveryTimeSlot?: { value?: string | null } | null;
+      rescheduleHistory?: { value?: string | null } | null;
+    };
+
+    const stateByOrderId = new Map<string, RescheduleOrderState>();
+    let stateQueryFailed = false;
+    if (safeIds.length > 0) {
+      try {
+        const stateRes = await admin.graphql(RESCHEDULE_ORDER_STATE_QUERY, {
+          variables: { ids: safeIds },
+        });
+        const stateJson = (await stateRes.json()) as {
+          data?: { nodes?: Array<RescheduleOrderState | null> };
+          errors?: Array<{ message: string }>;
+        };
+        if (stateJson.errors?.length) {
+          stateQueryFailed = true;
+          const msg = stateJson.errors.map((e) => e.message).join("; ");
+          for (const id of safeIds) {
+            results.push({ orderId: id, success: false, message: msg });
+          }
+        } else {
+          for (const node of stateJson.data?.nodes ?? []) {
+            if (node?.id) stateByOrderId.set(node.id, node);
+          }
+        }
+      } catch (e: unknown) {
+        stateQueryFailed = true;
+        const msg =
+          e instanceof Error ? e.message : "Failed to read order state.";
+        for (const id of safeIds) {
+          results.push({ orderId: id, success: false, message: msg });
+        }
+      }
+    }
+
+    const attrValueOf = (
+      state: RescheduleOrderState,
+      key: string,
+    ): string | null =>
+      state.customAttributes?.find((a) => a.key === key)?.value ?? null;
+    const currentDateOf = (state: RescheduleOrderState): string | null =>
+      state.currentDeliveryDate?.value?.trim() ||
+      attrValueOf(state, "Delivery Date");
+    const currentSlotOf = (state: RescheduleOrderState): string | null =>
+      state.currentDeliveryTimeSlot?.value?.trim() ||
+      attrValueOf(state, "Delivery Time");
+
+    if (!stateQueryFailed && check.capacity) {
+      // Orders already sitting in the target date+slot are not double-counted
+      // against the remaining capacity (§5 bulk rule).
+      const moving = safeIds.filter((id) => {
+        const state = stateByOrderId.get(id);
+        if (!state) return false;
+        return (
+          currentDateOf(state) !== date || currentSlotOf(state) !== timeSlot
+        );
+      }).length;
+      const projected = check.capacity.booked + moving;
+      if (moving > 0 && projected > check.capacity.capacity && !override) {
+        return Response.json(
+          {
+            ...empty,
+            message: `Moving ${moving} ${moving === 1 ? "order" : "orders"} would put ${date} ${timeSlot} at ${projected}/${check.capacity.capacity}.`,
+            code: "capacity_override_required",
+            capacity: {
+              capacity: check.capacity.capacity,
+              booked: check.capacity.booked,
+              moving,
+              projected,
+            },
+          } satisfies BulkActionResponse,
+          { status: 409 },
+        );
+      }
+    }
+
+    if (!stateQueryFailed) {
+      const requestedAt = new Date().toISOString();
+      for (const id of safeIds) {
+        const state = stateByOrderId.get(id);
+        if (!state) {
+          results.push({
+            orderId: id,
+            success: false,
+            message: "Order not found.",
+          });
+          continue;
+        }
+        try {
+          const r = await rescheduleOrderDelivery(admin, {
+            orderId: id,
+            date,
+            timeSlot,
+            source: "merchant",
+            currentDeliveryDate: currentDateOf(state),
+            currentDeliveryTimeSlot: currentSlotOf(state),
+            currentTags: state.tags ?? [],
+            currentCustomAttributes: (state.customAttributes ?? []).map(
+              (a) => ({ key: a.key, value: a.value }),
+            ),
+            existingRescheduleHistoryValue:
+              state.rescheduleHistory?.value ?? null,
+            requestedAt,
+          });
+          if (!r.ok) {
+            const msg =
+              [...r.canonicalErrors.graphql, ...r.canonicalErrors.user].join(
+                "; ",
+              ) || "Failed to update the delivery schedule.";
+            results.push({ orderId: id, success: false, message: msg });
+            continue;
+          }
+          const failedMirrors = [
+            r.historySync === "failed" ? "history" : null,
+            r.attributeSync === "failed" ? "attributes" : null,
+            r.tagSync === "failed" ? "tags" : null,
+          ].filter(Boolean);
+          results.push({
+            orderId: id,
+            success: true,
+            message:
+              failedMirrors.length > 0
+                ? `Rescheduled, but the ${failedMirrors.join(" + ")} sync failed.`
+                : undefined,
+          });
+        } catch (e: unknown) {
+          results.push({
+            orderId: id,
+            success: false,
+            message: e instanceof Error ? e.message : "Reschedule failed.",
+          });
+        }
+      }
+    }
   } else {
     return Response.json(
       { ...empty, message: "Unknown action." },
@@ -1101,6 +1313,8 @@ function Extension() {
     activeModal,
     openModal,
     closeModal,
+    lastActionResult,
+    submitReschedule,
     cancelReason,
     setCancelReason,
     cancelRestock,
@@ -1216,6 +1430,62 @@ function Extension() {
       : null;
   const selectedOrder = matchedPanelOrder ?? panelSnapshot;
   const selectedOrderNotInView = panelSnapshot !== null;
+
+  // ── Merchant reschedule (Phase 4) — one modal for the bulk-actions bar
+  //    (selection) and the panel's single-order "Update delivery slot".
+  //    Delivery rules (slots/blocked/capacity+booked) load lazily when the
+  //    modal first opens; React Router re-runs the fetcher loader after every
+  //    action, so booked counts stay fresh across consecutive reschedules. ──
+  const [panelRescheduleIds, setPanelRescheduleIds] = useState<
+    string[] | null
+  >(null);
+  useEffect(() => {
+    if (activeModal !== "reschedule" && panelRescheduleIds !== null) {
+      setPanelRescheduleIds(null);
+    }
+  }, [activeModal, panelRescheduleIds]);
+
+  const rescheduleRulesFetcher = useFetcher<RescheduleRulesData>();
+  useEffect(() => {
+    if (activeModal !== "reschedule") return;
+    if (rescheduleRulesFetcher.state !== "idle" || rescheduleRulesFetcher.data)
+      return;
+    rescheduleRulesFetcher.load("/app/orders/reschedule-rules");
+  }, [activeModal, rescheduleRulesFetcher]);
+
+  const openPanelReschedule = useCallback(() => {
+    if (!selectedOrder) return;
+    setPanelRescheduleIds([selectedOrder.id]);
+    openModal("reschedule");
+  }, [selectedOrder, openModal]);
+
+  const rescheduleTargets = useMemo<RescheduleTarget[]>(() => {
+    if (activeModal !== "reschedule") return [];
+    const ids = panelRescheduleIds ?? selectedResources;
+    const found: RescheduleTarget[] = [];
+    for (const id of ids) {
+      const order =
+        orders.find((o) => o.id === id) ??
+        (selectedOrder && selectedOrder.id === id ? selectedOrder : null);
+      if (!order) continue;
+      const currentDate = getDeliveryDateValue(order);
+      const currentSlot = getDeliveryTimeValue(order);
+      found.push({
+        id,
+        name: order.name,
+        currentDate: currentDate === "—" ? null : currentDate,
+        currentSlot: currentSlot === "—" ? null : currentSlot,
+      });
+    }
+    return found;
+  }, [activeModal, panelRescheduleIds, selectedResources, orders, selectedOrder]);
+
+  const rescheduleServerCapacity =
+    lastActionResult?.action === "reschedule" &&
+    lastActionResult.code === "capacity_override_required" &&
+    lastActionResult.capacity
+      ? lastActionResult.capacity
+      : null;
 
   // PUSH (not replace) navigations here: pushed history entries mirror to the
   // outer admin URL, and Back closes the panel (verified live 2026-07-11).
@@ -1795,6 +2065,23 @@ function Extension() {
         onPhotoChange={handlePhotoChange}
         onConfirm={handleMarkFulfilled}
       />
+      <RescheduleModal
+        open={activeModal === "reschedule"}
+        onClose={closeModal}
+        targets={rescheduleTargets}
+        isSubmitting={isSubmitting}
+        rules={rescheduleRulesFetcher.data ?? null}
+        rulesLoading={rescheduleRulesFetcher.state !== "idle"}
+        serverCapacity={rescheduleServerCapacity}
+        onConfirm={(date, timeSlot, override) =>
+          submitReschedule(
+            panelRescheduleIds ?? selectedResources,
+            date,
+            timeSlot,
+            override,
+          )
+        }
+      />
       <AddTagsModal
         open={activeModal === "addTags"}
         onClose={closeModal}
@@ -1832,6 +2119,7 @@ function Extension() {
             order={selectedOrder}
             notInView={selectedOrderNotInView}
             onClose={handleCloseDrawer}
+            onReschedule={openPanelReschedule}
           />
         </Suspense>
       )}

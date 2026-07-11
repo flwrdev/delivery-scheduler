@@ -34,6 +34,8 @@ export interface OrderDetailsPanelProps {
   // §6: the order dropped out of the loaded result set after a background
   // revalidate — the panel is showing its last-known snapshot.
   notInView?: boolean;
+  // Phase 4: opens the merchant "Update delivery slot" modal for this order.
+  onReschedule?: () => void;
 }
 
 /**
@@ -46,6 +48,7 @@ export function OrderDetailsPanel({
   order,
   onClose,
   notInView = false,
+  onReschedule,
 }: OrderDetailsPanelProps) {
   const tagFetcher = useFetcher<{
     ok: boolean;
@@ -105,6 +108,14 @@ export function OrderDetailsPanel({
   const adminUrl = `shopify://admin/orders/${orderId}`;
   const statusPageUrl = order.statusPageUrl ?? null;
   const actionItems = [
+    {
+      content: "Update delivery slot",
+      disabled: !onReschedule,
+      onAction: () => {
+        setActionsOpen(false);
+        onReschedule?.();
+      },
+    },
     {
       content: "Send email",
       disabled: !customerEmail,

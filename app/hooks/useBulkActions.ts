@@ -19,7 +19,8 @@ export type BulkModalName =
   | "cancel"
   | "addTags"
   | "removeTags"
-  | "markFulfilled";
+  | "markFulfilled"
+  | "reschedule";
 
 // Bulk-action state, submission, modal visibility, and toast/result handling
 // for /app/orders. Selection now comes from Polaris useIndexResourceState:
@@ -98,6 +99,29 @@ export function useBulkActions(
     submitBulk("tagsRemove", { tags: removeTagsInput });
   };
 
+  // Reschedule targets come in explicitly instead of from selectedResources:
+  // the same modal serves the bulk-actions bar (selection) AND the details
+  // panel's single-order "Update delivery slot" (an order that may not be
+  // selected).
+  const submitReschedule = useCallback(
+    (
+      orderIds: string[],
+      date: string,
+      timeSlot: string,
+      capacityOverride: boolean,
+    ) => {
+      if (orderIds.length === 0 || !date || !timeSlot) return;
+      const fd = new FormData();
+      fd.append("_action", "reschedule");
+      orderIds.forEach((id) => fd.append("orderId", id));
+      fd.append("date", date);
+      fd.append("timeSlot", timeSlot);
+      fd.append("capacityOverride", capacityOverride ? "1" : "0");
+      fetcher.submit(fd, { method: "post" });
+    },
+    [fetcher],
+  );
+
   const handleMarkFulfilled = useCallback(() => {
     if (selectedResources.length === 0) return;
     const fd = new FormData();
@@ -173,6 +197,12 @@ export function useBulkActions(
         }
       }, 3000);
     }
+    // The capacity warn+override round-trip (REC-4) is not a result: the
+    // reschedule modal stays open and re-renders as the explicit confirm
+    // step, so no toast and no modal close here.
+    if (d.action === "reschedule" && d.code === "capacity_override_required") {
+      return;
+    }
     const actionLabel: Record<BulkActionName, { verb: string; ing: string }> = {
       archive: { verb: "archived", ing: "Archive" },
       unarchive: { verb: "unarchived", ing: "Unarchive" },
@@ -180,6 +210,7 @@ export function useBulkActions(
       tagsAdd: { verb: "updated (tags added)", ing: "Add tags" },
       tagsRemove: { verb: "updated (tags removed)", ing: "Remove tags" },
       markFulfilled: { verb: "marked as fulfilled", ing: "Mark as fulfilled" },
+      reschedule: { verb: "rescheduled", ing: "Update delivery slot" },
     };
     const meta = d.action ? actionLabel[d.action] : null;
 
@@ -230,6 +261,10 @@ export function useBulkActions(
     activeModal,
     openModal,
     closeModal,
+    // Raw last action response — the reschedule modal reads the
+    // capacity_override_required round-trip from here.
+    lastActionResult: fetcher.data ?? null,
+    submitReschedule,
     cancelReason,
     setCancelReason,
     cancelRestock,

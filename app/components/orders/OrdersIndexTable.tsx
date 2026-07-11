@@ -204,6 +204,11 @@ export function OrdersIndexTable({
 
   const promotedBulkActions = [
     {
+      content: "Update delivery slot",
+      onAction: () => onOpenBulkModal("reschedule"),
+      disabled: isSubmitting,
+    },
+    {
       content: "Mark as fulfilled",
       onAction: () => onOpenBulkModal("markFulfilled"),
       disabled: isSubmitting,
