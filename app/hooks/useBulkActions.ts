@@ -5,7 +5,7 @@ import {
   useRef,
   type ChangeEvent,
 } from "react";
-import { useFetcher } from "react-router";
+import { useFetcher, useRevalidator } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import type { BulkActionName, BulkActionResponse } from "../routes/app.orders";
 
@@ -140,11 +140,39 @@ export function useBulkActions(
   removeSelectedResourcesRef.current = removeSelectedResources;
   const handledDataRef = useRef<BulkActionResponse | null>(null);
 
+  // REC-6 delayed re-poll: Shopify processes fulfillmentCreate
+  // asynchronously, so React Router's automatic post-action revalidation can
+  // still read a stale displayFulfillmentStatus — re-poll once more after
+  // the eventual-consistency window (~3s).
+  const revalidator = useRevalidator();
+  const revalidatorRef = useRef(revalidator);
+  revalidatorRef.current = revalidator;
+  const repollTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (repollTimerRef.current !== null) {
+        window.clearTimeout(repollTimerRef.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     if (!fetcher.data || fetcher.state !== "idle") return;
     if (handledDataRef.current === fetcher.data) return;
     handledDataRef.current = fetcher.data;
     const d = fetcher.data;
+
+    if (d.action === "markFulfilled" && d.summary && d.summary.ok > 0) {
+      if (repollTimerRef.current !== null) {
+        window.clearTimeout(repollTimerRef.current);
+      }
+      repollTimerRef.current = window.setTimeout(() => {
+        repollTimerRef.current = null;
+        if (revalidatorRef.current.state === "idle") {
+          revalidatorRef.current.revalidate();
+        }
+      }, 3000);
+    }
     const actionLabel: Record<BulkActionName, { verb: string; ing: string }> = {
       archive: { verb: "archived", ing: "Archive" },
       unarchive: { verb: "unarchived", ing: "Unarchive" },

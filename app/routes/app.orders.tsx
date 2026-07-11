@@ -32,8 +32,11 @@ import {
   useNavigate,
   useSearchParams,
   useNavigation,
+  useFetchers,
 } from "react-router";
 import { useBulkActions } from "../hooks/useBulkActions";
+import { useSmartRefresh } from "../hooks/useSmartRefresh";
+import { useOrdersDiff } from "../hooks/useOrdersDiff";
 import {
   OrdersIndexTable,
   type OrdersTabDef,
@@ -1132,15 +1135,87 @@ function Extension() {
   const [tagsModalOrderId, setTagsModalOrderId] = useState<string | null>(null);
   const [kpiProductsOpen, setKpiProductsOpen] = useState(false);
 
+  // ── Smart auto-refresh (§6, Phase 3) — 30-min default / 5-min Today cadence
+  //    via useRevalidator (URL state preserved; the background refresh shows
+  //    no loading bar — only the manual Refresh button spins). Paused while
+  //    any modal is open or any action fetcher is in flight (useFetchers sees
+  //    every fetcher on the page, including the panel's tag form). A
+  //    read-only open panel does NOT pause refresh; dirty-form tracking
+  //    arrives with the Phase 4 reschedule form. ────────────────────────────
+  const fetchers = useFetchers();
+  const actionInFlight = fetchers.some((f) => f.state !== "idle");
+  const refreshPaused =
+    activeModal !== null ||
+    tagsModalOrderId !== null ||
+    kpiProductsOpen ||
+    actionInFlight;
+  const { lastUpdatedLabel, refresh, isRefreshing } = useSmartRefresh({
+    isTodayView: tabParam === "today",
+    paused: refreshPaused,
+    dataStamp: loaderData,
+  });
+
+  // View identity for the background diff — every URL param except ?order
+  // (the panel toggle doesn't re-run the loader, see shouldRevalidate). Same
+  // key = same view, so a data change is a background update worth flagging.
+  const ordersViewKey = useMemo(() => {
+    const params = new URLSearchParams(searchParams);
+    params.delete("order");
+    params.sort();
+    return params.toString();
+  }, [searchParams]);
+  const {
+    newIds: newOrderIds,
+    changedIds: changedOrderIds,
+    dismiss: dismissOrdersDiff,
+  } = useOrdersDiff(displayedOrders, ordersViewKey);
+
+  const ordersDiffTitle = useMemo(() => {
+    const parts: string[] = [];
+    if (newOrderIds.size > 0) {
+      parts.push(
+        `${newOrderIds.size} new ${newOrderIds.size === 1 ? "order" : "orders"}`,
+      );
+    }
+    if (changedOrderIds.size > 0) {
+      parts.push(
+        `${changedOrderIds.size} schedule ${changedOrderIds.size === 1 ? "update" : "updates"}`,
+      );
+    }
+    return parts.join(" · ");
+  }, [newOrderIds, changedOrderIds]);
+
   // Right-side panel state — URL-driven via ?order=<numeric id> (REC-7) so the
   // open panel deep-links, survives refresh, and persists across revalidation.
   // The panel still derives its order from fresh loader data by ID.
   const selectedOrderParam = searchParams.get("order");
-  const selectedOrder = selectedOrderParam
+  const matchedPanelOrder = selectedOrderParam
     ? (orders.find(
         (o) => (o.id.split("/").pop() || o.id) === selectedOrderParam,
       ) ?? null)
     : null;
+
+  // §6: if a background revalidate drops the open order out of the loaded
+  // set (the page shifted underneath it), keep the panel open on the
+  // last-known snapshot with a "no longer in this view" note instead of
+  // yanking it shut. The ref is a render-time cache of the last match; it is
+  // only reused while ?order= still names the same order.
+  const lastPanelOrderRef = useRef<Order | null>(null);
+  if (matchedPanelOrder) {
+    lastPanelOrderRef.current = matchedPanelOrder;
+  } else if (!selectedOrderParam) {
+    lastPanelOrderRef.current = null;
+  }
+  const panelSnapshot =
+    !matchedPanelOrder &&
+    selectedOrderParam &&
+    lastPanelOrderRef.current &&
+    (lastPanelOrderRef.current.id.split("/").pop() ||
+      lastPanelOrderRef.current.id) === selectedOrderParam
+      ? lastPanelOrderRef.current
+      : null;
+  const selectedOrder = matchedPanelOrder ?? panelSnapshot;
+  const selectedOrderNotInView = panelSnapshot !== null;
 
   // PUSH (not replace) navigations here: pushed history entries mirror to the
   // outer admin URL, and Back closes the panel (verified live 2026-07-11).
@@ -1490,6 +1565,17 @@ function Extension() {
           </Banner>
         )}
 
+        {/* ── Background-refresh nudge (§6) — new/changed rows are also badged
+            in the table below; dismissing clears the badges ─────────────── */}
+        {ordersDiffTitle && (
+          <Banner tone="info" title={ordersDiffTitle} onDismiss={dismissOrdersDiff}>
+            <Text as="p">
+              This view changed since the last refresh — new and updated rows
+              are marked in the table below.
+            </Text>
+          </Banner>
+        )}
+
         {/* ── KPI band — values are computed from the loaded page only (REC-8) ── */}
         <InlineGrid columns={{ xs: 1, sm: 2, md: 5 }} gap="300">
           <Card>
@@ -1612,7 +1698,21 @@ function Extension() {
         </InlineGrid>
 
         {/* ── Filters + table ───────────────────────────────────────────────── */}
-        <Card padding="0">
+        <BlockStack gap="200">
+          <InlineStack align="end" gap="200" blockAlign="center">
+            <Text as="span" variant="bodySm" tone="subdued">
+              {lastUpdatedLabel}
+            </Text>
+            <Button
+              variant="plain"
+              onClick={refresh}
+              loading={isRefreshing}
+              accessibilityLabel="Refresh orders"
+            >
+              Refresh
+            </Button>
+          </InlineStack>
+          <Card padding="0">
           <OrdersIndexTable
             orders={displayedOrders}
             todayISO={dateRefs.todayISO}
@@ -1642,8 +1742,11 @@ function Extension() {
             onOpenOrder={openOrderPanel}
             onShowTags={(orderId) => setTagsModalOrderId(orderId)}
             onOpenBulkModal={openModal}
+            newOrderIds={newOrderIds}
+            changedOrderIds={changedOrderIds}
           />
-        </Card>
+          </Card>
+        </BlockStack>
       </BlockStack>
 
       {/* ── Bulk-action modals — visibility driven by useBulkActions state ──── */}
@@ -1727,6 +1830,7 @@ function Extension() {
         <Suspense fallback={null}>
           <OrderDetailsPanel
             order={selectedOrder}
+            notInView={selectedOrderNotInView}
             onClose={handleCloseDrawer}
           />
         </Suspense>

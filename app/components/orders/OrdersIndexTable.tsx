@@ -93,6 +93,11 @@ export interface OrdersIndexTableProps {
   onOpenOrder: (orderId: string) => void;
   onShowTags: (orderId: string) => void;
   onOpenBulkModal: (name: BulkModalName) => void;
+  // Background-refresh diff (§6): orders that appeared / changed schedule
+  // since the last refresh of the same view get a small badge until the
+  // nudge banner is dismissed.
+  newOrderIds?: ReadonlySet<string>;
+  changedOrderIds?: ReadonlySet<string>;
 }
 
 export function OrdersIndexTable({
@@ -124,6 +129,8 @@ export function OrdersIndexTable({
   onOpenOrder,
   onShowTags,
   onOpenBulkModal,
+  newOrderIds,
+  changedOrderIds,
 }: OrdersIndexTableProps) {
   const { mode, setMode } = useSetIndexFiltersMode();
 
@@ -305,6 +312,15 @@ export function OrdersIndexTable({
               <Text as="span" variant="bodyMd" fontWeight="semibold">
                 {order.name}
               </Text>
+              {newOrderIds?.has(order.id) ? (
+                <Badge tone="success" size="small">
+                  New
+                </Badge>
+              ) : changedOrderIds?.has(order.id) ? (
+                <Badge tone="attention" size="small">
+                  Updated
+                </Badge>
+              ) : null}
               {instructionText !== "—" && (
                 <span
                   title={instructionText}
