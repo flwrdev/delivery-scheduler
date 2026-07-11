@@ -474,9 +474,28 @@ app/styles/orders-dashboard.css             [SHRINK Phase 1: prune --p-* token o
   collapse behind the reported "phantom tab=unpaid" and the panel-refresh
   failure); date filter commits only complete sane dates; search ✕ clears
   immediately.
-- **Phase 3** — `useSmartRefresh` + `useOrdersDiff`: interval cadence, pause rules,
-  delayed re-poll after fulfillment actions (REC-6), state-preserving revalidate,
-  "Last updated" + new-order nudge (§6).
+- **Phase 3 — DONE, live-verified 2026-07-11 (merchant smoke test PASSED on the
+  dev app; closes audit S3 — the mark-fulfilled badge settled via the delayed
+  re-poll)** —
+  `useSmartRefresh` (30-min default / 5-min Today cadence via `useRevalidator`;
+  ticks queued while any modal is open, an action fetcher is in flight, or the
+  tab is hidden, and fired when the blocker lifts; any loader settle resets the
+  stamp and drops the queued tick) + `useOrdersDiff` (per-view snapshot diff →
+  dismissible "N new orders · M schedule updates" banner + New/Updated row
+  badges) + "Last updated" indicator with a manual plain Refresh button above
+  the table. REC-6 delayed re-poll (~3s) after successful mark-fulfilled lives
+  in `useBulkActions`. The `?order=` panel now keeps a last-known snapshot with
+  a subtle "no longer in this view" note when a background revalidate drops the
+  order out of the loaded set (§6). Presentation-only — no loader/action/
+  write-path change. Note: panel dirty-form pause tracking is deferred to the
+  Phase 4 reschedule form (today's panel only has the tag form, whose local
+  input state survives a revalidate). The smoke test also surfaced a
+  **pre-existing panel display bug** (not Phase 3 code): the timeline's
+  "Original schedule" row derives from order `customAttributes`, but the
+  reschedule write path overwrites those as a legacy mirror — so after any
+  reschedule "Original" always duplicates Current. Fix (derive original from
+  the **oldest history event's `from`** when history exists) ships with
+  Phase 4.
 - **Phase 4** — Extract `rescheduleOrderDelivery()` shared service and refactor the
   customer route onto it (with tests proving behavior parity + the new mirror
   writes, REC-1/REC-2); then add the merchant `reschedule` op to the route action

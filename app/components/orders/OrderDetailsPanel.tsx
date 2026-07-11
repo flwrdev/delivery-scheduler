@@ -31,6 +31,9 @@ import { ItemsSection } from "./panel/ItemsSection";
 export interface OrderDetailsPanelProps {
   order: Order;
   onClose: () => void;
+  // §6: the order dropped out of the loaded result set after a background
+  // revalidate — the panel is showing its last-known snapshot.
+  notInView?: boolean;
 }
 
 /**
@@ -39,7 +42,11 @@ export interface OrderDetailsPanelProps {
  * renders; open/close state lives in the route. Its single write is the
  * existing freeform tagsAdd op on the route action (same as the old drawer).
  */
-export function OrderDetailsPanel({ order, onClose }: OrderDetailsPanelProps) {
+export function OrderDetailsPanel({
+  order,
+  onClose,
+  notInView = false,
+}: OrderDetailsPanelProps) {
   const tagFetcher = useFetcher<{
     ok: boolean;
     message?: string;
@@ -195,6 +202,12 @@ export function OrderDetailsPanel({ order, onClose }: OrderDetailsPanelProps) {
 
         {/* ── Body ───────────────────────────────────────────────────────── */}
         <div className="odp-body">
+          {notInView && (
+            <Text as="p" variant="bodySm" tone="subdued">
+              This order is no longer in the current view — showing its last
+              loaded details.
+            </Text>
+          )}
           <DeliverySection order={order} />
 
           <Divider />
