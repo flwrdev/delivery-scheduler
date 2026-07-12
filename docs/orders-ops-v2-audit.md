@@ -239,6 +239,13 @@ app; merchant runs on Gmail; chose this over a provider-choice popover and
 copy-to-clipboard). Live-verified 2026-07-12: click → new tab → Gmail compose
 with To + subject prefilled, admin intact, no console errors.
 
+**Merchant re-check 2026-07-12: PASSED** — the compose opened on the
+merchant's own machine and they sent a test message end-to-end ("Message
+sent"). With this, **all five S9–S13 re-checks are merchant-confirmed**; S9 is
+CLOSED. Successor design (in-app compose + server-side send via the business
+Private Email mailbox) is locked in `customer-email-design.md` and ships
+separately after the V2 closeout.
+
 ---
 
 ## How findings map to the migration (per orders-ops-v2-ux.md §8)

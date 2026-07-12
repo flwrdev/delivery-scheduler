@@ -571,10 +571,17 @@ app/styles/orders-dashboard.css             [SHRINK Phase 1: prune --p-* token o
   **Phase close is gated on:** (1) audit **S8/S9** — the panel "Send email"
   action; after the S8 crash fix and the failed S9 round-1 mailto fix, the
   shipped behavior is a **Gmail compose URL in a new tab** (audit §G round-2
-  addendum), live-verified 2026-07-12 — merchant re-check pending; (2) re-test
-  of the reworked intro reminder; (3) the Final Full Smoke Test below —
-  round 1 run 2026-07-12: S10–S13 fixes all passed the merchant re-test;
-  S9 was the sole FAIL and drove the round-2 rework.
+  addendum), live-verified 2026-07-12 AND **merchant re-check PASSED
+  2026-07-12** (compose opened on the merchant's own machine; a test message
+  was sent — "Message sent"); (2) re-test of the reworked intro reminder;
+  (3) the Final Full Smoke Test below — round 1 run 2026-07-12: S10–S13 fixes
+  all passed the merchant re-test; S9 was the sole FAIL, reworked in round 2
+  and now also merchant-confirmed. **All five S9–S13 re-checks are closed;**
+  what keeps §8-FST formally open is only its one-session/same-build rule —
+  the P1–P5 regression sweep + other Communication actions + intro reminder +
+  simplified Mark Fulfilled were last run in full on the pre-S9–S13 build
+  (`5e96138`). Whether to re-run the full sweep on the current build or accept
+  the delta-tested state as the pass is the merchant's call.
 
 ### §8-FST. Final Full Smoke Test (V2 closeout gate — run before declaring Orders Ops V2 complete)
 
