@@ -15,6 +15,7 @@ import {
   getDeliveryTimeValue,
   getDeliveryStatus,
   getOrderPhone,
+  getReceiverPhone,
   getCity,
   getFullShippingAddress,
   buildDeliveryInfoText,
@@ -90,6 +91,7 @@ export function DeliverySection({ order }: { order: Order }) {
     ) ?? "—";
   const customerNote = order.note?.trim() || "—";
   const senderPhone = getOrderPhone(order);
+  const receiverPhone = getReceiverPhone(order);
 
   const rows: Array<{ label: string; content: ReactNode }> = [
     {
@@ -186,6 +188,20 @@ export function DeliverySection({ order }: { order: Order }) {
       ),
     });
   }
+
+  // Receiver = the person at the shipping address; distinct from "Sender
+  // phone" below (customer record, which only falls back to this number).
+  rows.push({
+    label: "Receiver phone",
+    content: (
+      <CopyableValue
+        fieldKey="receiverPhone"
+        value={receiverPhone}
+        copied={fieldCopied === "receiverPhone"}
+        onCopy={copyField}
+      />
+    ),
+  });
 
   rows.push(
     {
