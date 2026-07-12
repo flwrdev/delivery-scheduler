@@ -107,6 +107,11 @@ export function OrderDetailsPanel({
 
   const adminUrl = `shopify://admin/orders/${orderId}`;
   const statusPageUrl = order.statusPageUrl ?? null;
+  const gmailComposeUrl = customerEmail
+    ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+        customerEmail,
+      )}&su=${encodeURIComponent(`Order ${order.name}`)}`
+    : null;
   const actionItems = [
     {
       content: "Update delivery slot",
@@ -119,24 +124,14 @@ export function OrderDetailsPanel({
     {
       content: "Send email",
       disabled: !customerEmail,
-      // S8/S9: mailto can't be a plain link here. Targetless = same-frame
-      // iframe navigation (App Bridge forbids it — "This content is
-      // blocked"); external/_blank = Chrome parks a blank "Untitled" tab and
-      // the mail handler may never launch. Polaris ActionList also ignores
-      // the item `target` prop, so the _top navigation App Bridge sanctions
-      // for external URLs has to be triggered manually inside the click
-      // gesture. mailto never commits a navigation, so the admin stays put.
-      onAction: () => {
-        setActionsOpen(false);
-        if (!customerEmail) return;
-        const link = document.createElement("a");
-        link.href = `mailto:${customerEmail}`;
-        link.target = "_top";
-        link.rel = "noopener";
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-      },
+      // S8/S9: NOT mailto — on machines whose OS mailto handler is Chrome
+      // itself with no webmail handler registered inside Chrome, a mailto
+      // click silently vanishes (circular handoff; confirmed on the merchant
+      // machine). Gmail compose is a plain https URL, so the sanctioned
+      // external/_blank link path works with no OS-handler dependency.
+      url: gmailComposeUrl ?? undefined,
+      external: true,
+      onAction: () => setActionsOpen(false),
     },
     {
       content: "View order status page",
