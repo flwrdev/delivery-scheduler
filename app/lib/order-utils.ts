@@ -200,6 +200,34 @@ export function isOpenFulfillmentStatus(status: string): boolean {
   );
 }
 
+export function isCancelled(order: Order): boolean {
+  return Boolean(order.cancelledAt);
+}
+
+// A cancelled order's displayFulfillmentStatus stays UNFULFILLED, so raw
+// fulfillment badges read as actionable work on orders that no longer exist
+// (2026-07-12 smoke test). Every fulfillment badge renders through this.
+export function fulfillmentBadge(order: Order): {
+  label: string;
+  tone: BadgeTone;
+} {
+  if (isCancelled(order)) {
+    return { label: "Cancelled", tone: "critical" };
+  }
+  return {
+    label: formatStatusLabel(order.displayFulfillmentStatus),
+    tone: fulfillmentStatusTone(order.displayFulfillmentStatus),
+  };
+}
+
+// "Open" in the delivery-ops sense: still expected to be delivered. Gates the
+// Today/Overdue relative chips and due-today KPI noise.
+export function isOpenDeliverableOrder(order: Order): boolean {
+  return (
+    !isCancelled(order) && isOpenFulfillmentStatus(order.displayFulfillmentStatus)
+  );
+}
+
 export function formatStatusLabel(status: string): string {
   return status
     .toLowerCase()
@@ -557,11 +585,14 @@ export function formatTimelineStatus(value: string): string {
 // ─── Derived delivery status (panel display) ──────────────────────────────────
 
 export type DeliveryStatus = {
-  label: "Fulfilled" | "Rescheduled" | "Scheduled" | "—";
+  label: "Fulfilled" | "Rescheduled" | "Scheduled" | "Cancelled" | "—";
   tone: BadgeTone;
 };
 
 export function getDeliveryStatus(order: Order): DeliveryStatus {
+  if (isCancelled(order)) {
+    return { label: "Cancelled", tone: "critical" };
+  }
   if ((order.displayFulfillmentStatus || "").toUpperCase() === "FULFILLED") {
     return { label: "Fulfilled", tone: "neutral" };
   }

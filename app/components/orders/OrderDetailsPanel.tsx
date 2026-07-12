@@ -16,7 +16,7 @@ import {
   type Order,
   formatMoney,
   financialStatusTone,
-  fulfillmentStatusTone,
+  fulfillmentBadge,
   formatStatusLabel,
   tagDisplayLabel,
   getMeaningfulTags,
@@ -119,11 +119,24 @@ export function OrderDetailsPanel({
     {
       content: "Send email",
       disabled: !customerEmail,
-      url: customerEmail ? `mailto:${customerEmail}` : undefined,
-      // S8: external is required — a targetless mailto same-frame-navigates
-      // the embedded iframe, which App Bridge forbids (crashes the app).
-      external: true,
-      onAction: () => setActionsOpen(false),
+      // S8/S9: mailto can't be a plain link here. Targetless = same-frame
+      // iframe navigation (App Bridge forbids it — "This content is
+      // blocked"); external/_blank = Chrome parks a blank "Untitled" tab and
+      // the mail handler may never launch. Polaris ActionList also ignores
+      // the item `target` prop, so the _top navigation App Bridge sanctions
+      // for external URLs has to be triggered manually inside the click
+      // gesture. mailto never commits a navigation, so the admin stays put.
+      onAction: () => {
+        setActionsOpen(false);
+        if (!customerEmail) return;
+        const link = document.createElement("a");
+        link.href = `mailto:${customerEmail}`;
+        link.target = "_top";
+        link.rel = "noopener";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      },
     },
     {
       content: "View order status page",
@@ -168,12 +181,10 @@ export function OrderDetailsPanel({
                   {formatStatusLabel(order.displayFinancialStatus)}
                 </Badge>
                 <Badge
-                  tone={polarisBadgeTone(
-                    fulfillmentStatusTone(order.displayFulfillmentStatus),
-                  )}
+                  tone={polarisBadgeTone(fulfillmentBadge(order).tone)}
                   size="small"
                 >
-                  {formatStatusLabel(order.displayFulfillmentStatus)}
+                  {fulfillmentBadge(order).label}
                 </Badge>
               </InlineStack>
               <InlineStack gap="150" blockAlign="center" wrap={false}>

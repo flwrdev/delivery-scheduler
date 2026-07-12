@@ -75,7 +75,7 @@ Page  (title "Orders Operations", fullWidth)
 │      the loaded page only, not the whole filtered set — REC-8, locked)
 ├─ Card
 │  ├─ IndexFilters              ← saved views (tabs) + search + filters + sort
-│  │    ├─ Tabs (saved views): All · Today · Tomorrow · This week · Unfulfilled · Unpaid
+│  │    ├─ Tabs (saved views): All · Today · Tomorrow · This week · Unfulfilled · Unpaid · Archived
 │  │    ├─ Search field         (order, customer, phone, city)
 │  │    └─ Filters: Delivery date · Time slot   (+ applied-filter pills)
 │  └─ IndexTable                ← selectable rows + bulk actions + pagination
@@ -89,6 +89,21 @@ Page  (title "Orders Operations", fullWidth)
 **Interaction-model parity with native Shopify Orders:**
 - **Saved views** = Polaris `IndexFilters` tabs; the existing `?tab=` URL contract
   is kept (each tab maps to the same Shopify query fragment the loader already builds).
+- **Archived-order visibility (S10, 2026-07-12):** every main view queries
+  `-status:closed` (all/today/tomorrow/thisWeek) or `status:open`
+  (unfulfilled/unpaid — the workqueues, which also exclude cancelled), so
+  archived orders are hidden exactly as the Archive modal promises; the
+  **Archived** tab (`?tab=archived` → `status:closed`) is where they live and
+  where bulk Unarchive is used. Deliberately NOT `status:open` on "All":
+  that would also hide cancelled orders, which must stay visible with their
+  **Cancelled** badge (S11 — `fulfillmentBadge()` overrides every fulfillment
+  badge, and Today/Overdue chips are suppressed via `isOpenDeliverableOrder()`).
+- **"This week" = the current CALENDAR week, Sunday through Saturday** (S12,
+  2026-07-12) — e.g. on Sun Jul 12 the window is Jul 12–18. (The original
+  Monday-start window emptied the tab on Sundays.)
+- **Search Cancel** (S13, 2026-07-12): `IndexFilters`' Cancel only calls
+  `cancelAction.onAction` — it is wired to the same immediate query-clear as
+  the ✕ button, so Cancel restores the unfiltered list at once.
 - **Sorting** — `IndexTable` `sortable` columns; wire to the existing
   `sortKey: CREATED_AT` (extend loader to accept a `sort` param for delivery-date sort).
 - **Row selection / bulk bar** — `useIndexResourceState` replaces the manual

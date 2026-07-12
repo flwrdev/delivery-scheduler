@@ -6,8 +6,8 @@ import {
   toLocalISODate,
   formatDeliveryDate,
   financialStatusTone,
-  fulfillmentStatusTone,
-  isOpenFulfillmentStatus,
+  fulfillmentBadge,
+  isOpenDeliverableOrder,
   formatStatusLabel,
   getDeliveryRelativeLabel,
   isDeliveryOverdue,
@@ -61,7 +61,8 @@ export function DeliverySection({ order }: { order: Order }) {
   const rawDate = getDeliveryDateValue(order);
   const deliveryDate = rawDate !== "—" ? formatDeliveryDate(rawDate) : "—";
   const todayISO = toLocalISODate(new Date());
-  const isOpenOrder = isOpenFulfillmentStatus(order.displayFulfillmentStatus);
+  const isOpenOrder = isOpenDeliverableOrder(order);
+  const ffBadge = fulfillmentBadge(order);
   const deliveryRelative =
     rawDate !== "—" && isOpenOrder
       ? getDeliveryRelativeLabel(rawDate, todayISO)
@@ -130,13 +131,8 @@ export function DeliverySection({ order }: { order: Order }) {
     {
       label: "Fulfillment",
       content: (
-        <Badge
-          tone={polarisBadgeTone(
-            fulfillmentStatusTone(order.displayFulfillmentStatus),
-          )}
-          size="small"
-        >
-          {formatStatusLabel(order.displayFulfillmentStatus)}
+        <Badge tone={polarisBadgeTone(ffBadge.tone)} size="small">
+          {ffBadge.label}
         </Badge>
       ),
     },

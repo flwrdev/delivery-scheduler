@@ -21,8 +21,8 @@ import {
   formatDeliveryDate,
   formatMoney,
   financialStatusTone,
-  fulfillmentStatusTone,
-  isOpenFulfillmentStatus,
+  fulfillmentBadge,
+  isOpenDeliverableOrder,
   formatStatusLabel,
   tagDisplayLabel,
   getMeaningfulTags,
@@ -268,7 +268,8 @@ export function OrdersIndexTable({
     const deliveryDateDisplay =
       rawDeliveryDate !== "—" ? formatDeliveryDate(rawDeliveryDate) : "—";
     const timeWindowValue = getDeliveryTimeValue(order);
-    const isOpenOrder = isOpenFulfillmentStatus(order.displayFulfillmentStatus);
+    const isOpenOrder = isOpenDeliverableOrder(order);
+    const ffBadge = fulfillmentBadge(order);
     const deliveryRelative =
       rawDeliveryDate !== "—" && isOpenOrder
         ? getDeliveryRelativeLabel(rawDeliveryDate, todayISO)
@@ -428,9 +429,7 @@ export function OrdersIndexTable({
         </IndexTable.Cell>
 
         <IndexTable.Cell>
-          <Badge tone={polarisBadgeTone(fulfillmentStatusTone(order.displayFulfillmentStatus))}>
-            {formatStatusLabel(order.displayFulfillmentStatus)}
-          </Badge>
+          <Badge tone={polarisBadgeTone(ffBadge.tone)}>{ffBadge.label}</Badge>
         </IndexTable.Cell>
 
         <IndexTable.Cell>
@@ -507,7 +506,11 @@ export function OrdersIndexTable({
         filters={filters}
         appliedFilters={appliedFilters}
         onClearAll={onClearFilters}
-        cancelAction={{ onAction: () => {} }}
+        // Cancel exits filtering mode WITHOUT calling onQueryClear (Polaris
+        // only invokes cancelAction.onAction) — a no-op here left the
+        // committed ?search= applied with no visible search box, so the list
+        // stayed filtered with no way back (2026-07-12 smoke test, S13).
+        cancelAction={{ onAction: onQueryClear }}
         mode={mode}
         setMode={setMode}
         // Sticky mode uses an IntersectionObserver + position:fixed band that
