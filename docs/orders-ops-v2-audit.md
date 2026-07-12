@@ -211,11 +211,33 @@ trigger. Root causes in §A supersede the automated pass where they differ.
 
 | # | Symptom | Root cause | Fix | Status |
 |---|---------|-----------|-----|--------|
-| S9 | "Send email" opens a blank "Untitled" tab; no compose window (the sole §8-FST FAIL; supersedes the S8 `external: true` fix) | Two stacked problems: (a) mailto + `target="_blank"` — Chrome opens the new tab as `about:blank`, and the external-protocol launch from that fresh tab is unreliable/silent, so the tab just sits blank; (b) Polaris `ActionList` **ignores the item `target` prop** (verified in `Item.js` — only `external` is forwarded to `UnstyledLink`), so the App Bridge-sanctioned `_top` navigation cannot be expressed declaratively. | Send email item became `onAction`-only: it builds an `<a href="mailto:…" target="_top" rel="noopener">`, clicks it inside the user gesture, and removes it (`OrderDetailsPanel.tsx`). mailto never commits a navigation, so the admin stays put; the browser hands the address to the OS/browser mail handler. NOTE the residual environment dependency: with no mailto handler configured on the machine, no compose window can appear — that is a client setting, not app behavior (this machine's handler: `ChromeHTML`). | ✅ live-verified 2026-07-12 — no crash, no orphan tab, no console errors |
+| S9 | "Send email" opens a blank "Untitled" tab; no compose window (the sole §8-FST FAIL; supersedes the S8 `external: true` fix) | Two stacked problems: (a) mailto + `target="_blank"` — Chrome opens the new tab as `about:blank`, and the external-protocol launch from that fresh tab is unreliable/silent, so the tab just sits blank; (b) Polaris `ActionList` **ignores the item `target` prop** (verified in `Item.js` — only `external` is forwarded to `UnstyledLink`), so the App Bridge-sanctioned `_top` navigation cannot be expressed declaratively. | Round 1: `onAction` building a synthetic `<a href="mailto:…" target="_top">` inside the user gesture — technically clean (no crash, no orphan tab) but **failed the merchant round-2 re-test: "walang nangyayari"**. See the round-2 addendum below; the shipped fix abandons mailto entirely. | ❌ round-1 fix superseded → ✅ round 2 (Gmail compose URL) live-verified 2026-07-12 |
 | S10 | Archived orders still listed in "All" despite the Archive modal promising they'll be hidden | The loader sent **no `status:` term**, and the Admin GraphQL `orders` query defaults to ALL orders (open + closed). Probe on flowercart-dev confirmed: no-term → 5 orders incl. both archived; `status:open` → 2 (also drops the CANCELLED order — wrong for S11); **`-status:closed` → 3 (open + cancelled, no archived — matches the native admin 5→3 the merchant saw)**. | Loader: `-status:closed` appended for all/today/tomorrow/thisWeek; `status:open` for unfulfilled/unpaid (workqueues exclude cancelled too); new **Archived tab** = `status:closed` so bulk Unarchive stays reachable. | ✅ live-verified 2026-07-12 |
 | S11 | Cancelled order (#1007) still shows "Unfulfilled" in list + panel | A cancelled order's `displayFulfillmentStatus` legitimately stays `UNFULFILLED` — every fulfillment badge rendered the raw status and nothing consulted the already-fetched `cancelledAt`. | `order-utils`: `isCancelled()`, `fulfillmentBadge()` (Cancelled/critical override), `isOpenDeliverableOrder()` (kills Today/Overdue chips on cancelled orders), `getDeliveryStatus()` returns Cancelled first. Wired into the IndexTable row, panel header, and DeliverySection; unfulfilled tab count + KPI exclude cancelled. Display-only — no action gating added (reschedule stays an administrative override per §10a). | ✅ live-verified 2026-07-12 |
 | S12 | "This week" always zero despite upcoming deliveries | Week window was **Monday-start**: on Sunday Jul 12 the window was Mon Jul 6 – Sun Jul 12, excluding every upcoming delivery (e.g. Sat Jul 18). | `dateRefs` now computes a **Sunday→Saturday calendar week** (Jul 12 → window Jul 12–18). Same object feeds the tab filter and the tab count. | ✅ live-verified 2026-07-12 (#1009 rescheduled to Jul 18 → "This week (1)") |
 | S13 | Search "Cancel" clears the text but the list stays filtered until navigating away | `IndexFilters` invokes ONLY `cancelAction.onAction` on Cancel (verified in Polaris source — it never calls `onQueryClear`), and ours was wired to a **no-op** `() => {}`, leaving the committed `?search=` applied with the search box hidden. | `cancelAction={{ onAction: onQueryClear }}` — the route's `handleQueryClear` already resets the draft AND deletes the URL param immediately. | ✅ live-verified 2026-07-12 |
+
+### S9 round 2 (2026-07-12, merchant §8-FST re-run): mailto abandoned → Gmail compose URL
+
+The round-1 mailto/`_top` fix survived every in-app check (no crash, no orphan
+tab, no console errors) but produced **nothing visible** on the merchant
+machine. Root cause is a dead mailto handler chain, confirmed outside the app:
+
+- OS `mailto` association (`HKCU …\UrlAssociations\mailto\UserChoice`) =
+  **`ChromeHTML`** — Windows hands mailto back to Chrome itself.
+- Inside Chrome, **no webmail handler is registered** for mailto
+  (`protocol_handler` prefs have no mailto entry; `custom_handlers: null`), so
+  Chrome falls back to the OS default… which is Chrome. The circular handoff is
+  silently dropped.
+
+No mailto-based approach can work on such a machine, so the shipped fix removes
+the OS dependency entirely: the Send email item is again a declarative link —
+`url: https://mail.google.com/mail/?view=cm&fs=1&to=<email>&su=Order <name>`
+with `external: true` (the same sanctioned `_blank` path "View order status
+page" already uses). Gmail-specific by merchant decision (custom single-tenant
+app; merchant runs on Gmail; chose this over a provider-choice popover and
+copy-to-clipboard). Live-verified 2026-07-12: click → new tab → Gmail compose
+with To + subject prefilled, admin intact, no console errors.
 
 ---
 

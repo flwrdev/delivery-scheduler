@@ -186,7 +186,7 @@ right-docked — decided at build time, but visually a Shopify side panel).
 | --- | --- | --- |
 | Reschedule order | opens Reschedule modal (see §5) | **NEW route action op** |
 | Edit delivery details | same Reschedule modal (date/slot) | **NEW route action op** |
-| Send email | `shopify://admin/orders/{id}` email, or `mailto:` | no delivery write |
+| Send email | Gmail compose URL (`mail.google.com/mail/?view=cm&to=…&su=Order <name>`), `external`/new tab — NOT `mailto:`; the OS-handler chain is unreliable (S9, audit §G) | no delivery write |
 | Sender phone number | display only (`getOrderPhone`) | read |
 | View order status page | order `statusPageUrl` (add to query) | read |
 | Order history / timeline | reschedule history + Shopify deep link | read |
@@ -568,11 +568,13 @@ app/styles/orders-dashboard.css             [SHRINK Phase 1: prune --p-* token o
   NOTE: the reminder lives in the `delivery-reschedule-customer` extension —
   it previews on the dev store via `npm run dev`, but reaching production
   customers requires a `shopify app deploy` (merchant-only action).
-  **Phase close is gated on:** (1) audit **S8** — the panel "Send email"
-  action crashed the embedded app (same-frame `mailto:` navigation of the
-  iframe); root-caused 2026-07-12, fix (`external: true`) APPROVED + APPLIED
-  the same day — live re-test pending; (2) re-test of the reworked intro
-  reminder; (3) the Final Full Smoke Test below.
+  **Phase close is gated on:** (1) audit **S8/S9** — the panel "Send email"
+  action; after the S8 crash fix and the failed S9 round-1 mailto fix, the
+  shipped behavior is a **Gmail compose URL in a new tab** (audit §G round-2
+  addendum), live-verified 2026-07-12 — merchant re-check pending; (2) re-test
+  of the reworked intro reminder; (3) the Final Full Smoke Test below —
+  round 1 run 2026-07-12: S10–S13 fixes all passed the merchant re-test;
+  S9 was the sole FAIL and drove the round-2 rework.
 
 ### §8-FST. Final Full Smoke Test (V2 closeout gate — run before declaring Orders Ops V2 complete)
 
@@ -589,7 +591,9 @@ last code change. All items must pass in ONE session on the same build.
    visible (P5).
 2. **Communication actions (added 2026-07-12 after finding S8):** in the Order
    Details panel, click EVERY action — "Update delivery slot", **"Send email"
-   (the S8 regression check)**, "Copy delivery info", "View order status page",
+   (the S8/S9 regression check — expected: a NEW TAB opens with the Gmail
+   compose form, To: prefilled with the customer email and subject
+   `Order <name>`)**, "Copy delivery info", "View order status page",
    "Open in Shopify Admin", and the add-tag form. Expectation: **no action may
    crash the embedded app or land it on a blocked page**; any external flow must
    open via supported Shopify/App Bridge behavior (`target="_blank"` /
