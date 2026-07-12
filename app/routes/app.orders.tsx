@@ -308,11 +308,21 @@ export const loader = async ({
     queryParts.push(searchParam);
   }
   if (tabParam === "unfulfilled") {
-    queryParts.push("fulfillment_status:unfulfilled");
+    // status:open — the workqueue: excludes archived AND cancelled orders.
+    queryParts.push("fulfillment_status:unfulfilled status:open");
   } else if (tabParam === "unpaid") {
     queryParts.push(
-      "financial_status:pending OR financial_status:authorized OR financial_status:partially_paid",
+      "(financial_status:pending OR financial_status:authorized OR financial_status:partially_paid) status:open",
     );
+  } else if (tabParam === "archived") {
+    queryParts.push("status:closed");
+  } else {
+    // Archived orders are hidden from every main view (the Archive modal
+    // promises this) but stay reachable via the Archived tab. Deliberately
+    // -status:closed and NOT status:open: status:open would also hide
+    // cancelled orders, which must remain visible with a Cancelled badge
+    // (both verified live on flowercart-dev, 2026-07-12).
+    queryParts.push("-status:closed");
   }
 
   const compositeQuery = queryParts.join(" ") || null;
@@ -1019,7 +1029,8 @@ type ActiveTab =
   | "tomorrow"
   | "thisWeek"
   | "unfulfilled"
-  | "unpaid";
+  | "unpaid"
+  | "archived";
 
 // ─── Main Extension ───────────────────────────────────────────────────────────
 
@@ -1058,16 +1069,20 @@ function Extension() {
     const tom = new Date(now);
     tom.setDate(now.getDate() + 1);
     const tomorrowISO = toLocalISODate(tom);
+    // "This week" = the current CALENDAR week, Sunday through Saturday. The
+    // previous Monday-start window made the tab empty on Sundays for every
+    // upcoming delivery (2026-07-12 smoke test: today Sun Jul 12, delivery
+    // Sat Jul 18 → excluded from the Mon Jul 6 – Sun Jul 12 window).
     const dow = now.getDay();
-    const monday = new Date(now);
-    monday.setDate(now.getDate() + (dow === 0 ? -6 : 1 - dow));
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - dow);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
     return {
       todayISO,
       tomorrowISO,
-      startWeekISO: toLocalISODate(monday),
-      endWeekISO: toLocalISODate(sunday),
+      startWeekISO: toLocalISODate(weekStart),
+      endWeekISO: toLocalISODate(weekEnd),
     };
   }, []);
 
@@ -1548,10 +1563,15 @@ function Extension() {
   }, [displayedOrders]);
 
   const { kpiUnfulfilledCount, kpiUnfulfilledDueToday } = useMemo(() => {
+    // Cancelled orders keep UNFULFILLED as their fulfillment status — they are
+    // not pending work, so they don't belong in the unfulfilled KPI (S11).
     const count = displayedOrders.filter(
-      (o) => o.displayFulfillmentStatus?.toUpperCase() === "UNFULFILLED",
+      (o) =>
+        !o.cancelledAt &&
+        o.displayFulfillmentStatus?.toUpperCase() === "UNFULFILLED",
     ).length;
     const dueToday = displayedOrders.filter((o) => {
+      if (o.cancelledAt) return false;
       if (o.displayFulfillmentStatus?.toUpperCase() !== "UNFULFILLED")
         return false;
       const d = getDeliveryDateValue(o);
@@ -1622,7 +1642,9 @@ function Extension() {
         );
       }).length,
       unfulfilled: orders.filter(
-        (o) => o.displayFulfillmentStatus?.toUpperCase() === "UNFULFILLED",
+        (o) =>
+          !o.cancelledAt &&
+          o.displayFulfillmentStatus?.toUpperCase() === "UNFULFILLED",
       ).length,
       unpaid: orders.filter((o) => isUnpaidStatus(o.displayFinancialStatus))
         .length,
@@ -1655,6 +1677,9 @@ function Extension() {
     { id: "thisWeek", label: "This week", count: tabCounts.thisWeek },
     { id: "unfulfilled", label: "Unfulfilled", count: tabCounts.unfulfilled },
     { id: "unpaid", label: "Unpaid", count: tabCounts.unpaid },
+    // Archived orders are excluded from every other view's query, so no
+    // client-side count is knowable here — the label renders without one.
+    { id: "archived", label: "Archived", count: 0 },
   ];
 
   const hasActiveFilters = Boolean(
