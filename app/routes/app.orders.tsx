@@ -53,8 +53,10 @@ import { SharedTagsModal } from "../components/orders/SharedTagsModal";
 import { KpiProductsModal } from "../components/orders/KpiProductsModal";
 import { MarkFulfilledModal } from "../components/orders/MarkFulfilledModal";
 import { RescheduleModal } from "../components/orders/RescheduleModal";
+import { SendEmailModal } from "../components/orders/SendEmailModal";
 import { validateMerchantRescheduleSelection } from "../lib/delivery-availability";
 import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
+import { handleSendEmailOp } from "../services/send-customer-email.server";
 import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
 import { authenticate } from "../shopify.server";
 import panelStylesHref from "../styles/order-details-panel.css?url";
@@ -575,6 +577,14 @@ export const action = async ({
 
   const fd = await request.formData();
   const opRaw = String(fd.get("_action") || "");
+
+  // Customer Email (customer-email-design.md): single-order in-app compose,
+  // dispatched before the bulk machinery. Outbound side effect only — writes
+  // nothing to the order (E-5), so /app/orders stays a 4-write-path route.
+  if (opRaw === "sendEmail") {
+    return handleSendEmailOp(admin, fd);
+  }
+
   const op = isBulkActionName(opRaw) ? opRaw : "";
   const orderIds = Array.from(
     new Set(
@@ -1319,6 +1329,13 @@ function Extension() {
     openModal("reschedule");
   }, [selectedOrder, openModal]);
 
+  // Customer Email — panel-only compose; the modal reads its target from the
+  // open panel order (?order=), never from the bulk selection.
+  const openPanelSendEmail = useCallback(() => {
+    if (!selectedOrder) return;
+    openModal("sendEmail");
+  }, [selectedOrder, openModal]);
+
   const rescheduleTargets = useMemo<RescheduleTarget[]>(() => {
     if (activeModal !== "reschedule") return [];
     const ids = panelRescheduleIds ?? selectedResources;
@@ -1949,6 +1966,15 @@ function Extension() {
           )
         }
       />
+      <SendEmailModal
+        open={activeModal === "sendEmail" && selectedOrder !== null}
+        onClose={closeModal}
+        orderId={selectedOrder?.id ?? null}
+        orderName={selectedOrder?.name ?? null}
+        customerEmail={
+          selectedOrder?.customer?.defaultEmailAddress?.emailAddress ?? null
+        }
+      />
       <AddTagsModal
         open={activeModal === "addTags"}
         onClose={closeModal}
@@ -1987,6 +2013,7 @@ function Extension() {
             notInView={selectedOrderNotInView}
             onClose={handleCloseDrawer}
             onReschedule={openPanelReschedule}
+            onSendEmail={openPanelSendEmail}
           />
         </Suspense>
       )}

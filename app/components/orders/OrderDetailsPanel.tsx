@@ -36,6 +36,8 @@ export interface OrderDetailsPanelProps {
   notInView?: boolean;
   // Phase 4: opens the merchant "Update delivery slot" modal for this order.
   onReschedule?: () => void;
+  // Customer Email: opens the in-app compose modal for this order.
+  onSendEmail?: () => void;
 }
 
 /**
@@ -49,6 +51,7 @@ export function OrderDetailsPanel({
   onClose,
   notInView = false,
   onReschedule,
+  onSendEmail,
 }: OrderDetailsPanelProps) {
   const tagFetcher = useFetcher<{
     ok: boolean;
@@ -107,11 +110,6 @@ export function OrderDetailsPanel({
 
   const adminUrl = `shopify://admin/orders/${orderId}`;
   const statusPageUrl = order.statusPageUrl ?? null;
-  const gmailComposeUrl = customerEmail
-    ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
-        customerEmail,
-      )}&su=${encodeURIComponent(`Order ${order.name}`)}`
-    : null;
   const actionItems = [
     {
       content: "Update delivery slot",
@@ -123,15 +121,15 @@ export function OrderDetailsPanel({
     },
     {
       content: "Send email",
-      disabled: !customerEmail,
-      // S8/S9: NOT mailto — on machines whose OS mailto handler is Chrome
-      // itself with no webmail handler registered inside Chrome, a mailto
-      // click silently vanishes (circular handoff; confirmed on the merchant
-      // machine). Gmail compose is a plain https URL, so the sanctioned
-      // external/_blank link path works with no OS-handler dependency.
-      url: gmailComposeUrl ?? undefined,
-      external: true,
-      onAction: () => setActionsOpen(false),
+      disabled: !customerEmail || !onSendEmail,
+      // In-app compose modal sent server-side through the business mailbox
+      // (customer-email-design.md) — replaces the S9 Gmail-compose-tab link.
+      // mailto stays off the table: the merchant machine's OS handler chain
+      // silently drops it (audit §G).
+      onAction: () => {
+        setActionsOpen(false);
+        onSendEmail?.();
+      },
     },
     {
       content: "View order status page",

@@ -3,11 +3,12 @@
 > Part of the docs set. Source of truth for the feature design. System topology:
 > [architecture.md](./architecture.md) · route/auth contract: [api.md](./api.md).
 
-**Status: DESIGN LOCKED 2026-07-12 (merchant-approved). NOT yet implemented.**
-Implementation is sequenced AFTER the Orders Ops V2 closeout (§8-FST must pass
-first) and lands on its own branch (`feature/customer-email`), so the build
-under merchant re-test never moves beneath them — same isolation rule as
-`feature/receiver-phone`.
+**Status: IMPLEMENTED + LIVE-VERIFIED 2026-07-13** on `feature/customer-email`
+(design locked 2026-07-12, merchant-approved). Both live-smoke paths passed —
+happy (arrival Gmail-API-verified + merchant-confirmed) and wrong-password
+(in-modal error, no crash). One design amendment was forced by the live smoke —
+see the §4 note on op failure statuses (200 + ok:false, never 5xx). Production
+env wiring (Secret Manager → Cloud Run) remains stop-and-ask at deploy time.
 
 ---
 
@@ -94,6 +95,13 @@ Server steps: session auth (`authenticate.admin`, inherited) → parse
 `customer.defaultEmailAddress.emailAddress` via Admin GraphQL** (E-4; 400 if
 the order has no customer email) → `sendCustomerEmail(...)` → typed response
 `{ ok, message }` for the toast/banner layer.
+
+> **Amended 2026-07-13 (live-smoke finding):** upstream failures (order read,
+> SMTP send) respond **`200 + ok:false`, never 5xx** — Cloudflare replaces
+> origin 502/504 bodies with its branded HTML error page (observed through the
+> dev tunnel), which breaks the fetcher JSON contract and crashes the embedded
+> iframe to "Bad gateway". Validation errors stay 4xx (passed through
+> untouched). Same failure shape as the bulk ops.
 
 ### New UI — `SendEmailModal` (panel)
 

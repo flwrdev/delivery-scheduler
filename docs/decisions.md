@@ -159,3 +159,17 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 **Consequence:** When Phase 4 ships, api.md §2 gains a 4th write path, the `/app/orders` caveat is removed, and the Customer Account reschedule row changes (mirrors now written). Any future change to a data-integrity validation requires documented reasoning + impact analysis in the docs set **before** implementation.
 
 **Status:** Accepted (design locked 2026-07-11; implementation pending Phase 4).
+
+## ADR-11 — In-app customer email via the merchant's business SMTP mailbox (Gmail API rejected)
+
+**Source:** [customer-email-design.md](./customer-email-design.md) (design locked 2026-07-12, merchant-approved); verification log 2026-07-13 (implementation + live smoke).
+
+**Context:** The panel's "Send email" went through three shapes during Orders Ops V2 (§8-FST audit §G): `mailto:` (dead on machines with a circular OS handler chain), then a Gmail-compose-tab link (reliable, but leaves the app and assumes the merchant's Gmail). The merchant's actual expectation was the native Shopify-admin experience: compose inside the app, system sends the mail.
+
+**Decision:** Server-side send through the merchant's **business mailbox on Namecheap Private Email via plain SMTP AUTH** (nodemailer, `mail.privateemail.com:465` SSL), exposed as the `sendEmail` op on `/app/orders` + a compose modal in the details panel. The **Gmail API was rejected**: `gmail.send` is a Google "sensitive" OAuth scope requiring app verification (privacy policy, homepage, weeks-long review), and testing-mode refresh tokens expire every 7 days — unworkable for a single-tenant custom app. Guardrails: recipient locked server-side (op takes an order id and re-reads the customer email; never client-supplied), auto-BCC to the sender mailbox (Private Email SMTP sends don't land in webmail Sent), plain text only, **zero order-state writes** (api.md §2 unchanged), config-gated env vars (clear error when unset).
+
+**Learned in live smoke (2026-07-13):** op failure responses must be `200 + ok:false`, never 5xx — Cloudflare (the dev tunnel, and any CF-fronted deployment) replaces origin 502/504 bodies with its branded HTML error page, which breaks the fetcher JSON contract and blows up the embedded iframe. Validation errors stay 4xx (passed through untouched).
+
+**Consequence:** New dependency `nodemailer`; new env vars `EMAIL_SMTP_HOST/PORT/USER/PASSWORD` + `EMAIL_FROM_NAME` (local `.env` dev, Secret Manager → Cloud Run prod); `/app/orders` gains a non-order-mutating outbound side effect. The send service is deliberately reusable for the planned Communications page.
+
+**Status:** Accepted; shipped on `feature/customer-email`, live-verified 2026-07-13 (happy + wrong-password failure paths).

@@ -186,7 +186,7 @@ right-docked — decided at build time, but visually a Shopify side panel).
 | --- | --- | --- |
 | Reschedule order | opens Reschedule modal (see §5) | **NEW route action op** |
 | Edit delivery details | same Reschedule modal (date/slot) | **NEW route action op** |
-| Send email | Gmail compose URL (`mail.google.com/mail/?view=cm&to=…&su=Order <name>`), `external`/new tab — NOT `mailto:`; the OS-handler chain is unreliable (S9, audit §G) | no delivery write |
+| Send email | **In-app compose modal** (Customer Email, 2026-07-13, ADR-11) — sent server-side through the business mailbox (`sendEmail` op); To locked to the order's customer email, subject prefilled `Order #XXXX`. Superseded: Gmail-compose-tab link (S9 round 2); `mailto:` stays off the table (dead OS-handler chain, audit §G) | outbound send only — no order write |
 | Sender phone number | display only (`getOrderPhone`) | read |
 | View order status page | order `statusPageUrl` (add to query) | read |
 | Order history / timeline | reschedule history + Shopify deep link | read |
