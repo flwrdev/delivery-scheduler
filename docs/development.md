@@ -47,6 +47,19 @@ npx prisma studio          # inspect Postgres data locally
 > `api_version` is `2026-10` (prod pins `2026-04`) — fine for app-home smoke
 > tests, but don't use the dev app for webhook-parity testing.
 
+> **Customer-account extension dev-testing caveat (2026-07-13).** The
+> `delivery-reschedule-customer` extension hardcodes `APP_BASE_URL` to the
+> production Cloud Run URL (`order-action-modal.tsx`). On the dev store BOTH
+> installed apps render their own "Reschedule Delivery" button, and the DEV
+> app's modal always fails **401 Unauthorized** — its session token is signed
+> for the dev app but lands on the prod backend (`jwtVerify` with the prod
+> secret + `aud` check). This is a dev-environment artifact, not a bug. To
+> smoke-test the customer reschedule against your working tree, temporarily
+> point `APP_BASE_URL` at the current tunnel URL (the extension draft
+> hot-rebuilds), run the flow from the modal whose intro text matches the
+> working tree, then REVERT the constant before committing. See the
+> 2026-07-13 §8-FST verification-log row for a worked example.
+
 Vitest is configured standalone (`vitest.config.ts`) — Node environment by default, no react-router plugin loaded, so server-helper unit tests run fast. Add `// @vitest-environment jsdom` per-file for component tests. Only files under `test/**/*.test.{ts,tsx}` are picked up; Playwright e2e specs live in `e2e/` and are excluded from the vitest run — they're invoked separately (`npx playwright test --config e2e/playwright.config.ts`).
 
 > The former "duplicated e2e locations" TODO is resolved: `test/e2e/` and `tests/e2e/` no longer exist on disk (verified 2026-07-08) — `e2e/` is the single location. A leftover of that move (a stale `../../app/db.server.js` import in `e2e/helpers.ts`) was fixed the same day.
