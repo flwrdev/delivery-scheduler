@@ -576,12 +576,14 @@ app/styles/orders-dashboard.css             [SHRINK Phase 1: prune --p-* token o
   was sent — "Message sent"); (2) re-test of the reworked intro reminder;
   (3) the Final Full Smoke Test below — round 1 run 2026-07-12: S10–S13 fixes
   all passed the merchant re-test; S9 was the sole FAIL, reworked in round 2
-  and now also merchant-confirmed. **All five S9–S13 re-checks are closed;**
-  what keeps §8-FST formally open is only its one-session/same-build rule —
-  the P1–P5 regression sweep + other Communication actions + intro reminder +
-  simplified Mark Fulfilled were last run in full on the pre-S9–S13 build
-  (`5e96138`). Whether to re-run the full sweep on the current build or accept
-  the delta-tested state as the pass is the merchant's call.
+  and now also merchant-confirmed. **All five S9–S13 re-checks are closed.**
+  **§8-FST CLOSED 2026-07-13:** on the merchant's go, the full general sweep
+  was re-run in ONE session on the current build (`c2bf2a4`, which includes
+  the Customer Email feature) — **ALL items passed** (P1–P5 regression,
+  Communication actions with the in-app Send email modal, simplified Mark
+  Fulfilled single + bulk, capacity override, blocked date/slot, customer
+  reschedule end-to-end). Full evidence in the 2026-07-13 verification-log
+  row. **Orders Ops V2 is declared production-ready.**
 
 ### §8-FST. Final Full Smoke Test (V2 closeout gate — run before declaring Orders Ops V2 complete)
 
@@ -598,10 +600,11 @@ last code change. All items must pass in ONE session on the same build.
    visible (P5).
 2. **Communication actions (added 2026-07-12 after finding S8):** in the Order
    Details panel, click EVERY action — "Update delivery slot", **"Send email"
-   (the S8/S9 regression check — expected: a NEW TAB opens with the Gmail
-   compose form, To: prefilled with the customer email and subject
-   `Order <name>`)**, "Copy delivery info", "View order status page",
-   "Open in Shopify Admin", and the add-tag form. Expectation: **no action may
+   (expected since ADR-11, 2026-07-13: the IN-APP compose modal opens — To
+   read-only with the customer email, subject prefilled `Order <name>`, send
+   succeeds server-side via the business-mailbox SMTP; supersedes the S9
+   round-2 Gmail-tab expectation)**, "Copy delivery info", "View order status
+   page", "Open in Shopify Admin", and the add-tag form. Expectation: **no action may
    crash the embedded app or land it on a blocked page**; any external flow must
    open via supported Shopify/App Bridge behavior (`target="_blank"` /
    `shopify://admin/…` top-level nav) or fail gracefully without taking down
