@@ -7,8 +7,16 @@
 (design locked 2026-07-12, merchant-approved). Both live-smoke paths passed —
 happy (arrival Gmail-API-verified + merchant-confirmed) and wrong-password
 (in-modal error, no crash). One design amendment was forced by the live smoke —
-see the §4 note on op failure statuses (200 + ok:false, never 5xx). Production
-env wiring (Secret Manager → Cloud Run) remains stop-and-ask at deploy time.
+see the §4 note on op failure statuses (200 + ok:false, never 5xx). **Deployed
+to production 2026-07-13** (Cloud Run rev `00159-dmp`, Secret Manager wired) and
+merchant-verified on a real order the same day. **Amended 2026-07-14: photo
+attachments (§2a)** — merchant-requested; customers ask for an actual photo of
+their order before it ships. **§2a implemented + live-verified 2026-07-14**:
+photo-less send re-verified through the new multipart path in the dev app
+(arrival + BCC copy merchant-confirmed); with-photo two-send verified against
+real Private Email SMTP — customer copy WITH the JPEG (Gmail
+metadata-confirmed), business-mailbox copy WITHOUT it + the filename marker
+(merchant-confirmed in webmail).
 
 ---
 
@@ -47,6 +55,22 @@ domain (Starter/Private/Business plans), 50 recipients per message.
 | E-5 | Order-state writes | **None.** Sending an email writes nothing to the Shopify order (no metafield, no tag, no timeline). `/app/orders` stays a 4-write-path route per api.md §2; this op is an outbound side effect only. |
 | E-6 | Message format | **Plain text** body (merchant-typed), subject prefilled `Order #XXXX`. HTML branding/templates are future scope (§7). |
 | E-7 | Sequencing | Separate branch `feature/customer-email`, implemented only after the V2 §8-FST closeout. New dependency `nodemailer` (+ `@types/nodemailer` dev). |
+
+## 2a. Amendment — photo attachments (2026-07-14, merchant-requested)
+
+Use case: customers request an **actual photo of their prepared order** (the
+bouquet) before it ships. The compose modal gains an optional photo upload.
+
+| # | Decision | Choice (alternatives rejected) |
+|---|----------|--------------------------------|
+| E-8 | Photo attachments | **Up to 3 photos per email, JPEG/PNG/WebP, ≤ 8 MB each, ≤ 15 MB total.** The caps keep the multipart request comfortably under Cloud Run's 32 MB request limit and the base64-encoded message (~+37%) well under provider message-size limits. Client-side validation is UX only — the server re-validates count, MIME type, and sizes and rejects violations with a 400. Rejected: Shopify Files/CDN link instead of attaching (extra write surface + link rot; the removed Bouquet Photo feature's F1–F5 lessons argue for keeping this fully inside our own SMTP pipeline). |
+| E-9 | Sent copy vs photos (amends E-3) | **When photos are attached, the send becomes TWO messages:** (1) the customer message WITH the photos, no BCC; (2) a merchant self-copy WITHOUT the photos — same subject/body plus an appended marker line listing the photo filenames (`[N photo(s) sent to the customer: … — not attached to this copy]`). Merchant decision 2026-07-14: keep photo bytes out of the Private Email mailbox to protect its storage quota. Photo-less sends keep the original single send + BCC (E-3 unchanged). The self-copy is **best-effort**: if it fails after the customer send succeeded, the op still reports success, with a "couldn't save a copy to your mailbox" note in the toast — the customer-facing send is the one that matters. |
+
+Transport detail: the modal submits `multipart/form-data` (repeated `photo`
+fields); the route action's existing `request.formData()` parses multipart
+natively (undici), so the `sendEmail` op dispatch is unchanged — only
+`handleSendEmailOp` gains the photo validation + Buffer conversion, and
+`sendCustomerEmail` gains the two-send logic.
 
 ## 3. Configuration (merchant-only setup — stop-and-ask gate)
 

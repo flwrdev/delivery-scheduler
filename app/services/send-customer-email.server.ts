@@ -12,17 +12,35 @@ import type { AdminGraphQLClient } from "./order-delivery-metafields.server";
 export const MAX_EMAIL_SUBJECT_LENGTH = 200;
 export const MAX_EMAIL_BODY_LENGTH = 5000;
 
+// Photo attachments (E-8): caps keep the multipart request under Cloud Run's
+// 32 MB limit and the base64-encoded message under provider size limits.
+export const MAX_EMAIL_PHOTOS = 3;
+export const MAX_EMAIL_PHOTO_BYTES = 8 * 1024 * 1024;
+export const MAX_EMAIL_PHOTOS_TOTAL_BYTES = 15 * 1024 * 1024;
+export const ALLOWED_EMAIL_PHOTO_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+] as const;
+
 export const EMAIL_NOT_CONFIGURED_MESSAGE =
   "Email sending is not configured on this environment.";
+
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
+}
 
 export interface SendCustomerEmailInput {
   to: string;
   subject: string;
   textBody: string;
+  attachments?: EmailAttachment[];
 }
 
 export type SendCustomerEmailResult =
-  | { ok: true }
+  | { ok: true; copyFailed?: boolean }
   | { ok: false; error: string };
 
 // Response shape of the `sendEmail` op (app.orders.tsx action) — read by the
@@ -106,25 +124,51 @@ export async function sendCustomerEmail({
   to,
   subject,
   textBody,
+  attachments,
 }: SendCustomerEmailInput): Promise<SendCustomerEmailResult> {
   const cfg = smtpConfig();
   if (!cfg.user || !cfg.password) {
     return { ok: false, error: EMAIL_NOT_CONFIGURED_MESSAGE };
   }
+  const from = cfg.fromName
+    ? { name: cfg.fromName, address: cfg.user }
+    : cfg.user;
+  const hasPhotos = Boolean(attachments && attachments.length > 0);
   try {
     await getTransport(cfg).sendMail({
-      from: cfg.fromName ? { name: cfg.fromName, address: cfg.user } : cfg.user,
+      from,
       to,
-      // E-3: every send BCCs the sender mailbox — Private Email SMTP sends do
-      // not land in the webmail Sent folder, so this is the merchant's copy.
-      bcc: cfg.user,
+      // E-3: photo-less sends BCC the sender mailbox — Private Email SMTP
+      // sends do not land in the webmail Sent folder, so this is the
+      // merchant's copy. With photos the copy is a separate photo-less send
+      // below (E-9): a BCC would carry the attachment bytes into the mailbox
+      // and eat its storage quota.
+      ...(hasPhotos ? {} : { bcc: cfg.user }),
       subject,
       text: textBody,
+      ...(hasPhotos ? { attachments } : {}),
     });
-    return { ok: true };
   } catch (e: unknown) {
     return { ok: false, error: humanizeSmtpError(e) };
   }
+  if (hasPhotos) {
+    // E-9: merchant self-copy without the photo bytes, best-effort — the
+    // customer already has the real message, so a failed copy must not fail
+    // the op.
+    const names = (attachments ?? []).map((a) => a.filename).join(", ");
+    const marker = `[${attachments!.length} photo(s) sent to the customer: ${names} — not attached to this copy]`;
+    try {
+      await getTransport(cfg).sendMail({
+        from,
+        to: cfg.user,
+        subject,
+        text: `${textBody}\n\n${marker}`,
+      });
+    } catch {
+      return { ok: true, copyFailed: true };
+    }
+  }
+  return { ok: true };
 }
 
 // ─── The `sendEmail` op (dispatched from the app.orders.tsx action) ─────────
@@ -190,6 +234,50 @@ export async function handleSendEmailOp(
     );
   }
 
+  // E-8: optional photo attachments — server-side validation is authoritative
+  // (the modal's checks are UX only). Repeated `photo` multipart fields.
+  const photoEntries = fd
+    .getAll("photo")
+    .filter((v): v is File => v instanceof File && v.size > 0);
+  if (photoEntries.length > MAX_EMAIL_PHOTOS) {
+    return opJson(
+      { ok: false, message: `Attach up to ${MAX_EMAIL_PHOTOS} photos.` },
+      400,
+    );
+  }
+  for (const photo of photoEntries) {
+    if (
+      !(ALLOWED_EMAIL_PHOTO_TYPES as readonly string[]).includes(photo.type)
+    ) {
+      return opJson(
+        {
+          ok: false,
+          message: `"${photo.name}" is not a supported photo type — use JPEG, PNG, or WebP.`,
+        },
+        400,
+      );
+    }
+    if (photo.size > MAX_EMAIL_PHOTO_BYTES) {
+      return opJson(
+        {
+          ok: false,
+          message: `"${photo.name}" is larger than ${Math.round(MAX_EMAIL_PHOTO_BYTES / 1024 / 1024)} MB.`,
+        },
+        400,
+      );
+    }
+  }
+  const totalPhotoBytes = photoEntries.reduce((sum, p) => sum + p.size, 0);
+  if (totalPhotoBytes > MAX_EMAIL_PHOTOS_TOTAL_BYTES) {
+    return opJson(
+      {
+        ok: false,
+        message: `Photos are ${Math.round(MAX_EMAIL_PHOTOS_TOTAL_BYTES / 1024 / 1024)} MB max in total.`,
+      },
+      400,
+    );
+  }
+
   // E-4: the recipient is NEVER client-supplied — re-read the customer email
   // from the order, so the op cannot be used as an arbitrary-recipient relay.
   let email: string | null = null;
@@ -231,9 +319,28 @@ export async function handleSendEmailOp(
     );
   }
 
-  const sent = await sendCustomerEmail({ to: email, subject, textBody: body });
+  const attachments: EmailAttachment[] = [];
+  for (const photo of photoEntries) {
+    attachments.push({
+      filename: photo.name,
+      content: Buffer.from(await photo.arrayBuffer()),
+      contentType: photo.type,
+    });
+  }
+
+  const sent = await sendCustomerEmail({
+    to: email,
+    subject,
+    textBody: body,
+    attachments,
+  });
   if (!sent.ok) {
     return opJson({ ok: false, message: sent.error });
   }
-  return opJson({ ok: true, message: `Email sent to ${email}.` });
+  return opJson({
+    ok: true,
+    message: sent.copyFailed
+      ? `Email sent to ${email}. (Couldn't save a copy to your mailbox.)`
+      : `Email sent to ${email}.`,
+  });
 }
