@@ -5,6 +5,8 @@ import {
   fulfillmentBadge,
   isOpenDeliverableOrder,
   getDeliveryStatus,
+  getOrderPhone,
+  getReceiverPhone,
 } from "../app/lib/order-utils";
 
 // S11: cancelled orders keep displayFulfillmentStatus === "UNFULFILLED", so
@@ -87,5 +89,42 @@ describe("getDeliveryStatus", () => {
     expect(
       getDeliveryStatus(order({ deliveryDate: { value: "2026-07-18" } })),
     ).toEqual({ label: "Scheduled", tone: "success" });
+  });
+});
+
+describe("getReceiverPhone", () => {
+  const shippingAddress = {
+    address1: "255 Kawit St",
+    address2: null,
+    city: "Manila",
+    province: "Metro Manila",
+    zip: null,
+    country: "PH",
+    phone: "+63 917 000 0001",
+  };
+
+  it("reads ONLY the shipping-address phone — never the customer's", () => {
+    const o = order({
+      shippingAddress,
+      customer: {
+        id: "gid://shopify/Customer/1",
+        firstName: "Sender",
+        lastName: "Person",
+        defaultEmailAddress: null,
+        defaultPhoneNumber: { phoneNumber: "+63 917 999 9999" },
+      },
+    } as Partial<Order>);
+    expect(getReceiverPhone(o)).toBe("+63 917 000 0001");
+    expect(getOrderPhone(o)).toBe("+63 917 999 9999");
+  });
+
+  it("returns an em dash when the shipping address has no phone", () => {
+    expect(
+      getReceiverPhone(
+        order({
+          shippingAddress: { ...shippingAddress, phone: null },
+        } as Partial<Order>),
+      ),
+    ).toBe("—");
   });
 });

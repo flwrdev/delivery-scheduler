@@ -366,6 +366,13 @@ export function getOrderPhone(order: Order): string {
   );
 }
 
+// The receiver's contact is the shipping-address phone ONLY — no customer
+// fallback, that's the sender's number (getOrderPhone above, which itself
+// falls back to this field when the customer has no phone on file).
+export function getReceiverPhone(order: Order): string {
+  return order.shippingAddress?.phone || "—";
+}
+
 export function getCity(order: Order): string {
   return order.shippingAddress?.city || "—";
 }
