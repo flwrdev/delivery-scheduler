@@ -17,6 +17,11 @@ ng state na iyon papunta sa Shopify orders.
 - **Only a few surfaces write delivery state.** Most extensions and admin order-page
   blocks are read-only. Never assume a surface writes — verify in `docs/api.md`.
 - **Courier dispatch is out of scope** — handled by the official Shopify Lalamove app.
+- **The app sends customer emails itself** via the merchant's Private Email SMTP
+  mailbox (`app/services/send-customer-email.server.ts`, in-app compose modal on
+  `/app/orders`) — zero order writes. Route-op upstream failures must return
+  `200 + ok:false`, never 5xx — Cloudflare replaces origin 502/504 bodies with
+  its HTML error page and breaks the embedded fetcher (see ADR-11).
 
 The full topology + data model is in `docs/architecture.md`; the route/auth/write-path
 contract is in `docs/api.md`. Those docs are the source of truth — this section is only
@@ -37,6 +42,12 @@ npx prisma studio  # inspect Postgres data locally
 
 npx vitest run test/verify-app-proxy.server.test.ts   # run a single vitest file
 npx playwright test --config e2e/playwright.config.ts # e2e (separate from vitest; live side effects)
+
+# Production deploys (merchant go required — stop-and-ask gate):
+gcloud run deploy delivery-scheduler --source . --region us-central1   # backend (project lalamove-map)
+npm run deploy -- --allow-updates --config shopify.app.toml            # app config + extensions to the PROD app
+# ⚠️ ALWAYS pass --config shopify.app.toml on prod releases — a bare `npm run deploy`
+# can release to the DEV app instead (the CLI caches the last-used config; seen 2026-07-13).
 ```
 
 Only `test/**/*.test.{ts,tsx}` are picked up by vitest; `e2e/` specs are excluded and
