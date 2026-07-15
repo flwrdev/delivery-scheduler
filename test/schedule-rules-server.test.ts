@@ -10,10 +10,27 @@ const prismaMock = vi.hoisted(() => ({
   },
 }));
 
+const bookingsMock = vi.hoisted(() => ({
+  getDeliveryBookingsSnapshot: vi.fn(),
+  deriveBookedCounts: vi.fn(),
+  invalidateDeliveryBookingsCache: vi.fn(),
+}));
+
 vi.mock("../app/db.server", () => ({ default: prismaMock }));
+vi.mock("../app/services/delivery-bookings.server", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("../app/services/delivery-bookings.server")>();
+  return {
+    ...original,
+    getDeliveryBookingsSnapshot: bookingsMock.getDeliveryBookingsSnapshot,
+    deriveBookedCounts: bookingsMock.deriveBookedCounts,
+    invalidateDeliveryBookingsCache: bookingsMock.invalidateDeliveryBookingsCache,
+  };
+});
 
 import {
   getScheduleRules,
+  getScheduleRulesDetailed,
   getScheduleRulesWithHealth,
   upsertScheduleRules,
 } from "../app/services/schedule-rules.server";
@@ -157,5 +174,97 @@ describe("upsertScheduleRules — strict validation + optimistic version guard",
     const result = await upsertScheduleRules(SHOP, { cutoffHour: 12 });
 
     expect(result).toMatchObject({ ok: false, code: "stale_config", version: 1 });
+  });
+
+  it("invalidates the bookings cache on a successful save", async () => {
+    prismaMock.deliveryScheduleConfig.findUnique
+      .mockResolvedValueOnce(storedRow())
+      .mockResolvedValueOnce(storedRow())
+      .mockResolvedValueOnce(storedRow({ version: 4 }));
+    prismaMock.deliveryScheduleConfig.updateMany.mockResolvedValue({ count: 1 });
+
+    await upsertScheduleRules(SHOP, { cutoffHour: 12 });
+
+    expect(bookingsMock.invalidateDeliveryBookingsCache).toHaveBeenCalledWith(SHOP);
+  });
+});
+
+describe("getScheduleRulesDetailed — booked counts overlay + countsMeta (design §5)", () => {
+  const CAPACITY_ROW = () =>
+    storedRow({
+      slotCapacityJson: JSON.stringify({
+        "2026-07-18": { "9AM-12PM": { capacity: 5, booked: 0 } },
+      }),
+    });
+  const admin = { graphql: vi.fn() };
+
+  it("reports 'untracked' without touching the Admin API when no capacity is configured", async () => {
+    prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(storedRow());
+
+    const result = await getScheduleRulesDetailed(SHOP, admin);
+
+    expect(result.countsMeta).toEqual({
+      status: "untracked",
+      fetchedAt: null,
+      fromCache: false,
+    });
+    expect(bookingsMock.getDeliveryBookingsSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reports 'skipped' when no admin client is available", async () => {
+    prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(CAPACITY_ROW());
+
+    const result = await getScheduleRulesDetailed(SHOP, undefined);
+
+    expect(result.countsMeta.status).toBe("skipped");
+    expect(bookingsMock.getDeliveryBookingsSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("overlays derived counts and reports 'ok' with the snapshot timestamp", async () => {
+    prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(CAPACITY_ROW());
+    bookingsMock.getDeliveryBookingsSnapshot.mockResolvedValue({
+      bookings: [
+        { orderId: "gid://shopify/Order/1", date: "2026-07-18", slotValue: "9AM-12PM" },
+      ],
+      fetchedAt: "2026-07-15T02:00:00.000Z",
+      fromCache: true,
+    });
+    bookingsMock.deriveBookedCounts.mockReturnValue({
+      "2026-07-18": { "9AM-12PM": 3 },
+    });
+
+    const result = await getScheduleRulesDetailed(SHOP, admin, {
+      excludeOrderId: "gid://shopify/Order/9",
+    });
+
+    expect(result.rules.slotCapacity["2026-07-18"]["9AM-12PM"]).toEqual({
+      capacity: 5,
+      booked: 3,
+    });
+    expect(result.countsMeta).toEqual({
+      status: "ok",
+      fetchedAt: "2026-07-15T02:00:00.000Z",
+      fromCache: true,
+    });
+    // exclude-self is threaded through to the derivation (DEF-14)
+    expect(bookingsMock.deriveBookedCounts).toHaveBeenCalledWith(
+      expect.any(Array),
+      "gid://shopify/Order/9",
+    );
+  });
+
+  it("fails open with status 'error' when the scan throws (visible, not silent)", async () => {
+    prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(CAPACITY_ROW());
+    bookingsMock.getDeliveryBookingsSnapshot.mockRejectedValue(new Error("THROTTLED"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await getScheduleRulesDetailed(SHOP, admin);
+
+    expect(result.countsMeta.status).toBe("error");
+    // fail-open: persisted (vestigial 0) booked values remain
+    expect(result.rules.slotCapacity["2026-07-18"]["9AM-12PM"].booked).toBe(0);
+    expect(consoleError).toHaveBeenCalled();
+
+    consoleError.mockRestore();
   });
 });

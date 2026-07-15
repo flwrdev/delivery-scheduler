@@ -10,7 +10,11 @@ import {
   type ConfigHealthIssue,
 } from "../lib/schedule-rules-schema";
 import type { AdminGraphQLClient } from "./delivery-bookings.server";
-import { loadAutomaticBookedCounts } from "./delivery-bookings.server";
+import {
+  deriveBookedCounts,
+  getDeliveryBookingsSnapshot,
+  invalidateDeliveryBookingsCache,
+} from "./delivery-bookings.server";
 
 export type {
   DeliveryScheduleCapacity,
@@ -148,25 +152,92 @@ function applyAutomaticBookedCounts(
   };
 }
 
-export async function getScheduleRulesWithBookedCounts(
+export interface BookedCountsMeta {
+  /**
+   * "ok" — live/cached counts applied; "untracked" — no capacity configured;
+   * "skipped" — no shop/admin available on this surface; "error" — the Admin
+   * scan failed and the capacity gate is running fail-open (design §5: still
+   * fails open for sales continuity, but VISIBLY).
+   */
+  status: "ok" | "untracked" | "skipped" | "error";
+  fetchedAt: string | null;
+  fromCache: boolean;
+}
+
+export interface ScheduleRulesDetailed {
+  rules: DeliveryScheduleRules;
+  configHealth: ConfigHealthIssue[];
+  version: number;
+  countsMeta: BookedCountsMeta;
+}
+
+export interface BookedCountsOptions {
+  /** Exclude this order (GID or numeric id) from counts — reschedule self-exclusion (DEF-14). */
+  excludeOrderId?: string;
+  /** Force a fresh Admin scan (the admin "Refresh counts" path). */
+  bypassCountsCache?: boolean;
+}
+
+/**
+ * Rules + live booked counts + health/meta detail for admin surfaces. The
+ * storefront-facing wrapper below returns only the rules object so public
+ * payloads stay byte-compatible (D5).
+ */
+export async function getScheduleRulesDetailed(
   shop: string | undefined,
   admin?: AdminGraphQLClient,
-): Promise<DeliveryScheduleRules> {
-  const rules = await getScheduleRules(shop);
+  options: BookedCountsOptions = {},
+): Promise<ScheduleRulesDetailed> {
+  const { rules, configHealth, version } = await getScheduleRulesWithHealth(shop);
+  const base = { rules, configHealth, version };
 
-  if (!shop || !admin || !Object.keys(rules.slotCapacity).length) {
-    return rules;
+  if (!Object.keys(rules.slotCapacity).length) {
+    return {
+      ...base,
+      countsMeta: { status: "untracked", fetchedAt: null, fromCache: false },
+    };
+  }
+
+  if (!shop || !admin) {
+    return {
+      ...base,
+      countsMeta: { status: "skipped", fetchedAt: null, fromCache: false },
+    };
   }
 
   try {
-    // Fail open to the persisted rules if live order aggregation breaks; delivery setup
-    // should remain editable and readable even when Admin order queries fail.
-    const bookedCounts = await loadAutomaticBookedCounts(admin, rules);
-    return applyAutomaticBookedCounts(rules, bookedCounts);
+    const snapshot = await getDeliveryBookingsSnapshot(shop, admin, rules, {
+      bypassCache: options.bypassCountsCache,
+    });
+    const bookedCounts = deriveBookedCounts(snapshot.bookings, options.excludeOrderId);
+    return {
+      ...base,
+      rules: applyAutomaticBookedCounts(rules, bookedCounts),
+      countsMeta: {
+        status: "ok",
+        fetchedAt: snapshot.fetchedAt,
+        fromCache: snapshot.fromCache,
+      },
+    };
   } catch (error) {
+    // Fail open to the persisted rules if live order aggregation breaks; delivery
+    // setup should remain editable and readable even when Admin order queries
+    // fail — but the failure is now visible via countsMeta instead of silent.
     console.error("Failed to load automatic delivery booked counts:", error);
-    return rules;
+    return {
+      ...base,
+      countsMeta: { status: "error", fetchedAt: null, fromCache: false },
+    };
   }
+}
+
+export async function getScheduleRulesWithBookedCounts(
+  shop: string | undefined,
+  admin?: AdminGraphQLClient,
+  options: BookedCountsOptions = {},
+): Promise<DeliveryScheduleRules> {
+  const detailed = await getScheduleRulesDetailed(shop, admin, options);
+  return detailed.rules;
 }
 
 /**
@@ -208,6 +279,9 @@ export async function upsertScheduleRules(
       const created = await prisma.deliveryScheduleConfig.create({
         data: { ...serializeScheduleRules(shop, nextRules), version: 1 },
       });
+      // A rules change can alter the tracked-date set; drop the memoized
+      // bookings so the next read re-scans against the new config.
+      invalidateDeliveryBookingsCache(shop);
       return {
         ok: true,
         rules: readStoredRules(shop, created).rules,
@@ -244,6 +318,7 @@ export async function upsertScheduleRules(
     };
   }
 
+  invalidateDeliveryBookingsCache(shop);
   const fresh = await getScheduleRulesWithHealth(shop);
   return { ok: true, rules: fresh.rules, version: fresh.version };
 }

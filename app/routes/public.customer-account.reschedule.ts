@@ -472,8 +472,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     // Reuse the shared delivery rules contract here so the customer-account flow stays
-    // in parity with storefront and admin availability decisions.
-    const scheduleRules = await getScheduleRulesWithBookedCounts(shop, admin);
+    // in parity with storefront and admin availability decisions. This order's own
+    // booking is excluded from the counts so it cannot block itself out of a slot.
+    const scheduleRules = await getScheduleRulesWithBookedCounts(shop, admin, {
+      excludeOrderId: orderGid,
+    });
     const validation = validateDeliverySelection(scheduleRules, date, timeSlot);
     if (!validation.ok) {
       return jsonResponse(

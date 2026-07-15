@@ -306,9 +306,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return jsonError(RESCHEDULE_ALREADY_RESCHEDULED_MESSAGE, 422, request);
   }
 
+  // This order's own booking is excluded from the counts so it cannot block
+  // itself out of a slot when rescheduling.
   const scheduleRules = await getScheduleRulesWithBookedCounts(
     session?.shop,
     admin,
+    { excludeOrderId: orderGid },
   );
   const validation = validateDeliverySelection(scheduleRules, date, timeSlot);
   if (!validation.ok) {
