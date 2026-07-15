@@ -173,3 +173,17 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 **Consequence:** New dependency `nodemailer`; new env vars `EMAIL_SMTP_HOST/PORT/USER/PASSWORD` + `EMAIL_FROM_NAME` (local `.env` dev, Secret Manager → Cloud Run prod); `/app/orders` gains a non-order-mutating outbound side effect. The send service is deliberately reusable for the planned Communications page.
 
 **Status:** Accepted; shipped on `feature/customer-email`, live-verified 2026-07-13 (happy + wrong-password failure paths).
+
+## ADR-12 — Booked counts move to metafield-date-scoped queries + a short in-memory cache (DB counter deferred)
+
+**Source:** [scheduler-v2-audit.md](./scheduler-v2-audit.md) (2026-07-15) + [scheduler-v2-ux.md §5](./scheduler-v2-ux.md); merchant decision D1, 2026-07-15.
+
+**Context:** The architecture principle was "booked-slot counts are computed live via Admin GraphQL on every call — never cached locally." In practice the implementation (`loadAutomaticBookedCounts`) scanned up to 20×250 = 5,000 orders filtered by `created_at` lookback on **every** rules read — including every storefront cart view (RACE-03/PERF-1) — while still being wrong: it missed old orders rescheduled into future dates (the lookback is order age, not delivery date), silently truncated past page 20, matched slots by case-sensitive exact string, and failed open to `booked: 0` on any Admin API error. Meanwhile the `orders/create` webhook compared against the stale persisted `booked: 0`, so capacity was never actually enforced at order creation (DEF-3).
+
+**Decision (merchant, D1):** Counts are computed from **one Admin GraphQL orders search filtered by `metafields.custom.date:<date>` terms over the future capacity-tracked dates** (the same metafield-filter mechanism `/app/orders` already uses), matching **metafields only** through one canonical normalizer, excluding cancelled orders — and the raw matched bookings are **memoized in-process per shop for 60 seconds** (which also makes exclude-self-on-reschedule free). The principle is amended, not abandoned: booked counts are still **never persisted** and never authoritative-in-DB; they are live-derived with a short TTL. A Postgres counter with atomic increment (the full RACE-02 oversell fix) is **explicitly deferred** until oversell is observed to be a real business problem.
+
+**Explicitly accepted:** up to 60s staleness in every capacity check; the TOCTOU oversell window remains (unchanged from today — there was never a reservation primitive); scan failure still fails open for sales continuity, but now surfaces as a real `countsMeta.status` warning in admin instead of a fabricated green pill.
+
+**Consequence:** `docs/architecture.md`'s "never cached" wording must be updated when Phase 2 ships; `getScheduleRulesWithBookedCounts` keeps its signature (additive `countsMeta`); the `created_at`-lookback scan and the tag/attribute booking heuristics are deleted; pre-V2 orders whose metafield sync was blocked are consciously not counted (D4's always-sync closes that class going forward).
+
+**Status:** Accepted (design locked 2026-07-15; implementation = Scheduler V2 Phase 2).
