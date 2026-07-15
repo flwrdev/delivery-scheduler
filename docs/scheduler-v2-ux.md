@@ -328,6 +328,8 @@ the redirect stub) · the `created_at`-lookback scan internals in
   (**Prisma migration → "Run `npm run setup` before your next `npm run dev`"**),
   bounds, config-health surfacing. The old editor keeps working on top (its
   well-formed payloads pass strict validation). Heavy unit-test phase.
+  **DONE 2026-07-15** (gates green, tests 114/114 incl. 44 new; live dev-app
+  editor-save smoke pending — see the verification log).
 - **Phase 2 — Booked-counts engine V2 (§5).** Swap behind the same entry point;
   `excludeOrderId` threaded to the reschedule validators; `countsMeta` additive.
   Unit tests with mocked Admin GraphQL; live dev-store verification of counts

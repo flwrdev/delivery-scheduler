@@ -1,3 +1,5 @@
+import { resolveConfiguredSlotValue } from "./slot-value";
+
 export interface DeliveryScheduleSlot {
   display: string;
   value: string;
@@ -423,17 +425,19 @@ export function isDateSelectable(
 export function isSlotAvailable(
   rules: DeliveryScheduleRules,
   dateStr: string,
-  slotValue: string,
+  rawSlotValue: string,
   now = new Date(),
 ): boolean {
   // Keep one shared availability gate so cart, customer account, and server routes
-  // all accept and reject the same delivery slot combinations.
-  if (!dateStr || !slotValue || !isDateSelectable(rules, dateStr, now)) {
+  // all accept and reject the same delivery slot combinations. The raw value is
+  // resolved to its CONFIGURED slot value first (case/spacing-tolerant, §4.2) so
+  // blocked/capacity lookups — which are keyed by configured values — stay exact.
+  if (!dateStr || !rawSlotValue || !isDateSelectable(rules, dateStr, now)) {
     return false;
   }
 
-  const availableTimeSlots = getAvailableTimeSlots(dateStr, rules);
-  if (!availableTimeSlots.some((slot) => slot.value === slotValue)) {
+  const slotValue = resolveConfiguredSlotValue(rules, rawSlotValue);
+  if (slotValue == null) {
     return false;
   }
 
@@ -487,7 +491,7 @@ export type MerchantRescheduleValidationResult =
 export function validateMerchantRescheduleSelection(
   rules: DeliveryScheduleRules,
   dateStr: string,
-  slotValue: string,
+  rawSlotValue: string,
 ): MerchantRescheduleValidationResult {
   if (!isIsoDateString(dateStr)) {
     return {
@@ -497,11 +501,10 @@ export function validateMerchantRescheduleSelection(
     };
   }
 
-  if (
-    !getAvailableTimeSlots(dateStr, rules).some(
-      (slot) => slot.value === slotValue,
-    )
-  ) {
+  // Same §4.2 resolution as the customer validator: match tolerantly, then use
+  // the configured value for the blocked/capacity lookups below.
+  const slotValue = resolveConfiguredSlotValue(rules, rawSlotValue);
+  if (slotValue == null) {
     return {
       ok: false,
       code: "slot_unknown",
@@ -667,9 +670,13 @@ export function validateDeliveryDate(
 export function validateDeliverySelection(
   rules: DeliveryScheduleRules,
   dateStr: string,
-  slotValue: string,
+  rawSlotValue: string,
   now = new Date(),
 ): DeliverySelectionValidationResult {
+  // Resolve the incoming slot to its configured value once (case/spacing-tolerant,
+  // §4.2) so this validator and the booked-count matcher can never disagree about
+  // which configured slot an order names (audit DEF-2/DEF-4).
+  const slotValue = resolveConfiguredSlotValue(rules, rawSlotValue);
   // Run the final slot check only after the date has been normalized so every UI and
   // API surface shares one canonical reason for rejecting a delivery selection.
   const dateValidation = validateDeliveryDate(rules, dateStr, now);
@@ -690,11 +697,7 @@ export function validateDeliverySelection(
 
   const { minDate, maxDate, availableSlots } = dateValidation;
 
-  if (
-    !getAvailableTimeSlots(dateStr, rules).some(
-      (slot) => slot.value === slotValue,
-    )
-  ) {
+  if (slotValue == null) {
     return {
       ok: false,
       code: "slot_unknown",

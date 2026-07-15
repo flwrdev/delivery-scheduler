@@ -409,7 +409,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return payload;
   }
 
-  await upsertScheduleRules(shop, payload);
+  const result = await upsertScheduleRules(shop, payload);
+  if (!result.ok) {
+    if (result.code === "validation") {
+      const message =
+        Object.values(result.fieldErrors)[0] ?? "Invalid schedule rules.";
+      return jsonError(message);
+    }
+
+    // Optimistic-version guard tripped: another session saved first.
+    return jsonError(
+      "Schedule rules were changed in another session. Reload this page and re-apply your edits.",
+      409,
+    );
+  }
+
   const scheduleRules = await getScheduleRulesWithBookedCounts(shop, admin);
 
   return Response.json(scheduleRules, {
