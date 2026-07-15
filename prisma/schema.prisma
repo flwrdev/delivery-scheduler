@@ -45,6 +45,9 @@ model DeliveryScheduleConfig {
   disabledDatesJson String
   disabledSlotsJson String
   slotCapacityJson  String
+  // Optimistic-concurrency guard for granular section saves (Scheduler V2 §4.4):
+  // writes send the version they loaded; a mismatch means another writer won.
+  version           Int      @default(0)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 }

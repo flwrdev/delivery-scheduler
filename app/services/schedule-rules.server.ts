@@ -2,11 +2,13 @@ import prisma from "../db.server";
 import {
   DEFAULT_DELIVERY_SCHEDULE_RULES,
   cloneDeliveryScheduleRules,
-  isIsoDateString,
-  type DeliveryScheduleCapacity,
   type DeliveryScheduleRules,
-  type DeliveryScheduleSlot,
 } from "../lib/delivery-availability";
+import {
+  deserializeStoredScheduleRules,
+  validateScheduleRulesPatch,
+  type ConfigHealthIssue,
+} from "../lib/schedule-rules-schema";
 import type { AdminGraphQLClient } from "./delivery-bookings.server";
 import { loadAutomaticBookedCounts } from "./delivery-bookings.server";
 
@@ -15,8 +17,29 @@ export type {
   DeliveryScheduleRules,
   DeliveryScheduleSlot,
 } from "../lib/delivery-availability";
+export type { ConfigHealthIssue } from "../lib/schedule-rules-schema";
 
-interface DeliveryScheduleConfigRecord {
+const DEFAULT_SCHEDULE_RULES: DeliveryScheduleRules = DEFAULT_DELIVERY_SCHEDULE_RULES;
+const cloneScheduleRules = cloneDeliveryScheduleRules;
+
+export interface ScheduleRulesWithHealth {
+  rules: DeliveryScheduleRules;
+  configHealth: ConfigHealthIssue[];
+  /** Optimistic-concurrency counter; 0 when no config row exists yet. */
+  version: number;
+}
+
+export type UpsertScheduleRulesResult =
+  | { ok: true; rules: DeliveryScheduleRules; version: number }
+  | { ok: false; code: "validation"; fieldErrors: Record<string, string> }
+  | {
+      ok: false;
+      code: "stale_config";
+      rules: DeliveryScheduleRules;
+      version: number;
+    };
+
+type StoredConfigRow = {
   timezone: string;
   cutoffHour: number;
   prepHours: number;
@@ -25,250 +48,8 @@ interface DeliveryScheduleConfigRecord {
   disabledDatesJson: string;
   disabledSlotsJson: string;
   slotCapacityJson: string;
-}
-
-const DEFAULT_SCHEDULE_RULES: DeliveryScheduleRules = DEFAULT_DELIVERY_SCHEDULE_RULES;
-const cloneScheduleRules = cloneDeliveryScheduleRules;
-
-function uniqueStringValues(values: string[]): string[] {
-  return Array.from(new Set(values.filter(Boolean)));
-}
-
-function parseStringArray(jsonValue: string, fallbackValue: string[]): string[] {
-  try {
-    const parsed = JSON.parse(jsonValue);
-    if (!Array.isArray(parsed)) return [...fallbackValue];
-
-    return uniqueStringValues(
-      parsed.filter((value): value is string => typeof value === "string"),
-    );
-  } catch {
-    return [...fallbackValue];
-  }
-}
-
-function parseSlots(
-  jsonValue: string,
-  fallbackValue: DeliveryScheduleSlot[],
-): DeliveryScheduleSlot[] {
-  try {
-    const parsed = JSON.parse(jsonValue);
-    if (!Array.isArray(parsed)) return fallbackValue.map((slot) => ({ ...slot }));
-
-    const seenValues = new Set<string>();
-    const slots = parsed
-      .filter(
-        (slot) =>
-          slot &&
-          typeof slot.display === "string" &&
-          slot.display &&
-          typeof slot.value === "string" &&
-          slot.value,
-      )
-      .flatMap((slot) => {
-        if (seenValues.has(slot.value)) {
-          return [];
-        }
-
-        seenValues.add(slot.value);
-        return [
-          {
-            display: slot.display,
-            value: slot.value,
-          },
-        ];
-      });
-
-    return slots.length ? slots : fallbackValue.map((slot) => ({ ...slot }));
-  } catch {
-    return fallbackValue.map((slot) => ({ ...slot }));
-  }
-}
-
-function parseDisabledSlots(
-  jsonValue: string,
-  fallbackValue: Record<string, string[]>,
-): Record<string, string[]> {
-  try {
-    const parsed = JSON.parse(jsonValue);
-    if (!parsed || typeof parsed !== "object") {
-      return Object.fromEntries(
-        Object.entries(fallbackValue).map(([date, slots]) => [date, [...slots]]),
-      );
-    }
-
-    return Object.fromEntries(
-      Object.entries(parsed).flatMap(([date, slots]) => {
-        if (!isIsoDateString(date) || !Array.isArray(slots)) return [];
-        return [
-          [
-            date,
-            uniqueStringValues(
-              slots.filter((slot): slot is string => typeof slot === "string"),
-            ),
-          ],
-        ];
-      }),
-    );
-  } catch {
-    return Object.fromEntries(
-      Object.entries(fallbackValue).map(([date, slots]) => [date, [...slots]]),
-    );
-  }
-}
-
-function parseSlotCapacity(
-  jsonValue: string,
-  fallbackValue: Record<string, Record<string, DeliveryScheduleCapacity>>,
-): Record<string, Record<string, DeliveryScheduleCapacity>> {
-  try {
-    const parsed = JSON.parse(jsonValue);
-    if (!parsed || typeof parsed !== "object") {
-      return cloneScheduleRules({
-        ...DEFAULT_SCHEDULE_RULES,
-        slotCapacity: fallbackValue,
-      }).slotCapacity;
-    }
-
-    return Object.fromEntries(
-      Object.entries(parsed).flatMap(([date, capacities]) => {
-        if (!isIsoDateString(date) || !capacities || typeof capacities !== "object") {
-          return [];
-        }
-
-        const slotCapacities = Object.fromEntries(
-          Object.entries(capacities).flatMap(([slot, values]) => {
-            const capacity = Number(values && values.capacity);
-            const booked = Number(values && values.booked);
-
-            if (!Number.isFinite(capacity) || !Number.isFinite(booked)) {
-              return [];
-            }
-
-            return [[slot, { capacity, booked }]];
-          }),
-        );
-
-        return [[date, slotCapacities]];
-      }),
-    );
-  } catch {
-    return cloneScheduleRules({
-      ...DEFAULT_SCHEDULE_RULES,
-      slotCapacity: fallbackValue,
-    }).slotCapacity;
-  }
-}
-
-function normalizeScheduleRules(
-  rules: Partial<DeliveryScheduleRules>,
-  baseRules: DeliveryScheduleRules = DEFAULT_SCHEDULE_RULES,
-): DeliveryScheduleRules {
-  // Sanitize stored or admin-provided values against the current defaults so malformed
-  // JSON never leaks into the shared delivery validation contract.
-  const normalizedRules = cloneScheduleRules(baseRules);
-
-  if (typeof rules.timezone === "string" && rules.timezone) {
-    normalizedRules.timezone = rules.timezone;
-  }
-
-  const cutoffHour = Number(rules.cutoffHour);
-  if (Number.isInteger(cutoffHour) && cutoffHour >= 0 && cutoffHour <= 23) {
-    normalizedRules.cutoffHour = cutoffHour;
-  }
-
-  const prepHours = Number(rules.prepHours);
-  if (Number.isInteger(prepHours) && prepHours >= 0) {
-    normalizedRules.prepHours = prepHours;
-  }
-
-  const maxDays = Number(rules.maxDays);
-  if (Number.isInteger(maxDays) && maxDays >= 1) {
-    normalizedRules.maxDays = maxDays;
-  }
-
-  if (Array.isArray(rules.slots)) {
-    const seenValues = new Set<string>();
-    const slots = rules.slots
-      .filter(
-        (slot) =>
-          slot &&
-          typeof slot.display === "string" &&
-          slot.display &&
-          typeof slot.value === "string" &&
-          slot.value,
-      )
-      .flatMap((slot) => {
-        if (seenValues.has(slot.value)) {
-          return [];
-        }
-
-        seenValues.add(slot.value);
-        return [
-          {
-            display: slot.display,
-            value: slot.value,
-          },
-        ];
-      });
-
-    if (slots.length) {
-      normalizedRules.slots = slots;
-    }
-  }
-
-  if (Array.isArray(rules.disabledDates)) {
-    normalizedRules.disabledDates = uniqueStringValues(
-      rules.disabledDates.filter(
-        (value): value is string =>
-          typeof value === "string" && isIsoDateString(value),
-      ),
-    );
-  }
-
-  if (rules.disabledSlots && typeof rules.disabledSlots === "object") {
-    normalizedRules.disabledSlots = Object.fromEntries(
-      Object.entries(rules.disabledSlots).flatMap(([date, slots]) => {
-        if (!isIsoDateString(date) || !Array.isArray(slots)) return [];
-        return [
-          [
-            date,
-            uniqueStringValues(
-              slots.filter((slot): slot is string => typeof slot === "string"),
-            ),
-          ],
-        ];
-      }),
-    );
-  }
-
-  if (rules.slotCapacity && typeof rules.slotCapacity === "object") {
-    normalizedRules.slotCapacity = Object.fromEntries(
-      Object.entries(rules.slotCapacity).flatMap(([date, capacities]) => {
-        if (!isIsoDateString(date) || !capacities || typeof capacities !== "object") {
-          return [];
-        }
-
-        const slotCapacities = Object.fromEntries(
-          Object.entries(capacities).flatMap(([slot, values]) => {
-            const capacity = Number(values && values.capacity);
-            const booked = Number(values && values.booked);
-
-            if (!Number.isFinite(capacity) || !Number.isFinite(booked)) {
-              return [];
-            }
-
-            return [[slot, { capacity, booked }]];
-          }),
-        );
-
-        return [[date, slotCapacities]];
-      }),
-    );
-  }
-
-  return normalizedRules;
-}
+  version: number;
+};
 
 function serializeScheduleRules(shop: string, rules: DeliveryScheduleRules) {
   return {
@@ -284,28 +65,62 @@ function serializeScheduleRules(shop: string, rules: DeliveryScheduleRules) {
   };
 }
 
-function deserializeScheduleRules(record: DeliveryScheduleConfigRecord): DeliveryScheduleRules {
-  // Rebuild the persisted JSON blobs into a fully shaped rules object so downstream
-  // callers can treat every field as present and already normalized.
-  return normalizeScheduleRules({
-    timezone: record.timezone,
-    cutoffHour: record.cutoffHour,
-    prepHours: record.prepHours,
-    maxDays: record.maxDays,
-    slots: parseSlots(record.slotsJson, DEFAULT_SCHEDULE_RULES.slots),
-    disabledDates: parseStringArray(
-      record.disabledDatesJson,
-      DEFAULT_SCHEDULE_RULES.disabledDates,
-    ),
-    disabledSlots: parseDisabledSlots(
-      record.disabledSlotsJson,
-      DEFAULT_SCHEDULE_RULES.disabledSlots,
-    ),
-    slotCapacity: parseSlotCapacity(
-      record.slotCapacityJson,
-      DEFAULT_SCHEDULE_RULES.slotCapacity,
-    ),
-  });
+function readStoredRules(shop: string, row: StoredConfigRow): ScheduleRulesWithHealth {
+  const { rules, configHealth } = deserializeStoredScheduleRules(row);
+
+  if (configHealth.length) {
+    // Loud, not silent (audit DEF-10): keep the raw column payloads in the log so
+    // a corrupted blob can be recovered by hand instead of vanishing behind a
+    // default fallback.
+    console.error(
+      `Delivery schedule config for ${shop} has ${configHealth.length} health issue(s):`,
+      JSON.stringify({
+        issues: configHealth,
+        rawColumns: {
+          timezone: row.timezone,
+          slotsJson: row.slotsJson,
+          disabledDatesJson: row.disabledDatesJson,
+          disabledSlotsJson: row.disabledSlotsJson,
+          slotCapacityJson: row.slotCapacityJson,
+        },
+      }),
+    );
+  }
+
+  return { rules, configHealth, version: row.version };
+}
+
+/**
+ * Rules read WITH config-health detail (admin surfaces). Pure read: no row is
+ * created here — the config row is first written by an editor save, never as a
+ * side effect of reading (audit PERF-2).
+ */
+export async function getScheduleRulesWithHealth(
+  shop?: string,
+): Promise<ScheduleRulesWithHealth> {
+  if (!shop) {
+    return {
+      rules: cloneScheduleRules(DEFAULT_SCHEDULE_RULES),
+      configHealth: [],
+      version: 0,
+    };
+  }
+
+  const row = await prisma.deliveryScheduleConfig.findUnique({ where: { shop } });
+  if (!row) {
+    return {
+      rules: cloneScheduleRules(DEFAULT_SCHEDULE_RULES),
+      configHealth: [],
+      version: 0,
+    };
+  }
+
+  return readStoredRules(shop, row);
+}
+
+export async function getScheduleRules(shop?: string): Promise<DeliveryScheduleRules> {
+  const { rules } = await getScheduleRulesWithHealth(shop);
+  return rules;
 }
 
 function applyAutomaticBookedCounts(
@@ -333,22 +148,6 @@ function applyAutomaticBookedCounts(
   };
 }
 
-export async function getScheduleRules(shop?: string): Promise<DeliveryScheduleRules> {
-  if (!shop) {
-    return cloneScheduleRules(DEFAULT_SCHEDULE_RULES);
-  }
-
-  // Ensure every shop has a persisted config row the first time rules are requested so
-  // all other delivery code can assume a stable storage record exists.
-  const record = await prisma.deliveryScheduleConfig.upsert({
-    where: { shop },
-    update: {},
-    create: serializeScheduleRules(shop, DEFAULT_SCHEDULE_RULES),
-  });
-
-  return deserializeScheduleRules(record);
-}
-
 export async function getScheduleRulesWithBookedCounts(
   shop: string | undefined,
   admin?: AdminGraphQLClient,
@@ -370,19 +169,81 @@ export async function getScheduleRulesWithBookedCounts(
   }
 }
 
+/**
+ * Strictly validated, optimistically guarded write. Invalid fields reject with
+ * per-field errors (never silently kept-old or dropped — audit DEF-9); when
+ * `expectedVersion` is provided (or a row already exists) the update only
+ * applies if no other writer has bumped the version since it was read
+ * (audit DEF-11 last-writer-wins).
+ */
 export async function upsertScheduleRules(
   shop: string,
-  rules: Partial<DeliveryScheduleRules>,
-): Promise<DeliveryScheduleRules> {
-  const currentRules = await getScheduleRules(shop);
-  // Normalize before writing so partial admin editor payloads cannot persist invalid
-  // slot, date, or capacity structures into the shared delivery contract.
-  const normalizedRules = normalizeScheduleRules(rules, currentRules);
-  const record = await prisma.deliveryScheduleConfig.upsert({
+  patch: Partial<DeliveryScheduleRules>,
+  options: { expectedVersion?: number } = {},
+): Promise<UpsertScheduleRulesResult> {
+  const current = await getScheduleRulesWithHealth(shop);
+
+  const validation = validateScheduleRulesPatch(patch, current.rules.slots);
+  if (!validation.ok) {
+    return { ok: false, code: "validation", fieldErrors: validation.fieldErrors };
+  }
+
+  const guardVersion = options.expectedVersion ?? current.version;
+  const nextRules: DeliveryScheduleRules = {
+    ...cloneScheduleRules(current.rules),
+    ...validation.patch,
+  };
+
+  const existingRow = await prisma.deliveryScheduleConfig.findUnique({
     where: { shop },
-    update: serializeScheduleRules(shop, normalizedRules),
-    create: serializeScheduleRules(shop, normalizedRules),
+    select: { version: true },
   });
 
-  return deserializeScheduleRules(record);
+  if (!existingRow) {
+    if (guardVersion !== 0) {
+      return { ok: false, code: "stale_config", rules: current.rules, version: 0 };
+    }
+
+    try {
+      const created = await prisma.deliveryScheduleConfig.create({
+        data: { ...serializeScheduleRules(shop, nextRules), version: 1 },
+      });
+      return {
+        ok: true,
+        rules: readStoredRules(shop, created).rules,
+        version: created.version,
+      };
+    } catch (error) {
+      // Unique-constraint race: another writer created the row between our read
+      // and this create. Surface it as a stale save instead of a 500.
+      if ((error as { code?: string })?.code === "P2002") {
+        const fresh = await getScheduleRulesWithHealth(shop);
+        return {
+          ok: false,
+          code: "stale_config",
+          rules: fresh.rules,
+          version: fresh.version,
+        };
+      }
+      throw error;
+    }
+  }
+
+  const updated = await prisma.deliveryScheduleConfig.updateMany({
+    where: { shop, version: guardVersion },
+    data: { ...serializeScheduleRules(shop, nextRules), version: guardVersion + 1 },
+  });
+
+  if (updated.count === 0) {
+    const fresh = await getScheduleRulesWithHealth(shop);
+    return {
+      ok: false,
+      code: "stale_config",
+      rules: fresh.rules,
+      version: fresh.version,
+    };
+  }
+
+  const fresh = await getScheduleRulesWithHealth(shop);
+  return { ok: true, rules: fresh.rules, version: fresh.version };
 }
