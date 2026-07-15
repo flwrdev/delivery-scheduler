@@ -334,6 +334,13 @@ the redirect stub) · the `created_at`-lookback scan internals in
   `excludeOrderId` threaded to the reschedule validators; `countsMeta` additive.
   Unit tests with mocked Admin GraphQL; live dev-store verification of counts
   vs. real orders.
+  **DONE 2026-07-15** (gates green, tests 131/131 incl. 17 new; the
+  `metafields.custom.date:` filterability assumption was live-verified against
+  the production store BEFORE building — definitions are FILTERABLE and the
+  scoped query returns exactly the matching orders; `countsMeta` delivered via
+  the new `getScheduleRulesDetailed` so the storefront payload stays
+  byte-compatible per D5; live counts-vs-real-orders check pending — see the
+  verification log).
 - **Phase 3 — The merged Polaris page (§3, §7).** Loader + granular ops + UI,
   redirects, nav, home→orders. **Live smoke checklist with the merchant** (edit
   every section, conflict path via two tabs, `?date=` deep link, legacy-slot

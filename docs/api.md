@@ -88,7 +88,7 @@ API version sa `shopify.app.toml` is `2026-04`.
 | Order utility helpers             | [app/lib/order-utils.ts](../app/lib/order-utils.ts)                                                                   |
 | Rules loader + booked-count merge | [app/services/schedule-rules.server.ts](../app/services/schedule-rules.server.ts)                                     |
 | Order metafield + tag sync        | [app/services/order-delivery-metafields.server.ts](../app/services/order-delivery-metafields.server.ts)               |
-| Booking helper                    | [app/services/delivery-bookings.server.ts](../app/services/delivery-bookings.server.ts)                               |
+| Booked-counts engine (Scheduler V2 §5, ADR-12) | [app/services/delivery-bookings.server.ts](../app/services/delivery-bookings.server.ts) — `getDeliveryBookingsSnapshot` (metafield-date-scoped orders search, 60s in-process memo) + `deriveBookedCounts` (per-read counts w/ exclude-self) |
 | Scheduler module                  | [app/modules/scheduler.jsx](../app/modules/scheduler.jsx) + [scheduler.server.js](../app/modules/scheduler.server.js) |
 | Session shop extractor            | [app/modules/session.server.js](../app/modules/session.server.js)                                                     |
 
