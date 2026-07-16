@@ -30,11 +30,11 @@ Know which one you're in before writing a handler:
 | Path                                  | File                                                                                  | Has `action` (writes)?                                                                                                                                                                                                                                                                                       |
 | ------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `/app` (shell + nav)                  | [app/routes/app.jsx](../app/routes/app.jsx)                                           | No — loader only.                                                                                                                                                                                                                                                                                            |
-| `/app/_index` (redirect to scheduler) | [app/routes/app.\_index.jsx](../app/routes/app._index.jsx)                            | No — loader-side redirect. Default destination is `/app/scheduler` (`sanitizeEmbeddedAppReturnTo(...) ?? "/app/scheduler"`).                                                                                                                                                                                  |
+| `/app/_index` (redirect to orders)    | [app/routes/app.\_index.jsx](../app/routes/app._index.jsx)                            | No — loader-side redirect. Default destination is `/app/orders` (`sanitizeEmbeddedAppReturnTo(...) ?? "/app/orders"`; Scheduler V2 D2 — Orders Ops is the app home since Phase 3).                                                                                                                            |
 | `/app/orders`                         | [app/routes/app.orders.tsx](../app/routes/app.orders.tsx)                             | **Yes — generic order bulk actions PLUS, since Orders Ops V2 Phase 4, the merchant `reschedule` op (a delivery write path — see §2, row 4).** Generic mutations: `orderClose`, `orderOpen`, `orderCancel`, `tagsAdd`, `tagsRemove`, `fulfillmentCreate`. The `reschedule` op calls the shared `rescheduleOrderDelivery()` service. Also hosts the `sendEmail` op (Customer Email, 2026-07-13, ADR-11): sends plain-text mail through the merchant's business mailbox via [`send-customer-email.server.ts`](../app/services/send-customer-email.server.ts) — an **outbound side effect that writes NOTHING to any order** (explicitly NOT a delivery write path; the §2 table is unchanged). |
 | `/app/orders/reschedule-rules`        | [app/routes/app.orders_.reschedule-rules.ts](../app/routes/app.orders_.reschedule-rules.ts) | No — read-only resource route (loader only): returns the delivery schedule rules + live booked counts for the reschedule modal (fetched lazily on modal open; session auth).                                                                                                                       |
-| `/app/scheduler`                      | [app/routes/app.scheduler.jsx](../app/routes/app.scheduler.jsx)                       | No — read-only view.                                                                                                                                                                                                                                                                                         |
-| `/app/schedule-rules`                 | [app/routes/app.schedule-rules/route.tsx](../app/routes/app.schedule-rules/route.tsx) | **Yes — writes `DeliveryScheduleConfig` only** (rules config in Postgres). Does not touch any order.                                                                                                                                                                                                         |
+| `/app/scheduler`                      | [app/routes/app.scheduler.tsx](../app/routes/app.scheduler.tsx)                       | **Yes — writes `DeliveryScheduleConfig` only** (Scheduler V2 Phase 3 merged Polaris page). Granular ops (`op` discriminator via [scheduler-ops.server.ts](../app/services/scheduler-ops.server.ts)): `saveSettings` · `createSlot` · `updateSlotDisplay` · `reorderSlots` · `deleteSlot` · `saveDayOverride` · `clearDayOverride` · `refreshCounts` (cache bust, no write). All writes go through `upsertScheduleRules` under the optimistic `version` guard; every response is `200 + {ok,…}` (ADR-11). Does not touch any order. |
+| `/app/schedule-rules`                 | [app/routes/app.schedule-rules.tsx](../app/routes/app.schedule-rules.tsx)             | No — thin authenticated redirect stub to `/app/scheduler` (Scheduler V2 D2; embedded query params preserved). The old folder-route editor is deleted.                                                                                                                                                        |
 
 ## Shopify auth / bootstrap routes
 
@@ -89,7 +89,9 @@ API version sa `shopify.app.toml` is `2026-04`.
 | Rules loader + booked-count merge | [app/services/schedule-rules.server.ts](../app/services/schedule-rules.server.ts)                                     |
 | Order metafield + tag sync        | [app/services/order-delivery-metafields.server.ts](../app/services/order-delivery-metafields.server.ts)               |
 | Booked-counts engine (Scheduler V2 §5, ADR-12) | [app/services/delivery-bookings.server.ts](../app/services/delivery-bookings.server.ts) — `getDeliveryBookingsSnapshot` (metafield-date-scoped orders search, 60s in-process memo) + `deriveBookedCounts` (per-read counts w/ exclude-self) |
-| Scheduler module                  | [app/modules/scheduler.jsx](../app/modules/scheduler.jsx) + [scheduler.server.js](../app/modules/scheduler.server.js) |
+| Scheduler granular ops (Scheduler V2 §4.4) | [app/services/scheduler-ops.server.ts](../app/services/scheduler-ops.server.ts) — `runSchedulerOp` (per-section patch + version guard) |
+| Structured slot times (Scheduler V2 §4.3)  | [app/lib/slot-times.ts](../app/lib/slot-times.ts) — `generateSlotValue`/`parseSlotValueToTimes` (frozen `"9AM-12PM"` wire format) |
+| Scheduler overview aggregations   | [app/lib/scheduler-overview.ts](../app/lib/scheduler-overview.ts) (pure; replaces the dashboard math of the ORPHANED [app/modules/scheduler.jsx](../app/modules/scheduler.jsx) + [scheduler.server.js](../app/modules/scheduler.server.js) — deletion lands with Scheduler V2 Phase 5) |
 | Session shop extractor            | [app/modules/session.server.js](../app/modules/session.server.js)                                                     |
 
 ---
@@ -226,7 +228,7 @@ flowchart LR
     classDef rd fill:#fef,stroke:#a5a,color:#000
 
     START(["Merchant opens embedded app"]):::act
-    APP["/app — s-app-nav<br/>Orders · Scheduler · Schedule rules<br/>(default /app/_index redirects to /app/scheduler)"]:::screen
+    APP["/app — s-app-nav<br/>Orders Operations · Delivery Scheduler<br/>(default /app/_index redirects to /app/orders)"]:::screen
 
     subgraph ORDERS["/app/orders"]
         O_LOAD["loader → Admin GraphQL (direct)"]:::act
@@ -234,14 +236,12 @@ flowchart LR
         O_FILT["toolbar: search + delivery-date<br/>+ time-slot + reset;<br/>URL tabs: all / today / tomorrow /<br/>thisWeek / unfulfilled / unpaid"]:::screen
     end
 
-    subgraph SCHED["/app/scheduler"]
-        S_VIEW["scheduler module<br/>(modules/scheduler.jsx +<br/>scheduler.server.js)"]:::screen
+    subgraph SCHED["/app/scheduler — merged page (Scheduler V2 Phase 3)"]
+        S_VIEW["cards: Overview · Delivery settings ·<br/>Time slots (structured pickers) ·<br/>Date overrides (?date= day panel)"]:::screen
+        S_SAVE["action → granular ops<br/>(scheduler-ops.server.ts)<br/>→ upsert DeliveryScheduleConfig<br/>under the version guard"]:::act
     end
 
-    subgraph RULES["/app/schedule-rules"]
-        R_FORM["form fields:<br/>timezone, cutoffHour, prepHours,<br/>maxDays, slots, disabledDates,<br/>disabledSlots, slotCapacity"]:::screen
-        R_SAVE["action → upsert DeliveryScheduleConfig"]:::act
-    end
+    RULES["/app/schedule-rules<br/>(redirect stub → /app/scheduler)"]:::screen
 
     subgraph ORDER_PAGE["Shopify Order page (native + read-only extensions)"]
         ADB2["order-delivery-block<br/>(read-only block)"]:::rd
@@ -255,15 +255,14 @@ flowchart LR
     START --> APP
     APP --> ORDERS
     APP --> SCHED
-    APP --> RULES
 
     ORDERS --> O_LOAD --> O_LIST --> O_FILT
     O_LOAD --> SAPI
 
-    SCHED --> S_VIEW --> SAPI
-    SCHED --> DB
+    SCHED --> S_VIEW --> S_SAVE --> DB
+    S_VIEW --> SAPI
 
-    RULES --> R_FORM --> R_SAVE --> DB
+    RULES -. redirect .-> SCHED
 
     ORDER_PAGE --> ADB2 -. read .-> SAPI
     ORDER_PAGE --> ARA2 -. read .-> SAPI

@@ -54,10 +54,10 @@ flowchart TB
     end
 
     subgraph ADMINUI["Shopify Admin — embedded app"]
-        APP["/app (shell + nav) →<br/>orders · scheduler · schedule-rules"]:::ext
+        APP["/app (shell + nav) →<br/>orders · scheduler"]:::ext
         ORD["/app/orders<br/>(order bulk writes + merchant<br/>reschedule op → shared service)"]:::ext
-        SCH["/app/scheduler (read-only)"]:::rd
-        RUL["/app/schedule-rules<br/>(writes DeliveryScheduleConfig)"]:::ext
+        SCH["/app/scheduler<br/>(merged page, Scheduler V2 Phase 3 —<br/>writes DeliveryScheduleConfig<br/>via granular ops + version guard)"]:::ext
+        RUL["/app/schedule-rules<br/>(redirect stub → /app/scheduler)"]:::rd
     end
 
     subgraph ADMINEXT["Shopify Admin — order details (read-only)"]
@@ -92,10 +92,9 @@ flowchart TB
     %% Embedded admin nav
     APP --> ORD
     APP --> SCH
-    APP --> RUL
+    RUL -. redirect .-> SCH
     SCH --> SR
-    RUL --> SR
-    RUL --> T_CFG
+    SCH --> T_CFG
 
     %% Admin order-page extensions: READ-ONLY
     ADB -. read .-> SADM
@@ -221,7 +220,7 @@ erDiagram
 
 Known stale claims that file was recorded to contain (retained here for provenance):
 
-- States `/app` "currently defaults to `/app/dashboard`". The actual default in `app.routes.app._index.jsx` is `/app/scheduler`.
+- States `/app` "currently defaults to `/app/dashboard`". The actual default in `app.routes.app._index.jsx` is `/app/orders` (was `/app/scheduler` until Scheduler V2 Phase 3, 2026-07-17).
 - Does not list `/app/orders` (the live orders surface; documented in [api.md](./api.md)).
 - Describes `/apps/schedule-rules/reschedule` as "Possibly core" — re-verified as having **no registered extension caller**.
 - Treats admin extensions ambiguously; this doc set is explicit that both `order-delivery-block` and `delivery-reschedule-action` are read-only.

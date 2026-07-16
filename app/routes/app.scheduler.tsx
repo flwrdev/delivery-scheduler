@@ -1,0 +1,282 @@
+// Merged Delivery Scheduler page (Scheduler V2 §3/§7 — docs/scheduler-v2-ux.md).
+// Canonical config surface: overview + settings + time slots + date overrides,
+// server-authoritative through granular ops (scheduler-ops.server.ts) under
+// the optimistic version guard. Every op response is 200 + {ok, …} (ADR-11).
+
+import { useCallback, useEffect, useState } from "react";
+import type {
+  ActionFunctionArgs,
+  LoaderFunctionArgs,
+  ShouldRevalidateFunctionArgs,
+} from "react-router";
+import { useLoaderData, useRouteError, useSearchParams } from "react-router";
+import { boundary } from "@shopify/shopify-app-react-router/server";
+import { Banner, BlockStack, Page } from "@shopify/polaris";
+
+import { authenticate } from "../shopify.server";
+import {
+  getScheduleRulesDetailed,
+  type ScheduleRulesDetailed,
+} from "../services/schedule-rules.server";
+import {
+  getTodayInTimezone,
+  runSchedulerOp,
+} from "../services/scheduler-ops.server";
+import { DayOverridesCard } from "../components/scheduler/DayOverridesCard";
+import { OverviewCard } from "../components/scheduler/OverviewCard";
+import { SettingsCard } from "../components/scheduler/SettingsCard";
+import { SlotsCard } from "../components/scheduler/SlotsCard";
+import type {
+  SchedulerActionResponse,
+  SchedulerPageState,
+} from "../components/scheduler/op-plumbing";
+
+function getSessionShop(session: { shop?: string } | undefined) {
+  return typeof session?.shop === "string" && session.shop
+    ? session.shop
+    : undefined;
+}
+
+function toPageState(detailed: ScheduleRulesDetailed): SchedulerPageState {
+  return {
+    rules: detailed.rules,
+    version: detailed.version,
+    configHealth: detailed.configHealth,
+    countsMeta: detailed.countsMeta,
+    today: getTodayInTimezone(detailed.rules.timezone),
+  };
+}
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+  const shop = getSessionShop(session);
+  const detailed = await getScheduleRulesDetailed(shop, admin);
+
+  return Response.json(toPageState(detailed), {
+    headers: { "Cache-Control": "no-store" },
+  });
+};
+
+// The ?date= day panel is pure URL state — switching days must not refetch
+// (and must not reset unrelated section drafts).
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  const current = new URLSearchParams(currentUrl.search);
+  const next = new URLSearchParams(nextUrl.search);
+  current.delete("date");
+  next.delete("date");
+  if (
+    currentUrl.pathname === nextUrl.pathname &&
+    current.toString() === next.toString()
+  ) {
+    return false;
+  }
+  return defaultShouldRevalidate;
+}
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+  const shop = getSessionShop(session);
+
+  if (request.method.toUpperCase() !== "POST") {
+    return Response.json(
+      { ok: false, op: "", code: "error", message: "Method not allowed." },
+      { status: 405 },
+    );
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    const parsed: unknown = await request.json();
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("not an object");
+    }
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return Response.json({
+      ok: false,
+      op: "",
+      code: "error",
+      message: "Request body must be a JSON object.",
+    } satisfies SchedulerActionResponse);
+  }
+
+  const op = typeof body.op === "string" ? body.op : "";
+
+  if (!shop) {
+    return Response.json({
+      ok: false,
+      op,
+      code: "error",
+      message: "No shop session. Reload the page.",
+    } satisfies SchedulerActionResponse);
+  }
+
+  try {
+    if (op === "refreshCounts") {
+      const detailed = await getScheduleRulesDetailed(shop, admin, {
+        bypassCountsCache: true,
+      });
+      return Response.json(
+        { ok: true, op, ...toPageState(detailed) },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
+    const version = body.version;
+    if (typeof version !== "number" || !Number.isInteger(version)) {
+      return Response.json({
+        ok: false,
+        op,
+        code: "error",
+        message: "Missing config version. Reload the page.",
+      } satisfies SchedulerActionResponse);
+    }
+
+    const result = await runSchedulerOp(shop, op, body, version);
+
+    if (result.ok) {
+      // Re-read through the detailed path so the response carries booked
+      // counts + health, exactly like the loader.
+      const detailed = await getScheduleRulesDetailed(shop, admin);
+      return Response.json(
+        { ok: true, op, ...toPageState(detailed) },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
+    if (result.code === "stale_config") {
+      const detailed = await getScheduleRulesDetailed(shop, admin);
+      return Response.json({
+        ok: false,
+        op,
+        code: "stale_config",
+        ...toPageState(detailed),
+      } satisfies SchedulerActionResponse);
+    }
+
+    if (result.code === "unknown_op") {
+      return Response.json({
+        ok: false,
+        op,
+        code: "unknown_op",
+        message: `Unknown action "${op}".`,
+      } satisfies SchedulerActionResponse);
+    }
+
+    return Response.json({
+      ok: false,
+      op,
+      code: "validation",
+      fieldErrors: result.fieldErrors,
+    } satisfies SchedulerActionResponse);
+  } catch (error) {
+    // ADR-11: never bubble a raw 5xx through the embedded fetcher.
+    console.error(`Scheduler op "${op}" failed:`, error);
+    return Response.json({
+      ok: false,
+      op,
+      code: "error",
+      message: "Saving failed upstream. Try again.",
+    } satisfies SchedulerActionResponse);
+  }
+};
+
+export default function SchedulerPage() {
+  const loaderData = useLoaderData() as SchedulerPageState;
+  const [state, setState] = useState<SchedulerPageState>(loaderData);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedDate = searchParams.get("date");
+
+  // Loader revalidation (after saves or on navigation) refreshes page state;
+  // section drafts survive via per-section remount keys below.
+  useEffect(() => {
+    setState(loaderData);
+  }, [loaderData]);
+
+  const onSync = useCallback((next: SchedulerPageState) => {
+    setState(next);
+  }, []);
+
+  const onSelectDate = useCallback(
+    (date: string | null) => {
+      setSearchParams(
+        (previous) => {
+          const params = new URLSearchParams(previous);
+          if (date) {
+            params.set("date", date);
+          } else {
+            params.delete("date");
+          }
+          return params;
+        },
+        { replace: true, preventScrollReset: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  const settingsKey = [
+    state.rules.timezone,
+    state.rules.cutoffHour,
+    state.rules.prepHours,
+    state.rules.maxDays,
+  ].join("|");
+  const slotsKey = JSON.stringify(state.rules.slots);
+  const dayKey = `${selectedDate ?? ""}|${JSON.stringify({
+    blocked: selectedDate
+      ? state.rules.disabledDates.includes(selectedDate)
+      : null,
+    slots: selectedDate ? state.rules.disabledSlots[selectedDate] : null,
+    capacity: selectedDate ? state.rules.slotCapacity[selectedDate] : null,
+  })}`;
+
+  return (
+    <Page title="Delivery Scheduler" narrowWidth>
+      <BlockStack gap="400">
+        {state.configHealth.length > 0 && (
+          <Banner tone="critical" title="Stored settings need attention">
+            <BlockStack gap="100">
+              {state.configHealth.map((issue) => (
+                <p key={`${issue.column}-${issue.message}`}>
+                  {issue.column}: {issue.message}
+                </p>
+              ))}
+            </BlockStack>
+          </Banner>
+        )}
+        {state.countsMeta.status === "error" && (
+          <Banner tone="warning" title="Live booked counts are unavailable">
+            Capacity limits are not being checked against live orders right
+            now. Counts will recover automatically — or press “Refresh counts”.
+          </Banner>
+        )}
+
+        <OverviewCard
+          state={state}
+          onSync={onSync}
+          onSelectDate={(date) => onSelectDate(date)}
+        />
+        <SettingsCard key={settingsKey} state={state} onSync={onSync} />
+        <SlotsCard key={slotsKey} state={state} onSync={onSync} />
+        <DayOverridesCard
+          key={dayKey}
+          state={state}
+          selectedDate={selectedDate}
+          onSelectDate={onSelectDate}
+          onSync={onSync}
+        />
+      </BlockStack>
+    </Page>
+  );
+}
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
+}
+
+export const headers = (headersArgs: Parameters<typeof boundary.headers>[0]) =>
+  boundary.headers(headersArgs);
