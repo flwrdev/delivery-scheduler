@@ -23,7 +23,7 @@ export const loader = async ({ request }) => {
   const shop = session?.shop ?? url.searchParams.get("shop");
   const destination =
     sanitizeEmbeddedAppReturnTo(url.searchParams.get("returnTo")) ??
-    "/app/scheduler";
+    "/app/orders";
 
   if (!host && shop) {
     return Response.json(
