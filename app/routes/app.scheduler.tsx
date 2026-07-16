@@ -31,6 +31,8 @@ import type {
   SchedulerPageState,
 } from "../components/scheduler/op-plumbing";
 
+const DAY_OVERRIDES_ANCHOR_ID = "scheduler-day-overrides";
+
 function getSessionShop(session: { shop?: string } | undefined) {
   return typeof session?.shop === "string" && session.shop
     ? session.shop
@@ -202,7 +204,7 @@ export default function SchedulerPage() {
   }, []);
 
   const onSelectDate = useCallback(
-    (date: string | null) => {
+    (date: string | null, options?: { scrollIntoView?: boolean }) => {
       setSearchParams(
         (previous) => {
           const params = new URLSearchParams(previous);
@@ -215,6 +217,15 @@ export default function SchedulerPage() {
         },
         { replace: true, preventScrollReset: true },
       );
+      // Overview chips deep-link into the day panel, which lives at the
+      // bottom of the page — without this the panel opens out of view.
+      if (date && options?.scrollIntoView) {
+        requestAnimationFrame(() => {
+          document
+            .getElementById(DAY_OVERRIDES_ANCHOR_ID)
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      }
     },
     [setSearchParams],
   );
@@ -258,17 +269,19 @@ export default function SchedulerPage() {
         <OverviewCard
           state={state}
           onSync={onSync}
-          onSelectDate={(date) => onSelectDate(date)}
+          onSelectDate={(date) => onSelectDate(date, { scrollIntoView: true })}
         />
         <SettingsCard key={settingsKey} state={state} onSync={onSync} />
         <SlotsCard key={slotsKey} state={state} onSync={onSync} />
-        <DayOverridesCard
-          key={dayKey}
-          state={state}
-          selectedDate={selectedDate}
-          onSelectDate={onSelectDate}
-          onSync={onSync}
-        />
+        <div id={DAY_OVERRIDES_ANCHOR_ID}>
+          <DayOverridesCard
+            key={dayKey}
+            state={state}
+            selectedDate={selectedDate}
+            onSelectDate={onSelectDate}
+            onSync={onSync}
+          />
+        </div>
       </BlockStack>
     </Page>
   );
