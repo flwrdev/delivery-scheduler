@@ -1,7 +1,12 @@
 import {
   buildDeliveryTags,
   isDeliveryScheduleTag,
+  isSlotAtCapacity,
+  isSlotBlocked,
+  validateDeliverySelection,
+  type DeliveryScheduleRules,
 } from "../lib/delivery-availability";
+import { resolveConfiguredSlotValue } from "../lib/slot-value";
 
 export interface AdminGraphQLClient {
   graphql(
@@ -28,6 +33,13 @@ interface DeliveryAttributeValues {
 
 interface SyncOrderDeliveryMetafieldsOptions extends DeliveryAttributeValues {
   orderId: string;
+  /**
+   * Scheduler V2 D4: outcome of checkout-time validation, recorded on the new
+   * additive `delivery.sync_status` metafield ("ok" | "attention:<code>").
+   * Omitted on paths that don't evaluate it (e.g. reschedules) — the
+   * metafield is then left untouched.
+   */
+  syncStatus?: string;
 }
 
 interface MetafieldsSetResponse {
@@ -337,7 +349,78 @@ export function buildOrderDeliveryMetafields(
     );
   }
 
+  if (options.syncStatus) {
+    metafields.push({
+      ownerId: options.orderId,
+      namespace: "delivery",
+      key: "sync_status",
+      value: options.syncStatus,
+      type: "single_line_text_field",
+    });
+  }
+
   return metafields;
+}
+
+/**
+ * Checkout-time semantics (Scheduler V2 D4 — audit DEF-7): validation runs
+ * against the moment the customer paid, not webhook processing time, so a
+ * retried/delayed webhook can never invalidate an order that was legal at
+ * checkout. Falls back to processing time when the payload carries no
+ * parseable `created_at`.
+ */
+export function resolveOrderCheckoutTime(
+  payload: Record<string, unknown>,
+  fallback = new Date(),
+): Date {
+  const raw = payload.created_at ?? payload.createdAt;
+  if (typeof raw === "string" && raw.trim()) {
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+  return fallback;
+}
+
+/**
+ * Map a checkout-time validation outcome onto the `delivery.sync_status`
+ * wire value (D4): "ok" when the selection was legal at checkout, otherwise
+ * "attention:<code>". A slot that fails ONLY because it is at capacity is
+ * reported as "attention:capacity" — capacity is advisory here, never
+ * enforced (audit DEF-3 accepted; §6.4).
+ */
+export function evaluateDeliverySyncStatus(
+  rules: DeliveryScheduleRules,
+  deliveryDate: string,
+  timeSlot: string,
+  checkoutTime: Date,
+): string {
+  const validation = validateDeliverySelection(
+    rules,
+    deliveryDate,
+    timeSlot,
+    checkoutTime,
+  );
+  if (validation.ok) {
+    return "ok";
+  }
+
+  if (
+    validation.code === "slot_unavailable" ||
+    validation.code === "no_slots_available"
+  ) {
+    const slotValue = resolveConfiguredSlotValue(rules, timeSlot);
+    if (
+      slotValue != null &&
+      !isSlotBlocked(rules, deliveryDate, slotValue) &&
+      isSlotAtCapacity(rules, deliveryDate, slotValue)
+    ) {
+      return "attention:capacity";
+    }
+  }
+
+  return `attention:${validation.code}`;
 }
 
 export async function syncOrderDeliveryMetafields(

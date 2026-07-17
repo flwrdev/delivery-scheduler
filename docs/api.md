@@ -109,7 +109,7 @@ The four delivery-schedule write paths (the 4th — merchant reschedule — adde
 
 | Trigger / route | File | Metafield writes | Tag writes | Custom attribute writes |
 | --- | --- | --- | --- | --- |
-| `orders/create` webhook | [webhooks.orders.create.ts](../app/routes/webhooks.orders.create.ts) | Via `syncOrderDeliveryMetafields`: `custom.date`, `custom.time_slot`, plus legacy mirror metafields `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date` | Via `syncOrderDeliveryScheduleTag`: replaces existing delivery schedule tags with new date + slot label | None |
+| `orders/create` webhook | [webhooks.orders.create.ts](../app/routes/webhooks.orders.create.ts) | Via `syncOrderDeliveryMetafields`: `custom.date`, `custom.time_slot`, plus legacy mirror metafields `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date`, **plus the additive `delivery.sync_status` (Scheduler V2 D4, 2026-07-17): `"ok"` \| `"attention:<code>"` — the checkout-time validation outcome. Validation no longer gates the write: parseable date+slot ALWAYS sync (DEF-7 fixed); validation "now" = the order's `created_at`, and over-capacity is advisory (`attention:capacity`, never blocks)** | Via `syncOrderDeliveryScheduleTag`: replaces existing delivery schedule tags with new date + slot label | None |
 | App Proxy reschedule | [apps.schedule-rules.reschedule.ts](../app/routes/apps.schedule-rules.reschedule.ts) | `metafieldsSet`: `custom.date`, `custom.time_slot`, `$app.reschedule_status`, `$app.reschedule_requested_at` (no legacy mirrors written here) | Via `syncOrderDeliveryScheduleTag` with `additionalTags: ['resched']`: removes prior delivery schedule tags, adds new date + slot + `'resched'` | `orderUpdate(customAttributes)`: sets `Delivery Date` and `Delivery Time` |
 | Customer Account JWT reschedule | [public.customer-account.reschedule.ts](../app/routes/public.customer-account.reschedule.ts) → **`rescheduleOrderDelivery()`** ([reschedule-order-delivery.server.ts](../app/services/reschedule-order-delivery.server.ts)) | One `metafieldsSet`: `custom.date`, `custom.time_slot`, **legacy mirrors `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date` (added by the Phase 4 refactor, REC-2 — previously left stale)**, `$app.reschedule_status`, `$app.reschedule_requested_at`; separate `metafieldsSet` appends to `delivery.reschedule_history` (`source: "customer"`) | Via `syncOrderDeliveryScheduleTag` with `additionalTags: ['resched']` | `orderUpdate(customAttributes)`: sets `Delivery Date` and `Delivery Time` |
 | **Merchant reschedule (admin)** | [app.orders.tsx](../app/routes/app.orders.tsx) `action`, op `reschedule` → **the same `rescheduleOrderDelivery()`** with `source: "merchant"` | **Identical** to the customer row (one shared write sequence, REC-1); history events carry `source: "merchant"` | Same, **except NO `'resched'` lock tag** — a merchant override does not consume the customer's self-service reschedule (§5) | Same |
@@ -157,17 +157,19 @@ sequenceDiagram
     participant ODM as services/order-delivery-metafields.server
     participant SADM as Admin GraphQL
 
-    Note over Shop,SADM: A) New order → sync canonical delivery state
+    Note over Shop,SADM: A) New order → ALWAYS-sync canonical delivery state (D4)
     Shop->>WH: orders/create payload
     WH->>WH: extractDeliveryAttributesFromPayload (cart attrs)
-    WH->>SR: getScheduleRules(shop)
-    SR->>DB: SELECT DeliveryScheduleConfig
-    WH->>Eng: validateDeliverySelection(rules, date, slot)
-    alt invalid
-        WH-->>Shop: 200 (log "delivery sync blocked")
-    else ok
-        WH->>ODM: syncOrderDeliveryMetafields
-        ODM->>SADM: metafieldsSet (custom.date, custom.time_slot,<br/>delivery.date, delivery.time_slot,<br/>sidekick.delivery_date)
+    alt no parseable date+slot
+        WH-->>Shop: 200 (log "sync skipped" — nothing usable to write)
+    else parseable
+        WH->>SR: getScheduleRulesDetailed(shop, admin)
+        SR->>DB: SELECT DeliveryScheduleConfig
+        SR->>SADM: booked-counts scan (60s cache; fail-open)
+        WH->>Eng: evaluateDeliverySyncStatus(rules, date, slot,<br/>checkoutTime = payload created_at)
+        Note right of Eng: outcome = "ok" | "attention:<code>"<br/>(capacity advisory → attention:capacity)<br/>— never gates the write
+        WH->>ODM: syncOrderDeliveryMetafields(+syncStatus)
+        ODM->>SADM: metafieldsSet (custom.date, custom.time_slot,<br/>delivery.date, delivery.time_slot,<br/>sidekick.delivery_date, delivery.sync_status)
         WH->>ODM: syncOrderDeliveryScheduleTag
         ODM->>SADM: tagsRemove(prior delivery tags) + tagsAdd(date, slot)
     end

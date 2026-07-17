@@ -84,7 +84,7 @@ flowchart TB
 
     subgraph SHOP["Shopify Platform — Admin GraphQL (2026-04)"]
         SADM["Admin GraphQL API"]:::sh
-        SMETA["Order metafields:<br/>custom.date, custom.time_slot,<br/>$app.reschedule_status,<br/>$app.reschedule_requested_at,<br/>delivery.reschedule_history,<br/>delivery.* / sidekick.* (legacy mirrors)"]:::sh
+        SMETA["Order metafields:<br/>custom.date, custom.time_slot,<br/>$app.reschedule_status,<br/>$app.reschedule_requested_at,<br/>delivery.reschedule_history,<br/>delivery.sync_status (D4),<br/>delivery.* / sidekick.* (legacy mirrors)"]:::sh
         STAGS["Order tags: YYYY-MM-DD, slot label, 'resched'"]:::sh
         SCATTR["Order customAttributes: 'Delivery Date', 'Delivery Time'"]:::sh
     end
@@ -192,6 +192,7 @@ erDiagram
     Order ||--o| MF_app_reschedule_status   : "$app.reschedule_status"
     Order ||--o| MF_app_reschedule_at       : "$app.reschedule_requested_at"
     Order ||--o| MF_delivery_resched_hist   : "delivery.reschedule_history (JSON-like audit log)"
+    Order ||--o| MF_delivery_sync_status    : "delivery.sync_status (checkout-time validation outcome, D4)"
     Order ||--o{ OrderTag                   : "YYYY-MM-DD, slot label, 'resched'"
     Order ||--o{ OrderCustomAttribute       : "'Delivery Date', 'Delivery Time'"
     Order }o--|| Customer                   : "owns"

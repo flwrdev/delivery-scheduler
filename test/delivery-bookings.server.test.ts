@@ -211,6 +211,24 @@ describe("getDeliveryBookingsSnapshot — metafield-date-scoped query", () => {
       "THROTTLED",
     );
   });
+
+  it("throws the real message when Shopify returns errors as a plain string (auth failures)", async () => {
+    const rules = makeRules({
+      "2026-07-18": { "9AM-12PM": { capacity: 5, booked: 0 } },
+    });
+    const admin = makeAdmin([
+      {
+        ok: false,
+        json: async () => ({
+          errors: "[API] Invalid API key or access token",
+        }),
+      } as unknown as Response,
+    ]);
+
+    await expect(getDeliveryBookingsSnapshot(SHOP, admin, rules)).rejects.toThrow(
+      "[API] Invalid API key or access token",
+    );
+  });
 });
 
 describe("getDeliveryBookingsSnapshot — 60s in-process cache", () => {
