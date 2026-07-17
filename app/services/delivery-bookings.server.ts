@@ -38,7 +38,9 @@ interface DeliveryOrdersQueryResponse {
       };
     };
   };
-  errors?: AdminGraphQLResponseError[];
+  // Usually an array of {message}, but Shopify auth failures put a plain
+  // string here.
+  errors?: AdminGraphQLResponseError[] | string;
 }
 
 export interface AdminGraphQLClient {
@@ -149,14 +151,25 @@ function chunk<T>(values: T[], size: number): T[][] {
 }
 
 function extractGraphQLErrorMessage(
-  errors: AdminGraphQLResponseError[] | undefined,
+  errors: AdminGraphQLResponseError[] | string | undefined,
   fallback: string,
 ) {
-  if (!errors?.length) {
+  // Shopify auth failures return `errors` as a plain STRING, not the usual
+  // array of {message} objects — mapping over it used to TypeError (caught by
+  // the fail-open path, but masking the real cause).
+  if (typeof errors === "string") {
+    return errors.trim() || fallback;
+  }
+
+  if (!Array.isArray(errors) || !errors.length) {
     return fallback;
   }
 
-  return errors.map((error) => error.message).join(", ");
+  return errors
+    .map((error) =>
+      typeof error?.message === "string" ? error.message : String(error),
+    )
+    .join(", ");
 }
 
 /**
