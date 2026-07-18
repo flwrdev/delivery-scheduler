@@ -132,6 +132,15 @@ export function OrderDetailsPanel({
       },
     },
     {
+      content: "Lalabook",
+      // Shortcut link only — courier dispatch stays in the official Lalamove
+      // connector (ADR-1); the booking page lists the shop's orders itself,
+      // so the URL is the same for every order.
+      url: "https://web.lalamove.com/shopify-order",
+      external: true,
+      onAction: () => setActionsOpen(false),
+    },
+    {
       content: "View order status page",
       disabled: !statusPageUrl,
       url: statusPageUrl ?? undefined,
