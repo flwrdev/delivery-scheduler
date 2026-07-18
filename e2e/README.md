@@ -15,34 +15,39 @@ token. Mint the token, hit the route, then assert state via Admin GraphQL.
 
 ## Setup
 
-```powershell
-cd D:\Download\LPC Issue\delivery-scheduler
-npm install --save-dev @playwright/test
-```
-
-`jose` is already installed as a runtime dependency and is reused for
-signing the session token.
+`@playwright/test` is already a devDependency — a plain `npm install` is all
+the tooling setup needed (the suite is API-level, so no browser binaries are
+required). `jose` is already installed as a runtime dependency and is reused
+for signing the session token.
 
 ## Required environment
 
-Set these in a local `.env.test` (loaded via `dotenv -e .env.test --`) or
-export them in PowerShell:
+Copy `.env.test.example` (repo root) to `.env.test` and fill in the blanks —
+`e2e/playwright.config.ts` loads `.env.test` automatically, and real
+environment variables win over file values. `.env.test` is gitignored; never
+commit real values.
 
-- `APP_URL`: `https://delivery-scheduler-XXXX.a.run.app`
-- `SHOPIFY_API_KEY`: from `shopify.app.toml`
-- `SHOPIFY_API_SECRET`: from Cloud Run / Secret Manager
+- `APP_URL`: the deployed app, e.g. `https://delivery-scheduler-XXXX.us-central1.run.app`
+- `SHOPIFY_API_KEY`: `client_id` from `shopify.app.toml`
+- `SHOPIFY_API_SECRET`: from the Partner Dashboard / Secret Manager
 - `SHOP_DOMAIN`: `hsrwva-nr.myshopify.com`
 - `ADMIN_ACCESS_TOKEN`: optional offline `shpua_…` token with `read_orders`
   and `write_orders`; falls back to the app's stored offline session if omitted
-- `TEST_ORDER_GID`: `gid://shopify/Order/6909438427323`
+  (the fallback reads Postgres, so `DATABASE_URL` must then also be set in
+  `.env.test`)
+- `TEST_ORDER_GID`: `gid://shopify/Order/6909438427323` — use a **safe
+  test/archived order**, never a live customer order (the suite really
+  reschedules it)
 - `TEST_CUSTOMER_GID`: `gid://shopify/Customer/...` and it must own the order
-- `TEST_NEW_DATE`: `2026-05-05` and it must be allowed by schedule rules
+- `TEST_NEW_DATE`: `YYYY-MM-DD`, must be allowed by the **current** schedule
+  rules (future, inside the window, not blocked, slot not full)
 - `TEST_NEW_TIME_SLOT`: `3PM-6PM`
 
 ## Run
 
 ```powershell
-npx playwright test --config tests/e2e/playwright.config.ts
+npm run test:e2e
+# equivalent to: npx playwright test --config e2e/playwright.config.ts
 ```
 
 ## What it asserts
