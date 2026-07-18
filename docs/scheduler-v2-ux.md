@@ -1,9 +1,12 @@
 # Scheduler V2 — UX + Architecture (merged Polaris React settings page)
 
 > Part of the docs set. Source of truth: [architecture.md](./architecture.md).
-> **Status: DESIGN FINAL (locked 2026-07-15 — merchant decisions D1–D5, see §1).
-> No phase built yet.** This doc is the blueprint approved before code, same
-> playbook as [orders-ops-v2-ux.md](./orders-ops-v2-ux.md). Factual foundation:
+> **Status: BUILT — Phases 1–5 shipped on `feature/scheduler-v2` (2026-07-15
+> → 2026-07-18); design locked 2026-07-15 (merchant decisions D1–D5, see §1).
+> Phase 3 live-smoke PASSED 2026-07-17; Phase 4 live order-placement check
+> pending; production deploy pending (merchant-gated).** This doc is the
+> blueprint approved before code, same playbook as
+> [orders-ops-v2-ux.md](./orders-ops-v2-ux.md). Factual foundation:
 > [scheduler-v2-audit.md](./scheduler-v2-audit.md) (DEF/PERF/LEAK/DASH findings
 > referenced below by ID). Booked-counts redesign is ADR-12 in
 > [decisions.md](./decisions.md).
