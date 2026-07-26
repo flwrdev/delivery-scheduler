@@ -20,6 +20,8 @@ prisma/dev.sqlite
 .env.*
 !.env.example
 !.env.test.example
+*.token
+token.txt
 
 
 

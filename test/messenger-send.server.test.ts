@@ -1,0 +1,117 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  MESSENGER_GRAPH_API_VERSION,
+  MESSENGER_NOT_CONFIGURED_MESSAGE,
+  sendMessengerTextMessage,
+} from "../app/services/messenger-send.server";
+
+const PAGE_ID = "105284684761365";
+const TOKEN = "test-page-access-token";
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+describe("sendMessengerTextMessage", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubEnv("MESSENGER_PAGE_ACCESS_TOKEN", TOKEN);
+    vi.stubEnv("MESSENGER_PAGE_ID", PAGE_ID);
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns a designed failure without calling fetch when the access token is missing", async () => {
+    vi.stubEnv("MESSENGER_PAGE_ACCESS_TOKEN", "");
+    const result = await sendMessengerTextMessage({ psid: "123", text: "hi" });
+    expect(result).toEqual({ ok: false, error: MESSENGER_NOT_CONFIGURED_MESSAGE });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a designed failure without calling fetch when the page id is missing", async () => {
+    vi.stubEnv("MESSENGER_PAGE_ID", "");
+    const result = await sendMessengerTextMessage({ psid: "123", text: "hi" });
+    expect(result).toEqual({ ok: false, error: MESSENGER_NOT_CONFIGURED_MESSAGE });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("POSTs the Send API shape with the token in the Authorization header only", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ recipient_id: "123", message_id: "mid.abc" }));
+
+    const result = await sendMessengerTextMessage({ psid: "123", text: "Echo: hi" });
+
+    expect(result).toEqual({ ok: true, messageId: "mid.abc" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `https://graph.facebook.com/${MESSENGER_GRAPH_API_VERSION}/${PAGE_ID}/messages`,
+    );
+    expect(url).not.toContain(TOKEN);
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${TOKEN}`,
+    });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(JSON.parse(init.body)).toEqual({
+      recipient: { id: "123" },
+      messaging_type: "RESPONSE",
+      message: { text: "Echo: hi" },
+    });
+  });
+
+  it("trims trailing whitespace/newlines from env values", async () => {
+    vi.stubEnv("MESSENGER_PAGE_ACCESS_TOKEN", `${TOKEN}\n`);
+    vi.stubEnv("MESSENGER_PAGE_ID", `${PAGE_ID}\n`);
+    fetchMock.mockResolvedValue(jsonResponse({ message_id: "mid.abc" }));
+
+    await sendMessengerTextMessage({ psid: "123", text: "hi" });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `https://graph.facebook.com/${MESSENGER_GRAPH_API_VERSION}/${PAGE_ID}/messages`,
+    );
+    expect(init.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("returns ok:false with the Graph error message (never the token) on an error response", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ error: { message: "Invalid OAuth access token.", code: 190 } }, 400),
+    );
+
+    const result = await sendMessengerTextMessage({ psid: "123", text: "hi" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("Invalid OAuth access token.");
+      expect(result.error).not.toContain(TOKEN);
+    }
+  });
+
+  it("returns ok:false without throwing when fetch rejects", async () => {
+    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+    const result = await sendMessengerTextMessage({ psid: "123", text: "hi" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("returns a timeout error when the request times out", async () => {
+    const timeoutError = new Error("The operation was aborted due to timeout");
+    timeoutError.name = "TimeoutError";
+    fetchMock.mockRejectedValue(timeoutError);
+
+    const result = await sendMessengerTextMessage({ psid: "123", text: "hi" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.toLowerCase()).toContain("timed out");
+  });
+});

@@ -4,14 +4,15 @@
 
 This file covers every route surface, extension, webhook, service, the four auth mechanisms, and — most importantly — the **order write-path contract** (which routes actually mutate delivery state). For system topology and the data model, see [architecture.md](./architecture.md). For dated verification history, see [verification-log.md](./verification-log.md).
 
-## Four route surfaces, four different auth mechanisms
+## Five route surfaces, five different auth mechanisms
 
 Know which one you're in before writing a handler:
 
 - **Embedded admin routes** (`app/routes/app.*`) — `authenticate.admin(request)`, session-cookie-based, runs inside the Shopify Admin iframe.
 - **App Proxy routes** (`app/routes/apps.schedule-rules*.ts`) — HMAC-signed by Shopify, prefix `/apps/schedule-rules` per `shopify.app.toml`, called from storefront/theme JS.
 - **Customer-account JWT routes** (`app/routes/public.customer-account.*.ts`) — verify a session token JWT passed by customer-account UI extensions; separate auth path from both of the above.
-- **Webhooks** (`app/routes/webhooks.*`) — registered in `shopify.app.toml` `[[webhooks.subscriptions]]`, HMAC-verified by the Shopify webhook middleware. The live delivery-relevant subscription is `orders/create` (`webhooks.orders.create.ts`, the new-order delivery sync). The `orders/cancelled` subscription and its handler existed only for the removed custom Lalamove cancel flow and are gone.
+- **Shopify webhooks** (`app/routes/webhooks.orders.*` / `webhooks.app.*`) — registered in `shopify.app.toml` `[[webhooks.subscriptions]]`, HMAC-verified by the Shopify webhook middleware. The live delivery-relevant subscription is `orders/create` (`webhooks.orders.create.ts`, the new-order delivery sync). The `orders/cancelled` subscription and its handler existed only for the removed custom Lalamove cancel flow and are gone.
+- **Meta Messenger webhook** (`app/routes/webhooks.messenger.ts`) — NOT a Shopify surface: Meta signs every POST with `X-Hub-Signature-256` (HMAC-SHA256 of the raw body, app secret), verified by hand via `lib/verify-meta-signature.server.ts`. Not registered in `shopify.app.toml`; never touches `authenticate.*`. See the [Meta Messenger webhook](#meta-messenger-webhook-flowercart-messenger-agent) section.
 
 ## Extensions (5 total — verified via each `shopify.extension.toml`)
 
@@ -73,6 +74,20 @@ Boilerplate scaffold para sa OAuth at non-embedded login. Hindi business logic.
 
 API version sa `shopify.app.toml` is `2026-04`.
 
+## Meta Messenger webhook (FlowerCart Messenger agent)
+
+| Path | File | Auth |
+| --- | --- | --- |
+| `GET /webhooks/messenger` (verify handshake) + `POST /webhooks/messenger` (events) | [webhooks.messenger.ts](../app/routes/webhooks.messenger.ts) | GET: `hub.verify_token` vs `MESSENGER_VERIFY_TOKEN`; POST: `X-Hub-Signature-256` HMAC over the raw body via [verify-meta-signature.server.ts](../app/lib/verify-meta-signature.server.ts) |
+
+Phase 2 (echo bot) of the FlowerCart Messenger agent — master context lives outside the repo (`flowercart-messenger-CLAUDE.md` + the `flowercart-agent-architecture.md` companion). Contract highlights:
+
+- **Writes NOTHING to any order, metafield, tag, or Postgres** — the §2 write-paths table is unchanged. Its only outbound side effect is a Messenger Send API text reply via [messenger-send.server.ts](../app/services/messenger-send.server.ts) (plain `fetch`, pinned Graph API version, token in the Authorization header only).
+- After a valid signature the route ALWAYS returns 200 (send failures are logged) — Meta redelivers on non-200 and disables the webhook after repeated failures. Invalid/missing signature → 401.
+- `message.is_echo` events are skipped (the `message_echoes` page field is subscribed — without the skip the bot would echo its own replies forever). `entry[].standby` is ignored in v1.
+- Phase 2 deviation: the echo send is awaited inline BEFORE the 200 (Cloud Run throttles CPU after the response, so fire-and-forget dies); phase 3 replaces this with fast-ack + Cloud Tasks.
+- Env: `MESSENGER_APP_SECRET`, `MESSENGER_VERIFY_TOKEN`, `MESSENGER_PAGE_ACCESS_TOKEN` (Secret Manager) + `MESSENGER_PAGE_ID` (plain). All optional on fresh checkouts — the route degrades to designed 403/401/not-configured failures.
+
 > **Courier dispatch note:** Last-mile courier booking is handled by the **official Shopify Lalamove app**, not this app. The former custom Lalamove callback endpoint (`webhooks.lalamove.ts`) and the `orders/cancelled` webhook (which existed only to cancel a Lalamove order) were removed 2026-07-04 — see the [verification log](./verification-log.md) and [decisions.md ADR-1](./decisions.md).
 
 ## Services / lib
@@ -93,6 +108,8 @@ API version sa `shopify.app.toml` is `2026-04`.
 | Structured slot times (Scheduler V2 §4.3)  | [app/lib/slot-times.ts](../app/lib/slot-times.ts) — `generateSlotValue`/`parseSlotValueToTimes` (frozen `"9AM-12PM"` wire format) |
 | Scheduler overview aggregations   | [app/lib/scheduler-overview.ts](../app/lib/scheduler-overview.ts) (pure; replaces the dashboard math of the ORPHANED [app/modules/scheduler.jsx](../app/modules/scheduler.jsx) + [scheduler.server.js](../app/modules/scheduler.server.js) — deletion lands with Scheduler V2 Phase 5) |
 | Session shop extractor            | [app/modules/session.server.js](../app/modules/session.server.js)                                                     |
+| Meta webhook signature verify (Messenger) | [app/lib/verify-meta-signature.server.ts](../app/lib/verify-meta-signature.server.ts) — `verifyMetaWebhookSignature` (HMAC-SHA256 over the raw body, timing-safe) |
+| Messenger Send API (Messenger)    | [app/services/messenger-send.server.ts](../app/services/messenger-send.server.ts) — `sendMessengerTextMessage` (plain fetch, pinned Graph version, result union, never throws) |
 
 ---
 
