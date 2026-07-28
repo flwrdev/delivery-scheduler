@@ -6,15 +6,26 @@ application_url = "https://example.com"
 embedded = true
 
 [webhooks]
-api_version = "2026-10"
+api_version = "2026-04"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+  [[webhooks.subscriptions]]
+  topics = [ "orders/create" ]
+  uri = "/webhooks/orders/create"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,read_files,read_fulfillments,read_merchant_managed_fulfillment_orders,read_metaobjects,read_orders,write_files,write_fulfillments,write_merchant_managed_fulfillment_orders,write_metaobject_definitions,write_metaobjects,write_orders,write_products"
+scopes = "read_customers,read_files,read_fulfillments,read_merchant_managed_fulfillment_orders,read_metaobjects,read_orders,write_files,write_fulfillments,write_merchant_managed_fulfillment_orders,write_metaobject_definitions,write_metaobjects,write_order_edits,write_orders,write_payment_customizations,write_products"
 
 [auth]
 redirect_urls = [ "https://example.com/api/auth" ]
 
 [build]
-include_config_on_deploy = true
 automatically_update_urls_on_dev = true

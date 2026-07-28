@@ -6,8 +6,16 @@
 // webhook can't invalidate a legal checkout) and its outcome is recorded on
 // the additive `delivery.sync_status` metafield ("ok" | "attention:<code>").
 // Capacity is advisory only: over-capacity yields "attention:capacity" (§6.4).
+//
+// Also hosts the COD fee auto-add (services/cod-fee.server.ts): orders paid
+// via the manual "Cash on Delivery" method get the COD-fee variant added via
+// order edit — independent of the delivery sync, never blocks the 200.
 
 import { authenticate, unauthenticated } from "../shopify.server";
+import {
+  applyCodFeeToOrder,
+  isCashOnDeliveryOrder,
+} from "../services/cod-fee.server";
 import {
   evaluateDeliverySyncStatus,
   extractDeliveryAttributesFromPayload,
@@ -27,14 +35,53 @@ export const action = async ({ request }: { request: Request }) => {
 
   console.log("[orders/create] webhook received.");
 
-  if (!orderId || !deliveryDate || !timeSlot) {
+  const isCodOrder = orderId ? isCashOnDeliveryOrder(orderPayload) : false;
+  const hasDeliveryAttributes = Boolean(orderId && deliveryDate && timeSlot);
+
+  if (!hasDeliveryAttributes && !isCodOrder) {
     console.log(
       "[orders/create] delivery sync skipped: missing required delivery attributes.",
     );
     return new Response();
   }
 
-  const { admin } = await unauthenticated.admin(shop);
+  // A shop without a stored offline session (e.g. the PROD app receiving a
+  // webhook for a store it only nominally remains installed on, or a token
+  // cleaned up by app/uninstalled) must NOT 5xx — Shopify retries on non-200
+  // and eventually flags the subscription. Log + ack instead.
+  let admin;
+  try {
+    ({ admin } = await unauthenticated.admin(shop));
+  } catch (error) {
+    console.warn(
+      `[orders/create] skipped: no offline session for ${shop} (${
+        error instanceof Error ? error.message : String(error)
+      }).`,
+    );
+    return new Response();
+  }
+
+  // COD fee runs independently of the delivery sync: a COD order without
+  // parseable delivery attributes still gets its fee.
+  if (isCodOrder && orderId) {
+    const feeResult = await applyCodFeeToOrder(admin, { orderId });
+    if (feeResult.skipped) {
+      console.log(`[orders/create] COD fee skipped: ${feeResult.reason}.`);
+    } else if (!feeResult.ok) {
+      console.warn(
+        `[orders/create] COD fee failed: ${feeResult.errors.join("; ")}`,
+      );
+    } else {
+      console.log("[orders/create] COD fee added via order edit.");
+    }
+  }
+
+  if (!hasDeliveryAttributes || !orderId || !deliveryDate || !timeSlot) {
+    console.log(
+      "[orders/create] delivery sync skipped: missing required delivery attributes.",
+    );
+    return new Response();
+  }
 
   // Counts-loaded rules so an over-capacity checkout can be flagged; the
   // detailed read fails open (countsMeta "error" → booked stays 0) so a
