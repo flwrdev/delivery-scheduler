@@ -1,0 +1,28 @@
+# COD fee notice — Thank You page banner for Cash on Delivery orders.
+# The +₱70 fee is added post-purchase via order edit (orders/create webhook),
+# so the Thank You page totals never include it; this block tells the buyer
+# the fee applies and the real total to pay on delivery.
+#
+# Merchant must add the block once via the checkout editor:
+# Settings → Checkout → Customize → Thank you page → Add app block.
+
+api_version = "2026-04"
+
+[[extensions]]
+name = "cod-fee-notice"
+handle = "cod-fee-notice"
+type = "ui_extension"
+uid = "ed45e780-b460-a5aa-2dc5-01f1354b538238c1a9ee"
+
+[[extensions.targeting]]
+module = "./src/Checkout.jsx"
+target = "purchase.thank-you.block.render"
+
+# Keep in sync with the COD fee product variant price (COD-FEE) and the
+# /app/cod-settings fee field — this only controls what the banner DISPLAYS.
+[extensions.settings]
+[[extensions.settings.fields]]
+key = "fee_amount"
+type = "number_decimal"
+name = "COD fee amount"
+description = "Displayed COD fee. Must match the COD Fee product price (default 70)."

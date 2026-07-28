@@ -46,10 +46,11 @@ flowchart TB
 
     subgraph THANKYOU["Post-purchase"]
         TY["delivery-thank-you<br/>(read-only)"]:::rd
+        CFN["cod-fee-notice<br/>(read-only Thank-You banner — shows the<br/>+₱70 COD fee + real total on COD orders)"]:::rd
     end
 
     subgraph CHECKOUT["Checkout — Shopify Function (runs on Shopify infra, no backend call)"]
-        COD["cod-eligibility<br/>(payment customization — hides the COD<br/>manual method unless NCR ZIP/city match<br/>+ ₱2,500 min. subtotal; zero order writes)"]:::rd
+        COD["cod-eligibility<br/>(payment customization — hides the COD<br/>manual method unless NCR ZIP/city match<br/>+ subtotal within min/max window,<br/>default ₱2,500 MAX cap; zero order writes)"]:::rd
     end
 
     subgraph CUSTACCT["Customer Account"]
