@@ -48,6 +48,10 @@ flowchart TB
         TY["delivery-thank-you<br/>(read-only)"]:::rd
     end
 
+    subgraph CHECKOUT["Checkout — Shopify Function (runs on Shopify infra, no backend call)"]
+        COD["cod-eligibility<br/>(payment customization — hides the COD<br/>manual method unless NCR ZIP/city match<br/>+ ₱2,500 min. subtotal; zero order writes)"]:::rd
+    end
+
     subgraph CUSTACCT["Customer Account"]
         CADE["delivery-date-editor<br/>(read-only block)"]:::rd
         CARC["delivery-reschedule-customer<br/>(write — customer reschedule)"]:::ext

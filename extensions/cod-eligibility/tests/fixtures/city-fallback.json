@@ -1,0 +1,41 @@
+{
+  "payload": {
+    "export": "cart-payment-methods-transform-run",
+    "target": "cart.payment-methods.transform.run",
+    "input": {
+      "cart": {
+        "cost": {
+          "subtotalAmount": {
+            "amount": "2500.0"
+          }
+        },
+        "deliveryGroups": [
+          {
+            "deliveryAddress": {
+              "countryCode": "PH",
+              "provinceCode": "00",
+              "city": "Q.C.",
+              "zip": ""
+            }
+          }
+        ]
+      },
+      "paymentMethods": [
+        {
+          "id": "gid://shopify/PaymentCustomizationPaymentMethod/1",
+          "name": "Cash on Delivery (COD)"
+        },
+        {
+          "id": "gid://shopify/PaymentCustomizationPaymentMethod/2",
+          "name": "Xendit - Cards, Bank Transfers, QR, Ewallets"
+        }
+      ],
+      "paymentCustomization": {
+        "metafield": null
+      }
+    },
+    "output": {
+      "operations": []
+    }
+  }
+}

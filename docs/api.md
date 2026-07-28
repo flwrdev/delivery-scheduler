@@ -36,6 +36,7 @@ Know which one you're in before writing a handler:
 | `/app/orders/reschedule-rules`        | [app/routes/app.orders_.reschedule-rules.ts](../app/routes/app.orders_.reschedule-rules.ts) | No — read-only resource route (loader only): returns the delivery schedule rules + live booked counts for the reschedule modal (fetched lazily on modal open; session auth).                                                                                                                       |
 | `/app/scheduler`                      | [app/routes/app.scheduler.tsx](../app/routes/app.scheduler.tsx)                       | **Yes — writes `DeliveryScheduleConfig` only** (Scheduler V2 Phase 3 merged Polaris page). Granular ops (`op` discriminator via [scheduler-ops.server.ts](../app/services/scheduler-ops.server.ts)): `saveSettings` · `createSlot` · `updateSlotDisplay` · `reorderSlots` · `deleteSlot` · `saveDayOverride` · `clearDayOverride` · `refreshCounts` (cache bust, no write). All writes go through `upsertScheduleRules` under the optimistic `version` guard; every response is `200 + {ok,…}` (ADR-11). Does not touch any order. |
 | `/app/schedule-rules`                 | [app/routes/app.schedule-rules.tsx](../app/routes/app.schedule-rules.tsx)             | No — thin authenticated redirect stub to `/app/scheduler` (Scheduler V2 D2; embedded query params preserved). The old folder-route editor is deleted.                                                                                                                                                        |
+| `/app/cod-settings`                   | [app/routes/app.cod-settings.tsx](../app/routes/app.cod-settings.tsx)                 | **Yes — COD knobs only, NOT delivery state** (2026-07-28): merges `minimumAmount`/`maximumAmount` into the `$app:cod-eligibility` `function-configuration` metafield on the app's PaymentCustomization (`metafieldsSet`; advanced keys preserved), toggles the customization via `paymentCustomizationUpdate(enabled)`, and updates the COD Fee variant's price (`productVariantsBulkUpdate`, SKU `COD-FEE`). Writes no order/metafield/tag delivery state — §2 table unchanged. Nav item "COD Settings". |
 
 ## Shopify auth / bootstrap routes
 
@@ -68,7 +69,7 @@ Boilerplate scaffold para sa OAuth at non-embedded login. Hindi business logic.
 
 | Topic               | File                                                                           |
 | ------------------- | ------------------------------------------------------------------------------ |
-| `orders/create`     | [webhooks.orders.create.ts](../app/routes/webhooks.orders.create.ts)           |
+| `orders/create`     | [webhooks.orders.create.ts](../app/routes/webhooks.orders.create.ts) — delivery sync (§2 row 1) **+ COD fee auto-add** (see the COD fee subsection under §2's caveats) |
 | `app/uninstalled`   | [webhooks.app.uninstalled.jsx](../app/routes/webhooks.app.uninstalled.jsx)     |
 | `app/scopes_update` | [webhooks.app.scopes_update.jsx](../app/routes/webhooks.app.scopes_update.jsx) |
 
@@ -154,6 +155,16 @@ metafield, tag, or customAttribute.
 None of these generic mutations are part of the delivery sync contract — none write `custom.date`, `custom.time_slot`, `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date`, `$app.reschedule_status`, `$app.reschedule_requested_at`, `delivery.reschedule_history`, or the `Delivery Date` / `Delivery Time` customAttributes. (The former bouquet-photo pipeline — `stagedUploadsCreate` + `fileCreate` + a `custom.bouquet_photo` `orderUpdate` — was **removed 2026-07-12**; the feature was descoped from Orders Ops V2, see audit §F.)
 
 However, because the tag input is freeform, a merchant *can* manually add or remove a string that matches `DELIVERY_SCHEDULE_TAG_PATTERN` (e.g. `2026-05-23` or `9AM-12PM`). The system does not validate or enforce this — if it happens, downstream readers (`order-delivery-block`, scheduler queries) will see the manually-typed tag the same way they see auto-synced delivery tags. Treat this as a manual-override side channel; the supported merchant path is the `reschedule` op.
+
+### COD fee auto-add — an order-edit write OUTSIDE the delivery contract (2026-07-28)
+
+[webhooks.orders.create.ts](../app/routes/webhooks.orders.create.ts) also calls [`applyCodFeeToOrder()`](../app/services/cod-fee.server.ts) when the new order was paid via the merchant's manual **Cash on Delivery** method (`payment_gateway_names` entry containing "cash on delivery" or exactly "cod"). It adds the hidden **COD Fee** variant (matched by SKU `COD-FEE`, ₱70) to the order via `orderEditBegin` → `orderEditAddVariant` → `orderEditCommit(notifyCustomer: false)` — requires the `write_order_edits` scope. Design facts:
+
+- **Post-purchase by necessity**: Shopify cannot alter the checkout total based on the selected payment method (payment selection is the final step; no Function API sees it). The fee appears on the final invoice/order status page; COD cash collected includes it. Chosen over a flat ₱70 shipping rate because the production store's shipping is carrier-calculated by the official Lalamove app — a flat rate would surface as a competing (cheaper) shipping option.
+- **Independent of the delivery sync**: runs even when the order has no parseable delivery attributes; its failure never blocks the sync or the webhook 200.
+- **Redelivery-safe**: an order already carrying the `COD-FEE` SKU is skipped (live line-item check, not payload-based).
+- **NOT delivery state**: writes no delivery metafield/tag/attribute — the §2 table above is unchanged. It is an order **line-item** mutation, the only one the app performs automatically.
+- The COD Fee product must exist per store (SKU `COD-FEE`); it is deliberately unpublished from the Online Store channel. Missing product → logged failure, order stays fee-less.
 
 ### Courier dispatch write paths — none (removed 2026-07-04)
 

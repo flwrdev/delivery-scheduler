@@ -44,12 +44,14 @@ export default function App() {
   const [searchParams] = useSearchParams();
   const ordersHref = buildEmbeddedAppPath("/app/orders", searchParams);
   const schedulerHref = buildEmbeddedAppPath("/app/scheduler", searchParams);
+  const codSettingsHref = buildEmbeddedAppPath("/app/cod-settings", searchParams);
 
   return (
     <AppProvider embedded apiKey={apiKey}>
       <ui-nav-menu>
         <Link to={ordersHref} rel="home">Orders Operations</Link>
         <Link to={schedulerHref}>Delivery Scheduler</Link>
+        <Link to={codSettingsHref}>COD Settings</Link>
       </ui-nav-menu>
       <PolarisAppProvider i18n={polarisEnTranslations}>
         <Outlet />

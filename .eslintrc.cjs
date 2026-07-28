@@ -23,6 +23,7 @@ module.exports = {
     "!**/.server",
     "!**/.client",
     "extensions/**/shopify.d.ts",
+    "extensions/*/generated/**",
     "order-design-file/**",
   ],
 
