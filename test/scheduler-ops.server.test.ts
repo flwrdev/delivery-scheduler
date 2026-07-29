@@ -369,6 +369,33 @@ describe("saveDayOverride / clearDayOverride", () => {
     }
   });
 
+  it("keeps a day's per-slot blocks and caps when the whole day is blocked", async () => {
+    // Blocking a day is a day-level flag, not an edit of that date's per-slot
+    // config. The op used to drop both, so block → unblock silently lost the
+    // merchant's caps and window blocks with a "Day saved" success toast.
+    const result = await runSchedulerOp(
+      SHOP,
+      "saveDayOverride",
+      {
+        date: "2026-07-25",
+        blocked: true,
+        blockedSlots: ["12PM-3PM"],
+        capacities: { "9AM-12PM": 4 },
+      },
+      3,
+      NOW,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.rules.disabledDates).toContain("2026-07-25");
+      expect(result.rules.disabledSlots["2026-07-25"]).toEqual(["12PM-3PM"]);
+      expect(result.rules.slotCapacity["2026-07-25"]).toEqual({
+        "9AM-12PM": { capacity: 4, booked: 0 },
+      });
+    }
+  });
+
   it("rejects unknown slots and negative capacities", async () => {
     const unknown = await runSchedulerOp(
       SHOP,

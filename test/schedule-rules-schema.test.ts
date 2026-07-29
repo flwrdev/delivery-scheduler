@@ -257,4 +257,154 @@ describe("deserializeStoredScheduleRules — lenient-but-loud read (DEF-10)", ()
       configHealth.filter((issue) => issue.column === "disabledDatesJson").length,
     ).toBe(2);
   });
+
+  it("keeps override keys whose spelling drifted from the configured value", () => {
+    const { rules, configHealth } = deserializeStoredScheduleRules(
+      storedRecord({
+        disabledSlotsJson: JSON.stringify({ "2026-07-18": ["9am - 12pm"] }),
+        slotCapacityJson: JSON.stringify({
+          "2026-07-19": { "9:00AM - 12:00PM": { capacity: 2 } },
+        }),
+      }),
+    );
+
+    // Drift is not orphanhood — these name a real configured slot.
+    expect(rules.disabledSlots).toEqual({ "2026-07-18": ["9am - 12pm"] });
+    expect(rules.slotCapacity).toEqual({
+      "2026-07-19": { "9:00AM - 12:00PM": { capacity: 2, booked: 0 } },
+    });
+    expect(configHealth).toEqual([]);
+  });
+
+  it("prunes override keys that name no configured slot, loudly", () => {
+    const { rules, configHealth } = deserializeStoredScheduleRules(
+      storedRecord({
+        disabledSlotsJson: JSON.stringify({
+          "2026-07-18": ["9AM-12PM", "6PM-11PM"],
+        }),
+        slotCapacityJson: JSON.stringify({
+          "2026-07-19": {
+            "3PM-6PM": { capacity: 4 },
+            "6PM-11PM": { capacity: 4 },
+          },
+        }),
+      }),
+    );
+
+    // The orphaned "6PM-11PM" references are gone, so the whole-map write path
+    // can no longer be poisoned by them (the permanently-bricked day editor).
+    expect(rules.disabledSlots).toEqual({ "2026-07-18": ["9AM-12PM"] });
+    expect(rules.slotCapacity).toEqual({
+      "2026-07-19": { "3PM-6PM": { capacity: 4, booked: 0 } },
+    });
+    expect(
+      configHealth.filter((issue) => issue.column === "disabledSlotsJson").length,
+    ).toBe(1);
+    expect(
+      configHealth.filter((issue) => issue.column === "slotCapacityJson").length,
+    ).toBe(1);
+  });
+
+  it("drops a non-numeric stored capacity instead of coercing it to 0", () => {
+    for (const bad of [null, "", [], true, "abc"]) {
+      const { rules, configHealth } = deserializeStoredScheduleRules(
+        storedRecord({
+          slotCapacityJson: JSON.stringify({
+            "2026-07-20": { "9AM-12PM": { capacity: bad } },
+          }),
+        }),
+      );
+
+      // Number(null) === 0 used to pass the isFinite && >= 0 gate and pin the
+      // window to capacity 0 — permanently full, with no health issue to say so.
+      expect(rules.slotCapacity).toEqual({});
+      expect(
+        configHealth.some((issue) => issue.column === "slotCapacityJson"),
+      ).toBe(true);
+    }
+  });
+
+  it("collapses two capacity keys that canonicalize to the same slot", () => {
+    const { rules, configHealth } = deserializeStoredScheduleRules(
+      storedRecord({
+        slotCapacityJson: JSON.stringify({
+          "2026-07-20": {
+            "9am - 12pm": { capacity: 9 },
+            "9AM-12PM": { capacity: 2 },
+          },
+        }),
+      }),
+    );
+
+    // Only one entry per slot may survive, or the live booked count and the cap
+    // it is compared against can land on different keys.
+    expect(rules.slotCapacity).toEqual({
+      "2026-07-20": { "9AM-12PM": { capacity: 2, booked: 0 } },
+    });
+    expect(configHealth.some((issue) => issue.column === "slotCapacityJson")).toBe(
+      true,
+    );
+  });
+
+  it("floors a fractional stored capacity and reports it", () => {
+    const { rules, configHealth } = deserializeStoredScheduleRules(
+      storedRecord({
+        slotCapacityJson: JSON.stringify({
+          "2026-07-20": { "9AM-12PM": { capacity: 2.7 } },
+        }),
+      }),
+    );
+
+    expect(rules.slotCapacity).toEqual({
+      "2026-07-20": { "9AM-12PM": { capacity: 2, booked: 0 } },
+    });
+    expect(configHealth.some((issue) => issue.column === "slotCapacityJson")).toBe(
+      true,
+    );
+  });
+});
+
+describe("validateSlots — duplicate display labels", () => {
+  it("rejects a duplicate label the merchant is newly introducing", () => {
+    const result = validateScheduleRulesPatch(
+      { slots: [...SLOTS, { display: "Morning", value: "6PM-11PM" }] },
+      SLOTS,
+    );
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) {
+      expect(result.fieldErrors.slots).toContain("Morning");
+    }
+  });
+
+  it("grandfathers a duplicate label that the stored config already had", () => {
+    // A pre-V2 config: the old editor only rejected duplicate VALUES, and the
+    // read path still de-dupes by value only, so both survive. Re-validating the
+    // whole list on every slot op used to make Add/Delete/Reorder fail forever.
+    const legacySlots = [
+      { display: "Morning", value: "9AM-12PM" },
+      { display: "Morning", value: "12PM-3PM" },
+    ];
+
+    const result = validateScheduleRulesPatch(
+      { slots: [...legacySlots, { display: "Evening", value: "6PM-11PM" }] },
+      legacySlots,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.patch.slots).toHaveLength(3);
+    }
+  });
+
+  it("still rejects duplicate slot values regardless of labels", () => {
+    const result = validateScheduleRulesPatch(
+      {
+        slots: [
+          { display: "Morning", value: "9AM-12PM" },
+          { display: "Also morning", value: "9am - 12pm" },
+        ],
+      },
+      SLOTS,
+    );
+    expect(result).toMatchObject({ ok: false });
+  });
 });

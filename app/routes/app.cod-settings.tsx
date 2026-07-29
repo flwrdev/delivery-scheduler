@@ -25,10 +25,10 @@ import {
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import { COD_FEE_SKU, findCodFeeVariant } from "../services/cod-fee.server";
 
 const CONFIG_NAMESPACE = "$app:cod-eligibility";
 const CONFIG_KEY = "function-configuration";
-const COD_FEE_SKU = "COD-FEE";
 
 const LOAD_QUERY = `#graphql
   query CodSettingsLoad {
@@ -39,16 +39,6 @@ const LOAD_QUERY = `#graphql
         enabled
         metafield(namespace: "${CONFIG_NAMESPACE}", key: "${CONFIG_KEY}") {
           jsonValue
-        }
-      }
-    }
-    productVariants(first: 1, query: "sku:${COD_FEE_SKU}") {
-      nodes {
-        id
-        price
-        product {
-          id
-          title
         }
       }
     }
@@ -117,13 +107,6 @@ export const loader = async ({ request }: { request: Request }) => {
           metafield?: { jsonValue?: CodConfig } | null;
         }>;
       };
-      productVariants?: {
-        nodes?: Array<{
-          id: string;
-          price: string;
-          product: { id: string; title: string };
-        }>;
-      };
     };
   };
 
@@ -132,8 +115,15 @@ export const loader = async ({ request }: { request: Request }) => {
     customizations.find((node) => node.metafield?.jsonValue) ??
     customizations.find((node) => /cod|cash on delivery/i.test(node.title)) ??
     null;
-  const feeVariant = result.data?.productVariants?.nodes?.[0] ?? null;
   const config: CodConfig = customization?.metafield?.jsonValue ?? {};
+
+  // Same exact-SKU lookup the orders/create webhook uses, so this page always
+  // prices the variant that actually gets charged (services/cod-fee.server.ts).
+  const { variant: feeVariant, errors: feeErrors } =
+    await findCodFeeVariant(admin);
+  if (feeErrors.length > 0) {
+    console.warn(`[cod-settings] fee variant lookup: ${feeErrors.join("; ")}`);
+  }
 
   return {
     customization: customization
@@ -150,7 +140,7 @@ export const loader = async ({ request }: { request: Request }) => {
     feeVariant: feeVariant
       ? {
           id: feeVariant.id,
-          productId: feeVariant.product.id,
+          productId: feeVariant.productId,
           price: feeVariant.price,
         }
       : null,
@@ -196,80 +186,89 @@ export const action = async ({ request }: { request: Request }) => {
     return { ok: false, errors };
   }
 
-  // Merge into the CURRENT config so advanced keys (allowedZipRanges,
-  // allowedCities, cityAliases, codMethodName) survive a save from this page.
-  const currentResponse = await admin.graphql(CURRENT_CONFIG_QUERY, {
-    variables: { id: customizationId },
-  });
-  const currentResult = (await currentResponse.json()) as {
-    data?: {
-      paymentCustomization?: { metafield?: { jsonValue?: CodConfig } | null };
+  try {
+    // Merge into the CURRENT config so advanced keys (allowedZipRanges,
+    // allowedCities, cityAliases, codMethodName) survive a save from this page.
+    const currentResponse = await admin.graphql(CURRENT_CONFIG_QUERY, {
+      variables: { id: customizationId },
+    });
+    const currentResult = (await currentResponse.json()) as {
+      data?: {
+        paymentCustomization?: { metafield?: { jsonValue?: CodConfig } | null };
+      };
     };
-  };
-  const merged: CodConfig = {
-    ...(currentResult.data?.paymentCustomization?.metafield?.jsonValue ?? {}),
-  };
-  // Blank minimum = "walang minimum" → write an EXPLICIT 0. An absent key
-  // falls back to the function's built-in ₱2,500 minimum default (the bug
-  // found live on prod, 2026-07-28: deleted key → function hid COD at ₱799).
-  merged.minimumAmount = minimumAmount ?? 0;
-  if (maximumAmount === null) delete merged.maximumAmount;
-  else merged.maximumAmount = maximumAmount;
-
-  const setResponse = await admin.graphql(SET_CONFIG_MUTATION, {
-    variables: {
-      metafields: [
-        {
-          ownerId: customizationId,
-          namespace: CONFIG_NAMESPACE,
-          key: CONFIG_KEY,
-          type: "json",
-          value: JSON.stringify(merged),
-        },
-      ],
-    },
-  });
-  const setResult = (await setResponse.json()) as {
-    data?: { metafieldsSet?: { userErrors?: Array<{ message: string }> } };
-  };
-  for (const err of setResult.data?.metafieldsSet?.userErrors ?? []) {
-    errors.push(`Config: ${err.message}`);
-  }
-
-  const toggleResponse = await admin.graphql(TOGGLE_MUTATION, {
-    variables: { id: customizationId, enabled },
-  });
-  const toggleResult = (await toggleResponse.json()) as {
-    data?: {
-      paymentCustomizationUpdate?: { userErrors?: Array<{ message: string }> };
+    const merged: CodConfig = {
+      ...(currentResult.data?.paymentCustomization?.metafield?.jsonValue ?? {}),
     };
-  };
-  for (const err of toggleResult.data?.paymentCustomizationUpdate?.userErrors ??
-    []) {
-    errors.push(`Enable/disable: ${err.message}`);
-  }
+    // Blank minimum = "walang minimum" → write an EXPLICIT 0. An absent key
+    // falls back to the function's built-in ₱2,500 minimum default (the bug
+    // found live on prod, 2026-07-28: deleted key → function hid COD at ₱799).
+    merged.minimumAmount = minimumAmount ?? 0;
+    if (maximumAmount === null) delete merged.maximumAmount;
+    else merged.maximumAmount = maximumAmount;
 
-  if (feeAmount !== null && variantId && productId) {
-    const feeResponse = await admin.graphql(FEE_PRICE_MUTATION, {
+    const setResponse = await admin.graphql(SET_CONFIG_MUTATION, {
       variables: {
-        productId,
-        variants: [{ id: variantId, price: feeAmount.toFixed(2) }],
+        metafields: [
+          {
+            ownerId: customizationId,
+            namespace: CONFIG_NAMESPACE,
+            key: CONFIG_KEY,
+            type: "json",
+            value: JSON.stringify(merged),
+          },
+        ],
       },
     });
-    const feeResult = (await feeResponse.json()) as {
+    const setResult = (await setResponse.json()) as {
+      data?: { metafieldsSet?: { userErrors?: Array<{ message: string }> } };
+    };
+    for (const err of setResult.data?.metafieldsSet?.userErrors ?? []) {
+      errors.push(`Config: ${err.message}`);
+    }
+
+    const toggleResponse = await admin.graphql(TOGGLE_MUTATION, {
+      variables: { id: customizationId, enabled },
+    });
+    const toggleResult = (await toggleResponse.json()) as {
       data?: {
-        productVariantsBulkUpdate?: {
+        paymentCustomizationUpdate?: {
           userErrors?: Array<{ message: string }>;
         };
       };
     };
-    for (const err of feeResult.data?.productVariantsBulkUpdate?.userErrors ??
-      []) {
-      errors.push(`COD fee: ${err.message}`);
+    for (const err of toggleResult.data?.paymentCustomizationUpdate
+      ?.userErrors ?? []) {
+      errors.push(`Enable/disable: ${err.message}`);
     }
-  }
 
-  return { ok: errors.length === 0, errors };
+    if (feeAmount !== null && variantId && productId) {
+      const feeResponse = await admin.graphql(FEE_PRICE_MUTATION, {
+        variables: {
+          productId,
+          variants: [{ id: variantId, price: feeAmount.toFixed(2) }],
+        },
+      });
+      const feeResult = (await feeResponse.json()) as {
+        data?: {
+          productVariantsBulkUpdate?: {
+            userErrors?: Array<{ message: string }>;
+          };
+        };
+      };
+      for (const err of feeResult.data?.productVariantsBulkUpdate?.userErrors ??
+        []) {
+        errors.push(`COD fee: ${err.message}`);
+      }
+    }
+
+    return { ok: errors.length === 0, errors };
+  } catch (error) {
+    // ADR-11: never bubble a raw 5xx through the embedded fetcher.
+    console.error("COD settings save failed:", error);
+    errors.push("Hindi na-save — nag-error ang Shopify. Subukan ulit.");
+    return { ok: false, errors };
+  }
 };
 
 export default function CodSettingsPage() {

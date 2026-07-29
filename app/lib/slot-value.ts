@@ -81,3 +81,43 @@ export function resolveConfiguredSlotValue(
   );
   return slot ? slot.value : null;
 }
+
+/**
+ * Resolve the KEY under which a per-date override map (a `disabledSlots` array
+ * or a `slotCapacity` object) holds the entry for `slotValue`, or null when the
+ * map has no entry for that slot.
+ *
+ * Override keys were written by several generations of the editor, so a key's
+ * spelling can drift from the configured slot value ("9am - 12pm" vs
+ * "9AM-12PM"). The booked-count matcher already resolves those canonically, so
+ * the availability lookups must too — otherwise a cap the Scheduler dashboard
+ * renders as "Full" is never enforced at checkout, and a slot the merchant
+ * blocked for a date stays bookable (audit DEF-2/DEF-4).
+ *
+ * An exact spelling always wins over a canonical match, so a map holding both
+ * spellings resolves to the one the caller actually named.
+ */
+export function findSlotOverrideKey(
+  keys: Iterable<string>,
+  slotValue: string | null | undefined,
+): string | null {
+  const normalized = normalizeSlotValueForMatch(slotValue);
+  if (!normalized) {
+    return null;
+  }
+
+  let canonicalMatch: string | null = null;
+  for (const key of keys) {
+    if (key === slotValue) {
+      return key;
+    }
+    if (
+      canonicalMatch == null &&
+      normalizeSlotValueForMatch(key) === normalized
+    ) {
+      canonicalMatch = key;
+    }
+  }
+
+  return canonicalMatch;
+}

@@ -43,10 +43,13 @@ export function OverviewCard({
   });
 
   const countsCaption =
-    countsMeta.status === "ok" && countsMeta.fetchedAt
-      ? `Live counts ${countsMeta.fromCache ? "cached" : "refreshed"} ${new Date(
-          countsMeta.fetchedAt,
-        ).toLocaleTimeString()}`
+    (countsMeta.status === "ok" || countsMeta.status === "partial") &&
+    countsMeta.fetchedAt
+      ? // "partial" counts are real but clipped — never label them "live"; the
+        // page banner carries the detail.
+        `${countsMeta.status === "partial" ? "Partial" : "Live"} counts ${
+          countsMeta.fromCache ? "cached" : "refreshed"
+        } ${new Date(countsMeta.fetchedAt).toLocaleTimeString()}`
       : countsMeta.status === "untracked"
         ? "No capacity-tracked dates yet"
         : null;

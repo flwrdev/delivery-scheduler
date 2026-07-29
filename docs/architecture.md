@@ -59,9 +59,10 @@ flowchart TB
     end
 
     subgraph ADMINUI["Shopify Admin — embedded app"]
-        APP["/app (shell + nav) →<br/>orders · scheduler"]:::ext
+        APP["/app (shell + nav) →<br/>orders · scheduler · COD settings"]:::ext
         ORD["/app/orders<br/>(order bulk writes + merchant<br/>reschedule op → shared service)"]:::ext
         SCH["/app/scheduler<br/>(merged page, Scheduler V2 Phase 3 —<br/>writes DeliveryScheduleConfig<br/>via granular ops + version guard)"]:::ext
+        COD["/app/cod-settings<br/>(COD min/max + fee amount + toggle —<br/>writes the payment customization<br/>+ reprices the COD-FEE variant)"]:::ext
         RUL["/app/schedule-rules<br/>(redirect stub → /app/scheduler)"]:::rd
     end
 
@@ -97,6 +98,7 @@ flowchart TB
     %% Embedded admin nav
     APP --> ORD
     APP --> SCH
+    APP --> COD
     RUL -. redirect .-> SCH
     SCH --> SR
     SCH --> T_CFG
@@ -130,6 +132,7 @@ flowchart TB
     SR --> T_CFG
     SR --> SADM
     ODM --> SADM
+    COD --> SADM
 
     %% Shopify writes only happen via backend routes/services. Admin extensions do NOT write.
     SADM --> SMETA
@@ -185,6 +188,8 @@ erDiagram
     Session ||..o{ DeliveryScheduleConfig : "shop string (no FK)"
 ```
 
+**Override maps inside the JSON columns:** `disabledSlotsJson` and `slotCapacityJson` are date-keyed maps whose inner keys are **slot-value references**, not identifiers — successive editor generations wrote the same window under drifted spellings (`"9am - 12pm"` vs `"9AM-12PM"`). Every lookup therefore resolves the key through the canonical comparator, and the lenient read is the only place that prunes entries naming no configured slot ([ADR-13](./decisions.md)). Nothing about the column set or the stored shape changed.
+
 **Order delivery state ay nasa Shopify side, hindi sa DB:**
 
 ```mermaid
@@ -213,7 +218,7 @@ erDiagram
 - The `delivery-reschedule-customer` modal does **not** have an App Proxy fallback in its live code. The diagram no longer shows one.
 - The App Proxy reschedule route (`/apps/schedule-rules/reschedule`) is **not** currently called from any registered extension target. It still exists, still validates and writes if reached via a signed proxy URL, but no shipped UI wires to it.
 - The `/app/orders` admin page **became the 4th delivery write path with Orders Ops V2 Phase 4** (2026-07-11, ADR-10): its `action` gained a `reschedule` op that calls the shared `rescheduleOrderDelivery()` service (`source: "merchant"`, administrative override — no `resched` lock tag, capacity warn+override). The OTHER bulk ops remain generic order state and freeform tags — see the [api.md §2](./api.md) write-paths table + caveat. (The non-delivery `custom.bouquet_photo` metafield write was removed 2026-07-12 — Bouquet Photo descoped.)
-- Booking counts are **not** stored locally. Since Scheduler V2 Phase 2 ([ADR-12](./decisions.md)) they are derived from an Admin GraphQL orders search filtered by `metafields.custom.date:` over the future capacity-tracked dates (metafields-only matching through the canonical slot comparator, cancelled orders excluded), with the raw matched bookings memoized in-process per shop for 60 seconds — never written to Postgres. Rules saves and the tracked-date set changing both invalidate the memo; reschedule paths exclude the order being moved from its own counts.
+- Booking counts are **not** stored locally. Since Scheduler V2 Phase 2 ([ADR-12](./decisions.md)) they are derived from an Admin GraphQL orders search filtered by `metafields.custom.date:` over the future capacity-tracked dates (metafields-only matching through the canonical slot comparator, cancelled orders excluded), with the raw matched bookings memoized in-process per shop for 60 seconds — never written to Postgres. Rules saves and the tracked-date set changing both invalidate the memo; reschedule paths **and the `orders/create` webhook** exclude the order being written from its own counts (the webhook's exclusion added 2026-07-29 — without it a redelivery counted the order against its own slot). The scan carries two caps of its own (pages per date chunk, capacity-tracked dates); hitting either makes the counts a **lower bound**, reported as `countsMeta.status: "partial"` + the affected dates, never as `"ok"` (2026-07-29 — previously a `console.warn` under an `"ok"` meta).
 - There is no local audit table. `delivery.reschedule_history` metafield is the only persistent audit trail for customer-initiated reschedules.
 
 ---

@@ -3,8 +3,10 @@
 > Part of the docs set. Source of truth: [architecture.md](./architecture.md).
 > **Status: BUILT — Phases 1–5 shipped on `feature/scheduler-v2` (2026-07-15
 > → 2026-07-18); design locked 2026-07-15 (merchant decisions D1–D5, see §1).
-> Phase 3 live-smoke PASSED 2026-07-17; Phase 4 live order-placement check
-> pending; production deploy pending (merchant-gated).** This doc is the
+> Phase 3 live-smoke PASSED 2026-07-17; Phase 4 dev-store order test PASSED;
+> PRODUCTION RELEASED 2026-07-18 on the merchant's go — Cloud Run
+> `delivery-scheduler-00161-bsr` (backend-only, so the prod app version stays
+> `delivery-scheduler-73`).** This doc is the
 > blueprint approved before code, same playbook as
 > [orders-ops-v2-ux.md](./orders-ops-v2-ux.md). Factual foundation:
 > [scheduler-v2-audit.md](./scheduler-v2-audit.md) (DEF/PERF/LEAK/DASH findings
@@ -117,6 +119,10 @@ Interaction rules:
   reset from loader data **only after that section's own successful save** —
   never on unrelated revalidation (kills DEF-11's form wipe). Polaris
   contextual save-bar pattern per card; navigating away with dirty state warns.
+  *(2026-07-29: the day panel's remount key must be derived from CONFIG only —
+  it embedded `slotCapacity[date][slot]` whole, whose `booked` half is the live
+  count, so any counts refresh remounted the panel and wiped the merchant's
+  unsaved day draft. A real config change still remounts.)*
 - **`?date=` is the only cross-section URL state** (mirrors Orders V2's
   `?order=` panel contract). Old `#section-*` anchors from bookmarks map to the
   nearest card via the redirect (best effort, non-contractual).
@@ -148,6 +154,14 @@ changes vs. today:
 - **Cross-checks enforced:** `disabledSlots`/`slotCapacity` keys must reference
   existing slot values; capacity must be a non-negative integer (closes the
   orphan/negative-capacity holes of DEF-9).
+  *(Amended 2026-07-29 — the write gate alone deadlocked: the read kept orphan
+  override keys while the whole-map write rejected them, so one orphan bricked
+  the day-override editor and slot delete permanently. The READ now prunes
+  orphans and same-slot duplicate keys, loudly, per ADR-13. Stored capacities
+  are also parsed strictly — `Number(null)`/`Number("")`/`Number([])` are all 0
+  and passed the old `isFinite && >= 0` gate, silently pinning a window to
+  capacity 0 (permanently full) with no `ConfigHealthIssue`; a fractional value
+  is floored with an issue.)*
 - **Loud config health on read.** A corrupt stored JSON column no longer
   silently resurrects defaults (DEF-10): `getScheduleRules` returns
   `configHealth` errors naming the column; the admin page shows a critical
@@ -166,6 +180,15 @@ normalized. This single change kills DEF-2 and DEF-4 (the silent-undercount and
 split-brain bugs). Unit tests assert the round-trip: every generated slot value
 parses through `getSlotStartSerial` and survives its own normalization.
 
+*(Amended 2026-07-29 — as shipped, canonical matching covered the counts engine
+and the validators' slot lookup but NOT the `disabledSlots`/`slotCapacity`
+lookups themselves, so a cap or block stored under a drifted key was counted and
+rendered "Full" yet never enforced at checkout. `findSlotOverrideKey` now
+resolves override keys for `isSlotBlocked`/`isSlotAtCapacity`/
+`getSlotCapacityEntry`/`validateMerchantRescheduleSelection` and for the
+`/app/orders` bulk-reschedule capacity projection — exact spelling wins a tie.
+See [ADR-13](./decisions.md).)*
+
 ### 4.3 Structured slots (D3)
 
 - Editor model: `{ start: {hour, minute, meridiem}, end: {…}, display }`.
@@ -174,7 +197,18 @@ parses through `getSlotStartSerial` and survives its own normalization.
   changing times = create new slot + cascade-delete old (with the confirm
   dialog), never rename in place (kills DEF-1 and DEF-12's rename hazard).
 - Duplicate generated value (same start+end) → field error. Duplicate `display`
-  → field error (closes the editor's inconsistent dedupe).
+  → field error (closes the editor's inconsistent dedupe). *(Amended
+  2026-07-29 — labels ALREADY duplicated in the stored config are grandfathered.
+  Every slot op re-validates the whole list, so a legacy config with two
+  "Morning" slots — legal under the old free-text editor, which deduped by value
+  only — made Add/Delete/Reorder fail permanently with a `fieldErrors.slots`
+  message no form field rendered. Newly introduced duplicates are still
+  rejected.)*
+- Slot windows may end at midnight. `slotTimePartToMinutes` takes a required
+  `position: "start" | "end"` — a 12AM END is minute 1440, not 0 — so
+  `"8PM-12AM"` is ordered and configurable (before 2026-07-29 every such window
+  read as inverted and was impossible to save, though the picker offered 12 + AM
+  as an end time). `"12AM-12AM"` is consequently a permitted full-day window.
 - **Read-time adapter for existing config:** current `{display, value}` slots
   are parsed into the structured model with the same parser; an unparseable
   legacy value (a live DEF-1 victim) surfaces in the UI as an invalid slot with
@@ -195,9 +229,16 @@ parses through `getSlotStartSerial` and survives its own normalization.
 - Granular ops (all on the `/app/scheduler` action, `op` discriminator):
   `saveSettings` · `createSlot` · `updateSlotDisplay` · `reorderSlots` ·
   `deleteSlot` (cascades matching override entries) · `saveDayOverride`
-  (one date: blocked flag, blocked slots, per-slot capacities) ·
-  `clearDayOverride`. Each op validates only its own inputs and rewrites only
-  its own section server-side under the version guard. Past-dated override
+  (one date: blocked flag, blocked slots, per-slot capacities — the payload is
+  that date's full desired state, so it is rewritten wholesale) ·
+  `clearDayOverride`. **A day-level block is a flag, not an edit of the date's
+  per-slot config (2026-07-29):** blocking a day used to post `blockedSlots: []`
+  / `capacities: {}` and the op dropped per-slot blocks whenever `blocked` was
+  set, so the date's caps and window blocks were destroyed permanently under a
+  "Day saved" success toast. Both survive a block → unblock round-trip now;
+  `clearDayOverride` remains the only intentional wipe. Each op validates only
+  its own inputs and rewrites only its own section server-side under the
+  version guard. Past-dated override
   entries are pruned opportunistically on write (stops PERF-style unbounded
   blob growth, LOW-15).
 
@@ -216,10 +257,10 @@ signature churn; the return gains an additive `countsMeta`.
   configured capacity** (bounded by the maxDays≤120 horizon), excluding
   cancelled orders. Fetches `id`, `cancelledAt`, and the two `custom.*`
   metafields only. Cost scales with *actual bookings on capacity-tracked days*,
-  not store order volume — the 5,000-order/20-page scan and its silent
-  truncation are gone (kills PERF-1/RACE-03 and DEF-13's lookback miss: the
-  metafield filter finds an old order rescheduled into next week, because
-  reschedules update `custom.date`).
+  not store order volume — the 5,000-order/20-page scan is gone (kills
+  PERF-1/RACE-03 and DEF-13's lookback miss: the metafield filter finds an old
+  order rescheduled into next week, because reschedules update `custom.date`).
+  The replacement engine has caps of its own — see the truncation bullet below.
 - **Matching:** metafields ONLY (`custom.date` + `custom.time_slot`, compared
   via the §4.2 normalizer). Tag/attribute heuristics are removed from counting —
   no more promo tags fabricating bookings (DEF-15). D4 guarantees new orders
@@ -231,12 +272,37 @@ signature churn; the return gains an additive `countsMeta`.
   cached set at read time, which makes **`excludeOrderId` free**: reschedule
   paths pass the order being moved so it no longer blocks itself out of a
   capacity-1 slot (kills DEF-14). The admin page gets a "Refresh counts" button
-  that busts the cache.
+  that busts the cache. *(Amended 2026-07-29 — the `orders/create` webhook
+  passes it too: on a redelivery the order's `custom.date` is already written,
+  so without the exclusion the order counted against its own slot and a legal
+  in-capacity order was stamped `attention:capacity`.)*
 - **Fail-open, but VISIBLE.** On scan error the capacity gate still fails open
   (merchant priority: never block sales on an internal error) — but
   `countsMeta.status = "error"` + timestamp now drive a real warning banner in
   admin instead of a fabricated green pill (turns DEF-5 from silent to
   observable; DASH-2 replaced by truth).
+- **Truncation is a status, not a log line (2026-07-29).** The engine has two
+  caps of its own — `MAX_PAGES_PER_CHUNK` (a date chunk holding more orders than
+  one scan pages through) and `MAX_TRACKED_DATES` (more capacity-tracked dates
+  than one scan covers; the extras are never queried and therefore count 0). As
+  shipped, both only `console.warn`ed while `countsMeta` still said `"ok"` —
+  silently under-counted counts reported as healthy, which is exactly the
+  "no silent caps / fail-open but VISIBLE" claim above not being true of the
+  code. `getDeliveryBookingsSnapshot` now returns `truncation`
+  (`droppedDates` / `pagedOutDates`, recomputed per read so a cache hit can
+  never re-read a partial set as complete) and `countsMeta` becomes:
+
+  ```
+  { status: "ok" | "partial" | "untracked" | "skipped" | "error",
+    fetchedAt, fromCache,
+    truncation?: { caps: ("dates"|"pages")[], affectedDates: string[] } }
+  ```
+
+  `"partial"` means the counts were applied but are a **lower bound**. All
+  consumers stay fail-open; the difference is visibility — `/app/scheduler`
+  shows a warning banner naming the cap and the affected dates, the Overview
+  caption reads "Partial counts …" instead of "Live counts …", and the
+  `orders/create` webhook logs `"partial"` alongside `"error"`.
 - The vestigial persisted `booked` field is never written non-zero and never
   read for enforcement anymore (webhook included — see §6), retiring DEF-3's
   stale-persisted-booked comparison.
@@ -261,7 +327,14 @@ signature churn; the return gains an additive `countsMeta`.
    blocked date at checkout time). Existing metafields keep their exact
    values/shapes; api.md §2 row 1 gains one additive column entry.
 4. Capacity is **not** enforced here (it never really was — DEF-3); over-capacity
-   at sync time simply yields `attention:capacity` for merchant visibility.
+   at sync time simply yields `attention:capacity` for merchant visibility. The
+   counts read passes `excludeOrderId` (2026-07-29 — see §5), so a redelivery
+   cannot count the order against its own slot.
+5. **Never 5xx (2026-07-29).** The rules read (its Postgres hit included) and
+   both sync calls are individually guarded: an upstream/Neon rejection logs and
+   returns 200 rather than escaping as a 500 that Shopify retries and eventually
+   flags the subscription for — the same rule the offline-session guard already
+   followed, and the ADR-11 lesson applied to a non-fetcher surface.
 
 Future (out of scope, noted): `/app/orders` can badge/filter
 `sync_status: attention:*` orders — replaces today's invisible
@@ -320,6 +393,12 @@ the redirect stub) · the `created_at`-lookback scan internals in
 | LEAK-2 products route 502s | Out of scope here (one-line ADR-11 fix; track separately) |
 | RACE-02 oversell TOCTOU | **Deferred** (D1 — DB counter when oversell hurts) |
 | DASH-1/2/3, POLARIS-01, DUP-01, DATE-01 (config), DATE-02 | **Fixed** by the merge/rewrite (§3/§4) |
+
+*Narrower than recorded, corrected 2026-07-29 (see the verification log):* **DEF-2/DEF-4**
+were fixed for *counting* only — the `disabledSlots`/`slotCapacity` lookups stayed
+strict, so an override stored under a drifted key was counted but never enforced
+(now ADR-13, §4.2). **DEF-5**'s "visible" held for scan *errors* only — the engine's
+own truncation caps stayed silent under an `"ok"` `countsMeta` (now `"partial"`, §5).
 
 ---
 

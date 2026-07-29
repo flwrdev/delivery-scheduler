@@ -1,4 +1,4 @@
-import { resolveConfiguredSlotValue } from "./slot-value";
+import { findSlotOverrideKey, resolveConfiguredSlotValue } from "./slot-value";
 
 export interface DeliveryScheduleSlot {
   display: string;
@@ -389,7 +389,31 @@ export function isSlotBlocked(
   slotValue: string,
 ): boolean {
   const disabledSlots = rules.disabledSlots?.[dateStr];
-  return Array.isArray(disabledSlots) && disabledSlots.includes(slotValue);
+  if (!Array.isArray(disabledSlots)) {
+    return false;
+  }
+
+  // Canonical (not exact) key match — see findSlotOverrideKey. A blocked-slot
+  // entry whose spelling drifted from the configured value must still block.
+  return findSlotOverrideKey(disabledSlots, slotValue) != null;
+}
+
+/**
+ * Read the capacity entry a date holds for `slotValue`, tolerating override-key
+ * spelling drift the same way the booked-count matcher does.
+ */
+export function getSlotCapacityEntry(
+  rules: DeliveryScheduleRules,
+  dateStr: string,
+  slotValue: string,
+): DeliveryScheduleCapacity | null {
+  const capacities = rules.slotCapacity?.[dateStr];
+  if (!capacities) {
+    return null;
+  }
+
+  const key = findSlotOverrideKey(Object.keys(capacities), slotValue);
+  return key == null ? null : (capacities[key] ?? null);
 }
 
 export function isSlotAtCapacity(
@@ -397,7 +421,7 @@ export function isSlotAtCapacity(
   dateStr: string,
   slotValue: string,
 ): boolean {
-  const values = rules.slotCapacity?.[dateStr]?.[slotValue];
+  const values = getSlotCapacityEntry(rules, dateStr, slotValue);
   if (!values) {
     return false;
   }
@@ -528,7 +552,7 @@ export function validateMerchantRescheduleSelection(
     };
   }
 
-  const capacity = rules.slotCapacity?.[dateStr]?.[slotValue] ?? null;
+  const capacity = getSlotCapacityEntry(rules, dateStr, slotValue);
   return { ok: true, capacity: capacity ? { ...capacity } : null };
 }
 

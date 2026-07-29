@@ -6,13 +6,14 @@ Issue tracking for this repo lives in project memory (`project_audit_status.md`)
 
 ## Snapshot (as of the 2026-06-24 re-audit)
 
-- **RACE-02 — Slot-capacity oversell, no atomic increment.** *Open by conscious decision (Scheduler V2 D1 / ADR-12, 2026-07-15).* `isSlotAtCapacity` reads a snapshot; two concurrent checkouts can both see `booked < capacity` (window widened slightly by the 60s counts cache). The merchant deferred the DB-counter remedy until oversell hurts in practice; since Phase 4 (D4, 2026-07-17) an over-capacity order at least lands **visibly** as `delivery.sync_status: attention:capacity` instead of silently. Files: `app/lib/delivery-availability.ts`, `app/services/delivery-bookings.server.ts`.
+- **RACE-02 — Slot-capacity oversell, no atomic increment.** *Open by conscious decision (Scheduler V2 D1 / ADR-12, 2026-07-15).* `isSlotAtCapacity` reads a snapshot; two concurrent checkouts can both see `booked < capacity` (window widened slightly by the 60s counts cache, and further whenever a scan cap makes the counts a lower bound — `countsMeta.status: "partial"`, 2026-07-29). The merchant deferred the DB-counter remedy until oversell hurts in practice; since Phase 4 (D4, 2026-07-17) an over-capacity order at least lands **visibly** as `delivery.sync_status: attention:capacity` instead of silently. Files: `app/lib/delivery-availability.ts`, `app/services/delivery-bookings.server.ts`.
 - **UX-01 — Pagination no-ops.** *Resolved,* re-verified fixed as of 2026-06-24 (`handleNextPage`/`handlePreviousPage` now set cursor URL params the loader reads back). File: `app/routes/app.orders.tsx`.
 - **UX-02 — Date filter queried by tag instead of metafield.** *Resolved,* re-verified fixed as of 2026-06-24 (filter now builds `metafields.custom.date:...`). File: `app/routes/app.orders.tsx`.
 
 > Many more issues (SEC-02/03/04, FULFILL-01/02, DATE-01..04, RACE-03, POLARIS-01/02, PROXY-01/02, DUP-01/02) are tracked in `project_audit_status.md`. This file intentionally does **not** mirror the full list — the memory file is authoritative.
 
 - **Scheduler audit families closed by Scheduler V2 (Phases 1–5, 2026-07-15 → 2026-07-17).** The DEF-1..15 / PERF-1..3 / DASH-1..3 / RACE-03 / POLARIS-01 / DUP-01 findings from [scheduler-v2-audit.md](./scheduler-v2-audit.md) are now fixed or consciously accepted — the per-finding disposition table is [scheduler-v2-ux.md §9](./scheduler-v2-ux.md#9-defect-coverage-map). Still deliberately open: RACE-02 (above) and LEAK-1 (full rules blob served to storefront/customer payloads — D5 deferral, needs a future theme-coordinated track).
+  - *Two of those closures were narrower than recorded (found + fixed 2026-07-29, see the verification log).* **DEF-2/DEF-4** were closed for *counting* only — the `disabledSlots`/`slotCapacity` lookups stayed strict, so a cap or block stored under a drifted key spelling was never enforced at checkout ([ADR-13](./decisions.md)). **DEF-5**'s "fail-open but visible" held for scan *errors* only — the engine's two truncation caps stayed silent under an `"ok"` `countsMeta`; truncation is now `countsMeta.status: "partial"` + a banner.
 
 ## Standing action items
 

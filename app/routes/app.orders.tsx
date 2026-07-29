@@ -55,6 +55,7 @@ import { MarkFulfilledModal } from "../components/orders/MarkFulfilledModal";
 import { RescheduleModal } from "../components/orders/RescheduleModal";
 import { SendEmailModal } from "../components/orders/SendEmailModal";
 import { validateMerchantRescheduleSelection } from "../lib/delivery-availability";
+import { slotValuesMatch } from "../lib/slot-value";
 import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
 import { handleSendEmailOp } from "../services/send-customer-email.server";
 import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
@@ -928,12 +929,20 @@ export const action = async ({
 
     if (!stateQueryFailed && check.capacity) {
       // Orders already sitting in the target date+slot are not double-counted
-      // against the remaining capacity (§5 bulk rule).
+      // against the remaining capacity (§5 bulk rule) — `booked` already counts
+      // them. The slot half of that "already there" test must use the SAME
+      // canonical comparison the booked-count matcher does (§4.2): a raw
+      // compare treats a drifted stored spelling ("9:00AM - 12:00PM" vs the
+      // configured "9AM-12PM") as a move and asks the merchant to override a
+      // limit that was never going to be exceeded. The date half stays an exact
+      // ISO compare — the same slot on a different date IS moving in, and so is
+      // an order with nothing scheduled yet (null date, null slot).
       const moving = safeIds.filter((id) => {
         const state = stateByOrderId.get(id);
         if (!state) return false;
         return (
-          currentDateOf(state) !== date || currentSlotOf(state) !== timeSlot
+          currentDateOf(state) !== date ||
+          !slotValuesMatch(currentSlotOf(state), timeSlot)
         );
       }).length;
       const projected = check.capacity.booked + moving;

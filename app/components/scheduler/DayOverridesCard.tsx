@@ -214,12 +214,23 @@ export function DayOverridesCard({
                     capacities[slotValue] =
                       trimmed === "" ? null : Number(trimmed);
                   }
+                  // Blocking a day is a day-level flag, not an edit of that
+                  // date's per-slot config — post the drafted blocked slots and
+                  // capacities even when blocked so a block → unblock
+                  // round-trip is lossless. Fixed here rather than in the op
+                  // because saveDayOverride treats its payload as the date's
+                  // full desired state (it rewrites disabledSlots[date] and
+                  // slotCapacity[date] wholesale); posting `[]`/`{}` was what
+                  // destroyed them. A field the merchant clears still posts
+                  // null and still drops just that one cap, and "Clear
+                  // overrides" (clearDayOverride) remains the only way to wipe
+                  // a date.
                   submitOp("saveDayOverride", {
                     version,
                     date: selectedDate,
                     blocked: draft.blocked,
-                    blockedSlots: draft.blocked ? [] : draft.blockedSlots,
-                    capacities: draft.blocked ? {} : capacities,
+                    blockedSlots: draft.blockedSlots,
+                    capacities,
                   });
                 }}
               >
