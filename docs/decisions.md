@@ -187,3 +187,15 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 **Consequence:** `docs/architecture.md`'s "never cached" wording must be updated when Phase 2 ships; `getScheduleRulesWithBookedCounts` keeps its signature (additive `countsMeta`); the `created_at`-lookback scan and the tag/attribute booking heuristics are deleted; pre-V2 orders whose metafield sync was blocked are consciously not counted (D4's always-sync closes that class going forward).
 
 **Status:** Accepted (design locked 2026-07-15; implementation = Scheduler V2 Phase 2).
+
+## ADR-13 — Override-map keys are slot *references* resolved canonically; the lenient read is the only place allowed to prune them
+
+**Source:** verification log 2026-07-29 (rules-engine + write-path defect sweep); [scheduler-v2-ux.md §4.1/§4.2](./scheduler-v2-ux.md).
+
+**Context:** `DeliveryScheduleConfig.disabledSlotsJson` / `slotCapacityJson` are date-keyed maps whose inner keys are slot *values* — strings written by several generations of the editor, so a key's spelling can drift from the configured slot (`"9am - 12pm"` vs `"9AM-12PM"`). Scheduler V2 §4.2 canonicalized the booked-count matcher and the validators' *slot* lookup, but the override-map lookups themselves stayed strict (`slotCapacity[date][slotValue]`, `disabledSlots[date].includes(...)`). A drifted cap was therefore counted and rendered "Full" on the dashboard while **never being enforced at checkout**, and a drifted block never blocked — DEF-2/DEF-4 were closed for counting only. Separately: the strict WRITE gate rejects any patch referencing a slot that is not configured, and every day-override op resubmits the whole map — so one orphan key the lenient READ kept made every later day save and every slot delete fail permanently, with no in-app way to remove the orphan.
+
+**Decision:** (1) Every override-map lookup resolves its key through `findSlotOverrideKey` ([`app/lib/slot-value.ts`](../app/lib/slot-value.ts)) — canonical match, with an exact spelling winning a tie so a map holding both spellings resolves to the one the caller named. (2) `deserializeStoredScheduleRules` (the lenient read) is the ONE place allowed to drop override entries: it prunes keys naming no configured slot and collapses two keys on one date that canonicalize to the same slot (last wins, matching the counts engine), reporting each as a `ConfigHealthIssue`. The strict write gate keeps rejecting orphans outright.
+
+**Consequence:** New enforcement code must go through `findSlotOverrideKey`, never `map[slotValue]` / `includes(slotValue)` — a raw lookup silently re-opens the counted-but-not-enforced split. Pruning belongs to the read: ops and routes must not delete override entries to work around a validation failure (`clearDayOverride` stays the only intentional per-date wipe, and a day-level block must not rewrite that date's per-slot config). Merchants see a drifted/orphaned key as a config-health banner on `/app/scheduler` instead of a dead editor. Stored shapes and column set are unchanged.
+
+**Status:** Accepted; implemented 2026-07-29.

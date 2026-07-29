@@ -16,6 +16,7 @@ import { Banner, BlockStack, Page } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import {
   getScheduleRulesDetailed,
+  type BookedCountsTruncation,
   type ScheduleRulesDetailed,
 } from "../services/schedule-rules.server";
 import {
@@ -32,6 +33,34 @@ import type {
 } from "../components/scheduler/op-plumbing";
 
 const DAY_OVERRIDES_ANCHOR_ID = "scheduler-day-overrides";
+
+// Why a "partial" counts scan came back short, in merchant language.
+const COUNTS_CAP_LABELS: Record<BookedCountsTruncation["caps"][number], string> =
+  {
+    dates: "more capacity-tracked dates than one scan covers",
+    pages: "more orders on one date range than one scan pages through",
+  };
+// Enough dates for the merchant to act on without a wall of text in the banner.
+const MAX_LISTED_AFFECTED_DATES = 8;
+
+function describeCountsCaps(truncation: BookedCountsTruncation | undefined) {
+  if (!truncation?.caps.length) {
+    return null;
+  }
+  return truncation.caps.map((cap) => COUNTS_CAP_LABELS[cap]).join(" and ");
+}
+
+function describeAffectedDates(truncation: BookedCountsTruncation | undefined) {
+  const dates = truncation?.affectedDates ?? [];
+  if (!dates.length) {
+    return null;
+  }
+  const listed = dates.slice(0, MAX_LISTED_AFFECTED_DATES);
+  const rest = dates.length - listed.length;
+  return `${dates.length} date${dates.length === 1 ? "" : "s"} affected: ${listed.join(
+    ", ",
+  )}${rest > 0 ? `, +${rest} more` : ""}`;
+}
 
 function getSessionShop(session: { shop?: string } | undefined) {
   return typeof session?.shop === "string" && session.shop
@@ -230,6 +259,9 @@ export default function SchedulerPage() {
     [setSearchParams],
   );
 
+  const countsCapsLabel = describeCountsCaps(state.countsMeta.truncation);
+  const countsAffectedLabel = describeAffectedDates(state.countsMeta.truncation);
+
   const settingsKey = [
     state.rules.timezone,
     state.rules.cutoffHour,
@@ -237,12 +269,23 @@ export default function SchedulerPage() {
     state.rules.maxDays,
   ].join("|");
   const slotsKey = JSON.stringify(state.rules.slots);
+  // CONFIG only — `slotCapacity[date][slot]` also carries the LIVE `booked`
+  // count, and every op response (and "Refresh counts") re-reads it, so keying
+  // on the whole entry remounted the day panel whenever a new order landed and
+  // wiped the merchant's half-typed edits (DEF-11: no cross-section form
+  // wipes). A real config change from another surface — the stored cap, the
+  // day block, a blocked slot — still changes the key and still remounts.
+  const dayCapacityConfig = selectedDate
+    ? Object.entries(state.rules.slotCapacity[selectedDate] ?? {}).map(
+        ([slotValue, entry]) => [slotValue, entry.capacity] as const,
+      )
+    : null;
   const dayKey = `${selectedDate ?? ""}|${JSON.stringify({
     blocked: selectedDate
       ? state.rules.disabledDates.includes(selectedDate)
       : null,
     slots: selectedDate ? state.rules.disabledSlots[selectedDate] : null,
-    capacity: selectedDate ? state.rules.slotCapacity[selectedDate] : null,
+    capacity: dayCapacityConfig,
   })}`;
 
   return (
@@ -263,6 +306,18 @@ export default function SchedulerPage() {
           <Banner tone="warning" title="Live booked counts are unavailable">
             Capacity limits are not being checked against live orders right
             now. Counts will recover automatically — or press “Refresh counts”.
+          </Banner>
+        )}
+        {state.countsMeta.status === "partial" && (
+          <Banner tone="warning" title="Live booked counts are incomplete">
+            <BlockStack gap="100">
+              <p>
+                {`The order scan hit a limit${
+                  countsCapsLabel ? ` (${countsCapsLabel})` : ""
+                }, so booked counts are a lower bound right now — a window that is already full can still show as open, and checkouts into it are not being blocked.`}
+              </p>
+              {countsAffectedLabel && <p>{countsAffectedLabel}</p>}
+            </BlockStack>
           </Banner>
         )}
 

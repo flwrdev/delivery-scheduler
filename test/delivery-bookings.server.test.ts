@@ -231,6 +231,120 @@ describe("getDeliveryBookingsSnapshot — metafield-date-scoped query", () => {
   });
 });
 
+describe("getDeliveryBookingsSnapshot — truncation is reported, not just logged", () => {
+  function futureDates(count: number): string[] {
+    const dates: string[] = [];
+    for (let offset = 1; offset <= count; offset += 1) {
+      const date = new Date(NOW.getTime() + offset * 24 * 60 * 60 * 1000);
+      dates.push(date.toISOString().slice(0, 10));
+    }
+    return dates;
+  }
+
+  function capacityFor(dates: string[]): DeliveryScheduleRules["slotCapacity"] {
+    return Object.fromEntries(
+      dates.map((date) => [date, { "9AM-12PM": { capacity: 5, booked: 0 } }]),
+    );
+  }
+
+  let consoleWarn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleWarn.mockRestore();
+  });
+
+  it("reports no truncation when the whole tracked set is scanned", async () => {
+    const rules = makeRules({
+      "2026-07-18": { "9AM-12PM": { capacity: 5, booked: 0 } },
+    });
+    const admin = makeAdmin([
+      ordersPage([
+        { id: "gid://shopify/Order/1", date: "2026-07-18", slot: "9AM-12PM" },
+      ]),
+    ]);
+
+    const snapshot = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
+
+    expect(snapshot.truncation).toBeNull();
+    expect(consoleWarn).not.toHaveBeenCalled();
+  });
+
+  it("reports the chunk's dates when the page cap stops pagination mid-chunk", async () => {
+    const dates = futureDates(2);
+    const rules = makeRules(capacityFor(dates));
+    // Every page claims another page: the scan stops at MAX_PAGES_PER_CHUNK (5).
+    const admin = makeAdmin(
+      Array.from({ length: 5 }, (_unused, page) =>
+        ordersPage(
+          [
+            {
+              id: `gid://shopify/Order/${page}`,
+              date: dates[0],
+              slot: "9AM-12PM",
+            },
+          ],
+          { hasNextPage: true, endCursor: `cursor-${page}` },
+        ),
+      ),
+    );
+
+    const snapshot = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
+
+    expect(admin.graphql).toHaveBeenCalledTimes(5);
+    expect(snapshot.bookings).toHaveLength(5);
+    expect(snapshot.truncation).toEqual({
+      droppedDates: [],
+      pagedOutDates: dates,
+    });
+    expect(consoleWarn).toHaveBeenCalled();
+  });
+
+  it("reports the dates dropped past the tracked-date cap (they would count 0)", async () => {
+    const dates = futureDates(123);
+    const rules = makeRules(capacityFor(dates));
+    // 120 tracked dates / 30 per chunk = 4 queries, all complete.
+    const admin = makeAdmin([
+      ordersPage([]),
+      ordersPage([]),
+      ordersPage([]),
+      ordersPage([]),
+    ]);
+
+    const snapshot = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
+
+    expect(admin.graphql).toHaveBeenCalledTimes(4);
+    expect(snapshot.truncation).toEqual({
+      droppedDates: dates.slice(120),
+      pagedOutDates: [],
+    });
+    expect(consoleWarn).toHaveBeenCalled();
+  });
+
+  it("keeps a cached partial set partial (never re-reads as complete)", async () => {
+    const dates = futureDates(1);
+    const rules = makeRules(capacityFor(dates));
+    const admin = makeAdmin(
+      Array.from({ length: 5 }, (_unused, page) =>
+        ordersPage([], { hasNextPage: true, endCursor: `cursor-${page}` }),
+      ),
+    );
+
+    await getDeliveryBookingsSnapshot(SHOP, admin, rules);
+    const cachedRead = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
+
+    expect(admin.graphql).toHaveBeenCalledTimes(5);
+    expect(cachedRead.fromCache).toBe(true);
+    expect(cachedRead.truncation).toEqual({
+      droppedDates: [],
+      pagedOutDates: dates,
+    });
+  });
+});
+
 describe("getDeliveryBookingsSnapshot — 60s in-process cache", () => {
   const rules = makeRules({
     "2026-07-18": { "9AM-12PM": { capacity: 5, booked: 0 } },

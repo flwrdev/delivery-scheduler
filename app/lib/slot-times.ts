@@ -22,6 +22,7 @@ export interface SlotTimeRange {
 }
 
 const TIME_PART_PATTERN = /^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/i;
+const MINUTES_PER_DAY = 24 * 60;
 
 function parseSlotTimePart(raw: string): SlotTimePart | null {
   const match = raw.trim().match(TIME_PART_PATTERN);
@@ -78,15 +79,28 @@ export function generateSlotValue(range: SlotTimeRange): string {
   return `${formatSlotTimePart(range.start)}-${formatSlotTimePart(range.end)}`;
 }
 
-/** Minutes since local midnight; 12AM → 0, 12PM → 720. */
-export function slotTimePartToMinutes(part: SlotTimePart): number {
+/**
+ * Minutes since local midnight; 12PM → 720. `position` disambiguates the 12AM
+ * edge, which is minute 0 as a START but end-of-day (1440) as an END — without
+ * it every window closing at midnight ("8PM-12AM", "11PM-12AM") reads as
+ * inverted and is impossible to configure, even though the picker offers 12 +
+ * AM as an end time.
+ */
+export function slotTimePartToMinutes(
+  part: SlotTimePart,
+  position: "start" | "end",
+): number {
   let hour = part.hour % 12;
   if (part.meridiem === "PM") {
     hour += 12;
   }
-  return hour * 60 + part.minute;
+  const minutes = hour * 60 + part.minute;
+  return position === "end" && minutes === 0 ? MINUTES_PER_DAY : minutes;
 }
 
 export function isSlotRangeOrdered(range: SlotTimeRange): boolean {
-  return slotTimePartToMinutes(range.end) > slotTimePartToMinutes(range.start);
+  return (
+    slotTimePartToMinutes(range.end, "end") >
+    slotTimePartToMinutes(range.start, "start")
+  );
 }

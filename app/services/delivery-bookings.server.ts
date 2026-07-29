@@ -59,11 +59,26 @@ export interface DeliveryBooking {
   slotValue: string;
 }
 
+/**
+ * Which truncation cap clipped a scan, and the tracked dates it clipped. Both
+ * caps make the derived counts a LOWER BOUND, never the truth — design §5 says
+ * counts may fail open, but never silently, so this travels up to the caller
+ * instead of dying in a console.warn.
+ */
+export interface DeliveryBookingsTruncation {
+  /** Tracked dates dropped past MAX_TRACKED_DATES — never queried, so they count 0. */
+  droppedDates: string[];
+  /** Tracked dates in a chunk that hit MAX_PAGES_PER_CHUNK — counts may be low. */
+  pagedOutDates: string[];
+}
+
 export interface DeliveryBookingsSnapshot {
   bookings: DeliveryBooking[];
   /** ISO timestamp of when this snapshot was fetched from the Admin API. */
   fetchedAt: string;
   fromCache: boolean;
+  /** Null when the whole tracked set was scanned; set when a cap clipped it. */
+  truncation: DeliveryBookingsTruncation | null;
 }
 
 const FETCH_DELIVERY_BOOKINGS_QUERY = `#graphql
@@ -105,6 +120,8 @@ interface CacheEntry {
   fetchedAtMs: number;
   fetchedAt: string;
   bookings: DeliveryBooking[];
+  /** Cached alongside the bookings so a partial set never re-reads as complete. */
+  pagedOutDates: string[];
 }
 
 const bookingsCache = new Map<string, CacheEntry>();
@@ -121,12 +138,19 @@ function getTodayString(timezone: string): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: timezone });
 }
 
+interface TrackedDates {
+  /** The dates actually queried. */
+  dates: string[];
+  /** The dates cut past MAX_TRACKED_DATES — reported, not just logged. */
+  dropped: string[];
+}
+
 /**
  * The future (today-inclusive, shop-local) dates that have configured capacity —
- * the only dates worth querying. Sorted ascending; truncation is logged, never
- * silent.
+ * the only dates worth querying. Sorted ascending; truncation is logged AND
+ * returned, never silent.
  */
-function getTrackedDates(rules: DeliveryScheduleRules): string[] {
+function getTrackedDates(rules: DeliveryScheduleRules): TrackedDates {
   const today = getTodayString(rules.timezone);
   const dates = Object.keys(rules.slotCapacity)
     .filter((date) => date >= today)
@@ -136,10 +160,24 @@ function getTrackedDates(rules: DeliveryScheduleRules): string[] {
     console.warn(
       `Delivery booked counts: ${dates.length} capacity-tracked dates configured; only the first ${MAX_TRACKED_DATES} are counted.`,
     );
-    return dates.slice(0, MAX_TRACKED_DATES);
+    return {
+      dates: dates.slice(0, MAX_TRACKED_DATES),
+      dropped: dates.slice(MAX_TRACKED_DATES),
+    };
   }
 
-  return dates;
+  return { dates, dropped: [] };
+}
+
+/** Null unless a cap actually clipped the scan — keeps "complete" the default. */
+function buildTruncation(
+  droppedDates: string[],
+  pagedOutDates: string[],
+): DeliveryBookingsTruncation | null {
+  if (!droppedDates.length && !pagedOutDates.length) {
+    return null;
+  }
+  return { droppedDates, pagedOutDates };
 }
 
 function chunk<T>(values: T[], size: number): T[][] {
@@ -200,9 +238,10 @@ async function fetchBookingsForDates(
   admin: AdminGraphQLClient,
   rules: DeliveryScheduleRules,
   trackedDates: string[],
-): Promise<DeliveryBooking[]> {
+): Promise<{ bookings: DeliveryBooking[]; pagedOutDates: string[] }> {
   const capacityKeyIndex = buildCapacityKeyIndex(rules, trackedDates);
   const bookings: DeliveryBooking[] = [];
+  const pagedOutDates: string[] = [];
 
   for (const dateChunk of chunk(trackedDates, DATE_CHUNK_SIZE)) {
     const query = dateChunk
@@ -271,14 +310,17 @@ async function fetchBookingsForDates(
     }
 
     if (truncated) {
-      // No silent caps (design §5): counts may miss bookings past the page cap.
+      // No silent caps (design §5): counts may miss bookings past the page cap,
+      // so the whole chunk's dates ride back to the caller as suspect — the log
+      // alone never reached the merchant.
       console.warn(
         `Delivery booked counts: pagination cap hit for dates ${dateChunk[0]}..${dateChunk[dateChunk.length - 1]}; counts may be incomplete.`,
       );
+      pagedOutDates.push(...dateChunk);
     }
   }
 
-  return bookings;
+  return { bookings, pagedOutDates };
 }
 
 /**
@@ -293,9 +335,16 @@ export async function getDeliveryBookingsSnapshot(
   rules: DeliveryScheduleRules,
   options: { bypassCache?: boolean } = {},
 ): Promise<DeliveryBookingsSnapshot> {
-  const trackedDates = getTrackedDates(rules);
+  // The dropped dates come from the rules, not the scan, so they are recomputed
+  // on every read — a cache hit can never hide a date-cap that tripped since.
+  const { dates: trackedDates, dropped: droppedDates } = getTrackedDates(rules);
   if (!trackedDates.length) {
-    return { bookings: [], fetchedAt: new Date().toISOString(), fromCache: false };
+    return {
+      bookings: [],
+      fetchedAt: new Date().toISOString(),
+      fromCache: false,
+      truncation: buildTruncation(droppedDates, []),
+    };
   }
 
   const signature = trackedDates.join("|");
@@ -308,14 +357,34 @@ export async function getDeliveryBookingsSnapshot(
     cached.signature === signature &&
     nowMs - cached.fetchedAtMs < CACHE_TTL_MS
   ) {
-    return { bookings: cached.bookings, fetchedAt: cached.fetchedAt, fromCache: true };
+    return {
+      bookings: cached.bookings,
+      fetchedAt: cached.fetchedAt,
+      fromCache: true,
+      truncation: buildTruncation(droppedDates, cached.pagedOutDates),
+    };
   }
 
-  const bookings = await fetchBookingsForDates(admin, rules, trackedDates);
+  const { bookings, pagedOutDates } = await fetchBookingsForDates(
+    admin,
+    rules,
+    trackedDates,
+  );
   const fetchedAt = new Date(nowMs).toISOString();
-  bookingsCache.set(shop, { signature, fetchedAtMs: nowMs, fetchedAt, bookings });
+  bookingsCache.set(shop, {
+    signature,
+    fetchedAtMs: nowMs,
+    fetchedAt,
+    bookings,
+    pagedOutDates,
+  });
 
-  return { bookings, fetchedAt, fromCache: false };
+  return {
+    bookings,
+    fetchedAt,
+    fromCache: false,
+    truncation: buildTruncation(droppedDates, pagedOutDates),
+  };
 }
 
 function orderIdKey(orderId: string): string {

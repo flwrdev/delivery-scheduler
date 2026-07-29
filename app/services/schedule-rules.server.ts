@@ -9,7 +9,10 @@ import {
   validateScheduleRulesPatch,
   type ConfigHealthIssue,
 } from "../lib/schedule-rules-schema";
-import type { AdminGraphQLClient } from "./delivery-bookings.server";
+import type {
+  AdminGraphQLClient,
+  DeliveryBookingsTruncation,
+} from "./delivery-bookings.server";
 import {
   deriveBookedCounts,
   getDeliveryBookingsSnapshot,
@@ -152,16 +155,31 @@ function applyAutomaticBookedCounts(
   };
 }
 
+export interface BookedCountsTruncation {
+  /**
+   * Which cap clipped the scan — "dates": more capacity-tracked dates than one
+   * scan covers (the extras count 0); "pages": one date range held more orders
+   * than one scan pages through (those dates count low).
+   */
+  caps: Array<"dates" | "pages">;
+  /** Capacity-tracked dates whose booked counts may be under-reported, ascending. */
+  affectedDates: string[];
+}
+
 export interface BookedCountsMeta {
   /**
-   * "ok" — live/cached counts applied; "untracked" — no capacity configured;
-   * "skipped" — no shop/admin available on this surface; "error" — the Admin
-   * scan failed and the capacity gate is running fail-open (design §5: still
-   * fails open for sales continuity, but VISIBLY).
+   * "ok" — live/cached counts applied; "partial" — counts applied but a scan
+   * cap clipped them, so they are a LOWER BOUND (see `truncation`);
+   * "untracked" — no capacity configured; "skipped" — no shop/admin available
+   * on this surface; "error" — the Admin scan failed and the capacity gate is
+   * running fail-open (design §5: still fails open for sales continuity, but
+   * VISIBLY — which is why a clipped scan can never report "ok").
    */
-  status: "ok" | "untracked" | "skipped" | "error";
+  status: "ok" | "partial" | "untracked" | "skipped" | "error";
   fetchedAt: string | null;
   fromCache: boolean;
+  /** Set only on "partial": which cap tripped and which dates it hit. */
+  truncation?: BookedCountsTruncation;
 }
 
 export interface ScheduleRulesDetailed {
@@ -176,6 +194,26 @@ export interface BookedCountsOptions {
   excludeOrderId?: string;
   /** Force a fresh Admin scan (the admin "Refresh counts" path). */
   bypassCountsCache?: boolean;
+}
+
+/** Flatten the engine's per-cap date lists into the merchant-facing meta. */
+function describeTruncation(
+  truncation: DeliveryBookingsTruncation,
+): BookedCountsTruncation {
+  const caps: BookedCountsTruncation["caps"] = [];
+  if (truncation.droppedDates.length) {
+    caps.push("dates");
+  }
+  if (truncation.pagedOutDates.length) {
+    caps.push("pages");
+  }
+
+  return {
+    caps,
+    affectedDates: [
+      ...new Set([...truncation.droppedDates, ...truncation.pagedOutDates]),
+    ].sort(),
+  };
 }
 
 /**
@@ -210,13 +248,19 @@ export async function getScheduleRulesDetailed(
       bypassCache: options.bypassCountsCache,
     });
     const bookedCounts = deriveBookedCounts(snapshot.bookings, options.excludeOrderId);
+    const truncation = snapshot.truncation
+      ? describeTruncation(snapshot.truncation)
+      : null;
     return {
       ...base,
       rules: applyAutomaticBookedCounts(rules, bookedCounts),
       countsMeta: {
-        status: "ok",
+        // A clipped scan still applies its counts (fail-open), but reports
+        // "partial" so no surface can read incomplete counts as healthy.
+        status: truncation ? "partial" : "ok",
         fetchedAt: snapshot.fetchedAt,
         fromCache: snapshot.fromCache,
+        ...(truncation ? { truncation } : {}),
       },
     };
   } catch (error) {

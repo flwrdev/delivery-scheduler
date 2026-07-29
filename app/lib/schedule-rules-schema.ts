@@ -109,9 +109,42 @@ function integerFieldError(
   return parsed;
 }
 
+function normalizeSlotDisplay(display: string): string {
+  return display.trim().toUpperCase();
+}
+
+// Display labels that are ALREADY duplicated in the stored slot list. The write
+// path grandfathers these: the old free-text editor only ever rejected duplicate
+// VALUES, and the read path still de-dupes by value only, so a pre-V2 config can
+// legitimately hold two slots labelled "Morning". Without this, re-validating the
+// whole list on every slot op made createSlot/deleteSlot/reorderSlots fail
+// permanently with a `fieldErrors.slots` message naming a label the merchant
+// never touched — and SlotsCard binds only display/start/end, so nothing rendered
+// it. New duplicates are still rejected.
+function duplicatedSlotDisplays(slots: DeliveryScheduleSlot[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicated = new Set<string>();
+
+  for (const slot of slots) {
+    const normalized = normalizeSlotDisplay(
+      typeof slot?.display === "string" ? slot.display : "",
+    );
+    if (!normalized) {
+      continue;
+    }
+    if (seen.has(normalized)) {
+      duplicated.add(normalized);
+    }
+    seen.add(normalized);
+  }
+
+  return duplicated;
+}
+
 function validateSlots(
   fieldErrors: Record<string, string>,
   rawSlots: unknown,
+  currentSlots: DeliveryScheduleSlot[],
 ): DeliveryScheduleSlot[] | null {
   if (!Array.isArray(rawSlots)) {
     fieldErrors.slots = "Slots must be a list.";
@@ -121,6 +154,7 @@ function validateSlots(
   const slots: DeliveryScheduleSlot[] = [];
   const seenValues = new Set<string>();
   const seenDisplays = new Set<string>();
+  const grandfatheredDisplays = duplicatedSlotDisplays(currentSlots);
 
   for (const [index, rawSlot] of rawSlots.entries()) {
     const display =
@@ -139,8 +173,11 @@ function validateSlots(
       return null;
     }
 
-    const normalizedDisplay = display.toUpperCase();
-    if (seenDisplays.has(normalizedDisplay)) {
+    const normalizedDisplay = normalizeSlotDisplay(display);
+    if (
+      seenDisplays.has(normalizedDisplay) &&
+      !grandfatheredDisplays.has(normalizedDisplay)
+    ) {
       fieldErrors.slots = `Slot label "${display}" is duplicated.`;
       return null;
     }
@@ -218,7 +255,7 @@ export function validateScheduleRulesPatch(
   }
 
   if (patch.slots !== undefined) {
-    const slots = validateSlots(fieldErrors, patch.slots);
+    const slots = validateSlots(fieldErrors, patch.slots, currentSlots);
     if (slots) clean.slots = slots;
   }
 
@@ -413,6 +450,42 @@ function clampStoredInteger(
   return value;
 }
 
+/**
+ * Parse a stored per-slot capacity limit, or null when the stored value does not
+ * name one.
+ *
+ * The read used to do a bare `Number(...)` behind a `Number.isFinite(v) && v >= 0`
+ * gate. `Number(null)`, `Number("")` and `Number([])` are all 0, which passes that
+ * gate — so a hand-edited row, a restored backup, or any writer predating the
+ * strict write gate silently pinned the slot to capacity 0. `isSlotAtCapacity`
+ * then reads `0 >= 0` as true: the window disappears from checkout for that date
+ * and every reschedule into it is rejected as `slot_unavailable`, with no
+ * ConfigHealthIssue to fire the "Stored settings need attention" banner. Parse
+ * strictly instead, and stay lenient-but-LOUD about a recoverable float.
+ */
+function parseStoredCapacity(
+  issues: ConfigHealthIssue[],
+  date: string,
+  value: string,
+  raw: unknown,
+): number | null {
+  const strict = parseStrictInteger(raw);
+  if (strict != null) {
+    return strict;
+  }
+
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+    const floored = Math.floor(raw);
+    issues.push({
+      column: "slotCapacityJson",
+      message: `Stored capacity for ${value} on ${date} (${raw}) is not a whole number; using ${floored}.`,
+    });
+    return floored;
+  }
+
+  return null;
+}
+
 function parseJsonColumn(
   issues: ConfigHealthIssue[],
   column: ConfigHealthIssue["column"],
@@ -545,6 +618,22 @@ export function deserializeStoredScheduleRules(
     disabledDates = Array.from(dates);
   }
 
+  // The override maps below are pruned against the slot list resolved above.
+  //
+  // The read used to keep every stored override verbatim while the write path
+  // rejects any patch referencing a slot that is not configured — and each
+  // day-override op resubmits the WHOLE map. One orphan key (a slot dropped just
+  // above for a missing label or a duplicate value, or a custom slot lost to a
+  // corrupt slotsJson) therefore failed every subsequent save AND every slot
+  // delete, permanently, with no in-app way to remove the offending entry. The
+  // read is the only place that can break that deadlock, so it prunes here and
+  // says so, per this module's lenient-but-LOUD contract.
+  //
+  // Matching is canonical (not exact) for the same reason the availability
+  // lookups are: a key whose spelling drifted from the configured value names a
+  // real slot and must survive.
+  const knownSlotValues = slotValueReferenceSet(slots);
+
   const disabledSlots: Record<string, string[]> = {};
   const rawDisabledSlots = parseJsonColumn(
     issues,
@@ -571,13 +660,29 @@ export function deserializeStoredScheduleRules(
           continue;
         }
 
-        const values = Array.from(
-          new Set(
-            rawValues.filter(
-              (value): value is string => typeof value === "string" && Boolean(value.trim()),
-            ),
-          ),
-        );
+        const values: string[] = [];
+        const seen = new Set<string>();
+        for (const rawValue of rawValues) {
+          if (typeof rawValue !== "string" || !rawValue.trim()) {
+            continue;
+          }
+
+          const normalized = normalizeSlotValueForMatch(rawValue);
+          if (!knownSlotValues.has(normalized)) {
+            issues.push({
+              column: "disabledSlotsJson",
+              message: `Dropped stored blocked slot "${rawValue}" on ${date} (no matching configured slot).`,
+            });
+            continue;
+          }
+
+          if (seen.has(normalized)) {
+            continue;
+          }
+          seen.add(normalized);
+          values.push(rawValue);
+        }
+
         if (values.length) {
           disabledSlots[date] = values;
         }
@@ -604,16 +709,29 @@ export function deserializeStoredScheduleRules(
         }
 
         const capacities: Record<string, DeliveryScheduleCapacity> = {};
+        const capacityKeyByCanonical = new Map<string, string>();
         for (const [value, rawEntry] of Object.entries(
           rawCapacities as Record<string, unknown>,
         )) {
-          const capacity = Number(
+          const normalized = normalizeSlotValueForMatch(value);
+          if (!knownSlotValues.has(normalized)) {
+            issues.push({
+              column: "slotCapacityJson",
+              message: `Dropped stored capacity for "${value}" on ${date} (no matching configured slot).`,
+            });
+            continue;
+          }
+
+          const capacity = parseStoredCapacity(
+            issues,
+            date,
+            value,
             rawEntry && typeof rawEntry === "object"
               ? (rawEntry as { capacity?: unknown }).capacity
               : undefined,
           );
 
-          if (!Number.isFinite(capacity) || capacity < 0) {
+          if (capacity == null) {
             issues.push({
               column: "slotCapacityJson",
               message: `Dropped stored capacity for ${value} on ${date} (invalid limit).`,
@@ -621,10 +739,26 @@ export function deserializeStoredScheduleRules(
             continue;
           }
 
+          // Two keys on one date that canonicalize to the same slot are an
+          // ambiguity: buildCapacityKeyIndex resolves it last-write-wins, while
+          // the enforcement lookup prefers an exact spelling — so the booked
+          // count and the cap it is compared against could land on different
+          // entries. Collapse the pair here (matching the counts engine's
+          // last-write-wins) so only one entry per slot ever reaches either.
+          const supersededKey = capacityKeyByCanonical.get(normalized);
+          if (supersededKey !== undefined) {
+            delete capacities[supersededKey];
+            issues.push({
+              column: "slotCapacityJson",
+              message: `Dropped duplicate stored capacity key "${supersededKey}" on ${date} (superseded by "${value}").`,
+            });
+          }
+          capacityKeyByCanonical.set(normalized, value);
+
           // A missing/invalid stored `booked` no longer deletes the whole
           // capacity limit (old DEF-style silent destruction) — booked is
           // vestigial and reset to 0; live counts overlay it on read.
-          capacities[value] = { capacity: Math.floor(capacity), booked: 0 };
+          capacities[value] = { capacity, booked: 0 };
         }
 
         if (Object.keys(capacities).length) {

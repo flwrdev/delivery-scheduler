@@ -253,6 +253,73 @@ describe("getScheduleRulesDetailed — booked counts overlay + countsMeta (desig
     );
   });
 
+  it("reports 'partial' (never 'ok') when a scan cap clipped the counts", async () => {
+    prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(CAPACITY_ROW());
+    bookingsMock.getDeliveryBookingsSnapshot.mockResolvedValue({
+      bookings: [
+        { orderId: "gid://shopify/Order/1", date: "2026-07-18", slotValue: "9AM-12PM" },
+      ],
+      fetchedAt: "2026-07-15T02:00:00.000Z",
+      fromCache: false,
+      truncation: {
+        droppedDates: ["2026-11-20"],
+        pagedOutDates: ["2026-07-18", "2026-07-19"],
+      },
+    });
+    bookingsMock.deriveBookedCounts.mockReturnValue({
+      "2026-07-18": { "9AM-12PM": 4 },
+    });
+
+    const result = await getScheduleRulesDetailed(SHOP, admin);
+
+    expect(result.countsMeta).toEqual({
+      status: "partial",
+      fetchedAt: "2026-07-15T02:00:00.000Z",
+      fromCache: false,
+      truncation: {
+        caps: ["dates", "pages"],
+        affectedDates: ["2026-07-18", "2026-07-19", "2026-11-20"],
+      },
+    });
+    // fail-open: the clipped counts are still applied, just not trusted as whole
+    expect(result.rules.slotCapacity["2026-07-18"]["9AM-12PM"].booked).toBe(4);
+  });
+
+  it("names only the cap that actually tripped", async () => {
+    prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(CAPACITY_ROW());
+    bookingsMock.getDeliveryBookingsSnapshot.mockResolvedValue({
+      bookings: [],
+      fetchedAt: "2026-07-15T02:00:00.000Z",
+      fromCache: true,
+      truncation: { droppedDates: [], pagedOutDates: ["2026-07-18"] },
+    });
+    bookingsMock.deriveBookedCounts.mockReturnValue({});
+
+    const result = await getScheduleRulesDetailed(SHOP, admin);
+
+    expect(result.countsMeta.status).toBe("partial");
+    expect(result.countsMeta.truncation).toEqual({
+      caps: ["pages"],
+      affectedDates: ["2026-07-18"],
+    });
+  });
+
+  it("stays 'ok' with no truncation field when the scan was complete", async () => {
+    prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(CAPACITY_ROW());
+    bookingsMock.getDeliveryBookingsSnapshot.mockResolvedValue({
+      bookings: [],
+      fetchedAt: "2026-07-15T02:00:00.000Z",
+      fromCache: false,
+      truncation: null,
+    });
+    bookingsMock.deriveBookedCounts.mockReturnValue({});
+
+    const result = await getScheduleRulesDetailed(SHOP, admin);
+
+    expect(result.countsMeta.status).toBe("ok");
+    expect(result.countsMeta.truncation).toBeUndefined();
+  });
+
   it("fails open with status 'error' when the scan throws (visible, not silent)", async () => {
     prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(CAPACITY_ROW());
     bookingsMock.getDeliveryBookingsSnapshot.mockRejectedValue(new Error("THROTTLED"));

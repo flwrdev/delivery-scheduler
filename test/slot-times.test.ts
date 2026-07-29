@@ -73,11 +73,39 @@ describe("generateSlotValue", () => {
 describe("slotTimePartToMinutes / isSlotRangeOrdered", () => {
   it("maps the 12 o'clock edges correctly", () => {
     expect(
-      slotTimePartToMinutes({ hour: 12, minute: 0, meridiem: "AM" }),
+      slotTimePartToMinutes({ hour: 12, minute: 0, meridiem: "AM" }, "start"),
     ).toBe(0);
     expect(
-      slotTimePartToMinutes({ hour: 12, minute: 0, meridiem: "PM" }),
+      slotTimePartToMinutes({ hour: 12, minute: 0, meridiem: "AM" }, "end"),
+    ).toBe(1440);
+    expect(
+      slotTimePartToMinutes({ hour: 12, minute: 0, meridiem: "PM" }, "start"),
     ).toBe(720);
+    expect(
+      slotTimePartToMinutes({ hour: 12, minute: 0, meridiem: "PM" }, "end"),
+    ).toBe(720);
+  });
+
+  it("accepts windows that end at midnight", () => {
+    const midnight = { hour: 12, minute: 0, meridiem: "AM" as const };
+    expect(
+      isSlotRangeOrdered({
+        start: { hour: 8, minute: 0, meridiem: "PM" },
+        end: midnight,
+      }),
+    ).toBe(true);
+    expect(
+      isSlotRangeOrdered({
+        start: { hour: 11, minute: 30, meridiem: "PM" },
+        end: midnight,
+      }),
+    ).toBe(true);
+    expect(
+      generateSlotValue({
+        start: { hour: 8, minute: 0, meridiem: "PM" },
+        end: midnight,
+      }),
+    ).toBe("8PM-12AM");
   });
 
   it("rejects zero-length and inverted ranges", () => {

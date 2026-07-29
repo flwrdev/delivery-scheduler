@@ -90,3 +90,80 @@ describe("validateMerchantRescheduleSelection — same tolerant resolution", () 
     expect(result).toMatchObject({ ok: false, code: "slot_unknown" });
   });
 });
+
+// The mirror image of the cases above: there the INCOMING value drifted while the
+// override key matched the configured slot. Here the stored OVERRIDE KEY is the
+// drifted one — the pre-V2 spelling the booked-count matcher already resolves
+// canonically. The lookups used to index these maps with `===`/`includes`, so the
+// cap was counted (and rendered "Full" on the dashboard) but never enforced at
+// checkout, and a blocked slot stayed bookable.
+const driftedKeyRules: DeliveryScheduleRules = {
+  ...rules,
+  disabledSlots: { "2026-07-18": ["9am - 12pm"] },
+  slotCapacity: {
+    "2026-07-19": { "9:00AM - 12:00PM": { capacity: 1, booked: 1 } },
+  },
+};
+
+describe("override keys that drift from the configured slot value", () => {
+  it("enforces a capacity cap stored under a drifted key", () => {
+    for (const variant of ["9AM-12PM", "9am - 12pm", "9:00AM - 12:00PM"]) {
+      const result = validateDeliverySelection(
+        driftedKeyRules,
+        "2026-07-19",
+        variant,
+        NOW,
+      );
+      expect(result.ok).toBe(false);
+    }
+
+    // The other slot on the same date is still open.
+    expect(
+      validateDeliverySelection(driftedKeyRules, "2026-07-19", "3PM-6PM", NOW).ok,
+    ).toBe(true);
+  });
+
+  it("enforces a blocked slot stored under a drifted key", () => {
+    const result = validateDeliverySelection(
+      driftedKeyRules,
+      "2026-07-18",
+      "9AM-12PM",
+      NOW,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("reports the drifted-key capacity to the merchant reschedule validator", () => {
+    const result = validateMerchantRescheduleSelection(
+      driftedKeyRules,
+      "2026-07-19",
+      "9AM-12PM",
+    );
+    expect(result).toEqual({ ok: true, capacity: { capacity: 1, booked: 1 } });
+  });
+
+  it("blocks the merchant path on a drifted blocked-slot key", () => {
+    const result = validateMerchantRescheduleSelection(
+      driftedKeyRules,
+      "2026-07-18",
+      "9AM-12PM",
+    );
+    expect(result).toMatchObject({ ok: false, code: "slot_blocked" });
+  });
+
+  it("prefers an exact key over a canonical match when both are stored", () => {
+    const bothSpellings: DeliveryScheduleRules = {
+      ...rules,
+      slotCapacity: {
+        "2026-07-19": {
+          "9am - 12pm": { capacity: 9, booked: 0 },
+          "9AM-12PM": { capacity: 1, booked: 1 },
+        },
+      },
+    };
+
+    expect(
+      validateMerchantRescheduleSelection(bothSpellings, "2026-07-19", "9AM-12PM"),
+    ).toEqual({ ok: true, capacity: { capacity: 1, booked: 1 } });
+  });
+});

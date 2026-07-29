@@ -85,8 +85,29 @@ export const action = async ({ request }: { request: Request }) => {
 
   // Counts-loaded rules so an over-capacity checkout can be flagged; the
   // detailed read fails open (countsMeta "error" → booked stays 0) so a
-  // broken Admin scan can never block the sync itself.
-  const { rules, countsMeta } = await getScheduleRulesDetailed(shop, admin);
+  // broken Admin scan can never block the sync itself. Its Postgres read is
+  // NOT inside that fail-open catch, though, so a Neon cold-start rejection
+  // would escape the handler as a 500 — which Shopify retries and eventually
+  // flags the subscription for (same reason as the offline-session guard).
+  let rules;
+  let countsMeta;
+  try {
+    // This order's own booking is excluded from the counts so a webhook
+    // redelivery (its `custom.date` already written) cannot count the order
+    // against its own slot and flag a legal in-capacity order as
+    // "attention:capacity" — same exclusion both reschedule routes pass.
+    ({ rules, countsMeta } = await getScheduleRulesDetailed(shop, admin, {
+      excludeOrderId: orderId,
+    }));
+  } catch (error) {
+    console.warn(
+      `[orders/create] delivery sync skipped: schedule rules unavailable for ${shop} (${
+        error instanceof Error ? error.message : String(error)
+      }).`,
+    );
+    return new Response();
+  }
+
   const checkoutTime = resolveOrderCheckoutTime(orderPayload);
   const syncStatus = evaluateDeliverySyncStatus(
     rules,
@@ -100,38 +121,62 @@ export const action = async ({ request }: { request: Request }) => {
       `[orders/create] delivery selection needs attention (${syncStatus}); syncing anyway (D4).`,
     );
   }
-  if (countsMeta.status === "error") {
+  // "partial" is a truncated scan, not a failed one: the counts are a lower
+  // bound, so the capacity check still runs (fail-open) but must not pass
+  // silently — an under-counted slot is exactly how an over-capacity order
+  // gets stamped "ok".
+  if (countsMeta.status === "error" || countsMeta.status === "partial") {
     console.warn(
-      "[orders/create] booked counts unavailable; capacity check ran fail-open.",
+      `[orders/create] booked counts ${
+        countsMeta.status === "partial" ? "incomplete" : "unavailable"
+      }; capacity check ran fail-open.`,
     );
   }
 
-  const result = await syncOrderDeliveryMetafields(admin, {
-    orderId,
-    deliveryDate,
-    timeSlot,
-    syncStatus,
-  });
+  // Both sync calls report their own failures via `ok: false`, but a transient
+  // Admin fetch rejection throws instead — log + ack rather than let it 5xx.
+  try {
+    const result = await syncOrderDeliveryMetafields(admin, {
+      orderId,
+      deliveryDate,
+      timeSlot,
+      syncStatus,
+    });
 
-  if (!result.ok) {
-    console.warn("[orders/create] delivery metafield sync failed.");
+    if (!result.ok) {
+      console.warn("[orders/create] delivery metafield sync failed.");
+    }
+  } catch (error) {
+    console.warn(
+      `[orders/create] delivery metafield sync failed for ${orderId} on ${shop} (${
+        error instanceof Error ? error.message : String(error)
+      }).`,
+    );
   }
 
-  const tagResult = await syncOrderDeliveryScheduleTag(admin, {
-    orderId,
-    deliveryDate,
-    timeSlot,
-  });
+  try {
+    const tagResult = await syncOrderDeliveryScheduleTag(admin, {
+      orderId,
+      deliveryDate,
+      timeSlot,
+    });
 
-  if (!tagResult.ok) {
-    console.warn("[orders/create] delivery schedule tag sync failed.");
-  } else if (tagResult.skipped) {
-    console.log(
-      "[orders/create] delivery schedule tags skipped: missing delivery date or time slot attribute.",
-    );
-  } else {
-    console.log(
-      `[orders/create] delivery sync completed (sync_status: ${syncStatus}).`,
+    if (!tagResult.ok) {
+      console.warn("[orders/create] delivery schedule tag sync failed.");
+    } else if (tagResult.skipped) {
+      console.log(
+        "[orders/create] delivery schedule tags skipped: missing delivery date or time slot attribute.",
+      );
+    } else {
+      console.log(
+        `[orders/create] delivery sync completed (sync_status: ${syncStatus}).`,
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `[orders/create] delivery schedule tag sync failed for ${orderId} on ${shop} (${
+        error instanceof Error ? error.message : String(error)
+      }).`,
     );
   }
 
