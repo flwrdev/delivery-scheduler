@@ -144,6 +144,9 @@ export const loader = async ({ request }: { request: Request }) => {
           price: feeVariant.price,
         }
       : null,
+    // The client component must not import COD_FEE_SKU from the .server module
+    // (build error: server-only module referenced by client) — pass it as data.
+    feeSku: COD_FEE_SKU,
   };
 };
 
@@ -272,7 +275,8 @@ export const action = async ({ request }: { request: Request }) => {
 };
 
 export default function CodSettingsPage() {
-  const { customization, config, feeVariant } = useLoaderData<typeof loader>();
+  const { customization, config, feeVariant, feeSku } =
+    useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
 
   const [minimum, setMinimum] = useState(
@@ -402,7 +406,7 @@ export default function CodSettingsPage() {
                 />
                 {!feeVariant ? (
                   <Banner tone="warning">
-                    Walang product na may SKU {COD_FEE_SKU} sa store na ito —
+                    Walang product na may SKU {feeSku} sa store na ito —
                     hindi maidadagdag ang fee hangga&apos;t wala ito.
                   </Banner>
                 ) : null}
