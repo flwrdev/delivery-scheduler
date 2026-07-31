@@ -26,3 +26,22 @@ Settings → Notifications → Order confirmation → **Edit code**, then Save.
 Edit `order_confirmation.branded.liquid`, then paste it into the same editor and
 Save. Keep the `_cod_fee` Liquid block untouched unless you also intend to change
 the COD fee behavior.
+
+## Shipment out for delivery / Shipping update
+
+Same FlowerCart brand treatment, applied to the two fulfilment notifications
+(both were close to the Shopify default before — minimal custom styling):
+
+- **`shipment_out_for_delivery.{original,branded}.liquid`** — eyebrow "Out for
+  delivery".
+- **`shipping_update.{original,branded}.liquid`** — eyebrow "Shipping update".
+
+The `.branded` versions share one generic port: brand `<style>` block (ivory page
++ white card, serif eyebrow/H2/H3, brand button + links, rounded thumbnails, sand
+footer band), the card wrapper, an eyebrow before the hero H2, and the footer
+band — all via the shared notification classes (no COD logic involved). Roll back
+or re-apply the same way: paste the `.original` or `.branded` file into
+Settings → Notifications → *(template)* → Edit code → Save.
+
+> Note: Shopify's code editor doesn't mark itself "unsaved" from a programmatic
+> paste alone — after pasting, type one character and delete it to enable Save.
