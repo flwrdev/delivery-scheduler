@@ -228,18 +228,21 @@ export function getAvailableTimeSlots(
   return rules.slots.map((slot) => ({ ...slot }));
 }
 
+// "Still sellable ⇒ still movable": a booking can be rescheduled online for as
+// long as its current delivery date is still bookable under the shop's schedule
+// rules (same cutoffHour semantics as storefront date selection). This keeps the
+// reschedule gate in parity with the merchant's configured lead time instead of
+// a hardcoded lead window.
 export function canRescheduleDelivery(
   deliveryDate: string,
   currentDate = new Date(),
-  timezone = "Asia/Manila",
+  rules: DeliveryScheduleRules = DEFAULT_DELIVERY_SCHEDULE_RULES,
 ): boolean {
   if (!isIsoDateString(deliveryDate)) {
     return false;
   }
 
-  const cutoffDate = addDays(deliveryDate, -2);
-  const currentLocalDate = getZonedNowParts(timezone, currentDate).date;
-  return currentLocalDate <= cutoffDate;
+  return deliveryDate >= getMinSelectableDate(rules, currentDate);
 }
 
 export function buildDeliveryTags(

@@ -5,6 +5,7 @@ import { RESCHEDULED_ORDER_TAG } from "../lib/constants";
 import {
   canRescheduleDelivery,
   validateDeliverySelection,
+  type DeliveryScheduleRules,
 } from "../lib/delivery-availability";
 import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
 import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
@@ -57,7 +58,6 @@ const CUSTOMER_RESCHEDULE_CLOSED_MESSAGE =
   "This delivery can no longer be rescheduled online because the delivery date is too close or has already passed. Please contact us for manual assistance.";
 const CUSTOMER_RESCHEDULE_FULFILLED_MESSAGE =
   "This order can no longer be rescheduled online because it is already being prepared or has been fulfilled. Please contact us for manual assistance.";
-const CUSTOMER_RESCHEDULE_TIMEZONE = "Asia/Manila";
 const ONLINE_RESCHEDULE_BLOCKED_FULFILLMENT_STATUSES = new Set([
   "FULFILLED",
   "PARTIALLY_FULFILLED",
@@ -151,6 +151,7 @@ function getCurrentDeliveryTimeSlot(order: {
 
 function isCurrentDeliveryDateTooCloseOrPast(
   currentDeliveryDate: string | null | undefined,
+  scheduleRules: DeliveryScheduleRules,
   now = new Date(),
 ): boolean {
   if (
@@ -160,11 +161,7 @@ function isCurrentDeliveryDateTooCloseOrPast(
     return true;
   }
 
-  return !canRescheduleDelivery(
-    currentDeliveryDate,
-    now,
-    CUSTOMER_RESCHEDULE_TIMEZONE,
-  );
+  return !canRescheduleDelivery(currentDeliveryDate, now, scheduleRules);
 }
 
 function createHmacKey(secret: string): Uint8Array {
@@ -458,8 +455,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
+    // Reuse the shared delivery rules contract here so the customer-account flow stays
+    // in parity with storefront and admin availability decisions. This order's own
+    // booking is excluded from the counts so it cannot block itself out of a slot.
+    const scheduleRules = await getScheduleRulesWithBookedCounts(shop, admin, {
+      excludeOrderId: orderGid,
+    });
+
     const currentDeliveryDate = getCurrentDeliveryDate(order);
-    if (isCurrentDeliveryDateTooCloseOrPast(currentDeliveryDate)) {
+    if (isCurrentDeliveryDateTooCloseOrPast(currentDeliveryDate, scheduleRules)) {
       return jsonResponse(
         request,
         {
@@ -470,13 +474,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         422,
       );
     }
-
-    // Reuse the shared delivery rules contract here so the customer-account flow stays
-    // in parity with storefront and admin availability decisions. This order's own
-    // booking is excluded from the counts so it cannot block itself out of a slot.
-    const scheduleRules = await getScheduleRulesWithBookedCounts(shop, admin, {
-      excludeOrderId: orderGid,
-    });
     const validation = validateDeliverySelection(scheduleRules, date, timeSlot);
     if (!validation.ok) {
       return jsonResponse(

@@ -322,7 +322,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (
     !currentDeliveryDate ||
     !isValidDate(currentDeliveryDate) ||
-    !canRescheduleDelivery(currentDeliveryDate, new Date(), scheduleRules.timezone)
+    !canRescheduleDelivery(currentDeliveryDate, new Date(), scheduleRules)
   ) {
     return jsonError(RESCHEDULE_CLOSED_MESSAGE, 422, request);
   }
