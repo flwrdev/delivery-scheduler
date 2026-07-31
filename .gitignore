@@ -43,3 +43,7 @@ shopify.app.toml.bak.*
 .cursor/
 .gemini/
 .mcp.json
+
+# Per-repo isolated browser profiles (chrome-devtools + playwright MCP)
+# Defined in .mcp.json via --userDataDir/--user-data-dir ${CLAUDE_PROJECT_DIR}/.browser/.
+.browser/

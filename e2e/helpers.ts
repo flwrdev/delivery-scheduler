@@ -79,7 +79,7 @@ async function resolveAdminAccessToken(options: AdminFetchOptions): Promise<stri
 export async function adminGraphQL<T>(options: AdminFetchOptions): Promise<AdminGraphQLResponse<T>> {
   const adminAccessToken = await resolveAdminAccessToken(options);
 
-  // Keep in lockstep with the app's pinned API version (shopify.app.toml).
+  // Keep in lockstep with the app's pinned API version (shopify.app.production.toml).
   const response = await fetch(`https://${options.shopDomain}/admin/api/2026-04/graphql.json`, {
     method: "POST",
     headers: {

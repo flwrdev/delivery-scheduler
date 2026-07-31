@@ -12,9 +12,9 @@
 
 **Last full re-verification:** 2026-07-04
 **Canonical truth:** this doc. Any conflict with `../../docs/delivery-operations-architecture.md` (older, drifted) is resolved in favor of this file — see [§ Superseded documents](#superseded-documents).
-**Workflow:** before editing any file under `delivery-scheduler/app/`, `extensions/`, `prisma/`, or `shopify.app.toml`, read this doc first; after the edit, update the relevant doc(s) + add a new entry to [verification-log.md](./verification-log.md) dated today. The project skill `delivery-scheduler-architecture` (in `.claude/skills/`) enforces this loop for future Claude Code agents.
+**Workflow:** before editing any file under `delivery-scheduler/app/`, `extensions/`, `prisma/`, or `shopify.app.toml`/`shopify.app.production.toml`, read this doc first; after the edit, update the relevant doc(s) + add a new entry to [verification-log.md](./verification-log.md) dated today. The project skill `delivery-scheduler-architecture` (in `.claude/skills/`) enforces this loop for future Claude Code agents.
 
-Verified against `app/`, `extensions/`, `prisma/schema.prisma`, `shopify.app.toml`.
+Verified against `app/`, `extensions/`, `prisma/schema.prisma`, `shopify.app.toml` (dev), `shopify.app.production.toml` (prod).
 Lahat ng nodes/edges sa baba ay may corresponding file or config.
 
 ---

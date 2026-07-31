@@ -110,7 +110,7 @@ Update the Cloud Run service with the actual public URL:
 gcloud run services update delivery-scheduler --region us-central1 --update-env-vars SHOPIFY_APP_URL=https://YOUR_SERVICE_URL
 ```
 
-Then update `shopify.app.toml` to use that same URL for:
+Then update `shopify.app.production.toml` to use that same URL for:
 
 - `application_url`
 - `redirect_urls`
@@ -119,7 +119,7 @@ Then update `shopify.app.toml` to use that same URL for:
 Finally sync the Shopify app config:
 
 ```powershell
-npm run deploy -- --allow-updates
+npm run deploy:prod
 ```
 
 ## 6. Storefront Access Token (for the `/apps/schedule-rules/products` route)

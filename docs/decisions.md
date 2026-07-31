@@ -199,3 +199,17 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 **Consequence:** New enforcement code must go through `findSlotOverrideKey`, never `map[slotValue]` / `includes(slotValue)` — a raw lookup silently re-opens the counted-but-not-enforced split. Pruning belongs to the read: ops and routes must not delete override entries to work around a validation failure (`clearDayOverride` stays the only intentional per-date wipe, and a day-level block must not rewrite that date's per-slot config). Merchants see a drifted/orphaned key as a config-health banner on `/app/scheduler` instead of a dead editor. Stored shapes and column set are unchanged.
 
 **Status:** Accepted; implemented 2026-07-29.
+
+---
+
+## ADR-14 — `shopify.app.toml` (unnamed default) is DEV; PROD moved to `shopify.app.production.toml`
+
+**Source:** verification log 2026-07-31.
+
+**Context:** The 2026-07-13 incident (`docs/changelog.md`, `deploy-prod` SKILL.md) had a bare `npm run deploy` release to the DEV app instead of PROD because the Shopify CLI can cache the last-used `--config` selection across sessions, independent of which toml file is the unnamed default. Before this ADR, the unnamed `shopify.app.toml` held the PROD config (client_id `a9127e5f…`) and the DEV config lived at the explicitly-named `shopify.app.delivery-scheduler-dev.toml` — meaning any command run without a `--config` flag (or with a stale cached selection) defaulted toward PROD, the more dangerous direction. Two local repos under active parallel development (`live-theme-clean`, a theme repo, and this app repo) were also fighting over a shared, unscoped browser-automation profile in Claude/Playwright/DevTools tooling, prompting a broader review of this repo's default-config hygiene.
+
+**Decision:** Swap which file is the unnamed default. `shopify.app.toml` is now the **DEV** config (was `shopify.app.delivery-scheduler-dev.toml`; client_id `51f7d1b7…`); the former default is renamed `shopify.app.production.toml` (**PROD**; client_id `a9127e5f…`, unchanged). Per-file settings (`automatically_update_urls_on_dev`, api_version, client_id, scopes) are untouched by the rename — only the filenames swapped. `npm run deploy` (bare) is disabled (prints a reminder, exits 1); `npm run deploy:dev` / `npm run deploy:prod` and `npm run dev` (now DEV by default) / `npm run dev:prod-preview` replace every ambiguous invocation in scripts and docs.
+
+**Consequence:** A bare `shopify app dev`/`deploy`, or a stale CLI cache, now resolves to DEV — the safe direction — instead of PROD. Every doc/script that referenced the old filenames (`CLAUDE.md`, `README.md`, `docs/development.md`, `docs/cloud-run-neon.md`, `docs/scheduler-v2-ux.md`, `e2e/README.md`, `.env.test.example`, `.claude/skills/deploy-prod/SKILL.md`) was updated in the same pass. Anyone with a local `shopify app config use delivery-scheduler-dev` cached selection should re-run `shopify app config use` (or just rely on the new default) — the named config `delivery-scheduler-dev` no longer resolves to a file on disk. Separately, `delivery-scheduler/.mcp.json` gained its own isolated `chrome-devtools`/`playwright` browser profiles (`${CLAUDE_PROJECT_DIR}/.browser/...`), matching the pattern already used in `live-theme-clean`, so the two repos' browser-automation tooling no longer shares a profile.
+
+**Status:** Accepted; implemented 2026-07-31.

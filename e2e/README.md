@@ -28,7 +28,7 @@ environment variables win over file values. `.env.test` is gitignored; never
 commit real values.
 
 - `APP_URL`: the deployed app, e.g. `https://delivery-scheduler-XXXX.us-central1.run.app`
-- `SHOPIFY_API_KEY`: `client_id` from `shopify.app.toml`
+- `SHOPIFY_API_KEY`: `client_id` from `shopify.app.production.toml`
 - `SHOPIFY_API_SECRET`: from the Partner Dashboard / Secret Manager
 - `SHOP_DOMAIN`: `hsrwva-nr.myshopify.com`
 - `ADMIN_ACCESS_TOKEN`: optional offline `shpua_…` token with `read_orders`

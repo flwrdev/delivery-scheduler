@@ -433,7 +433,8 @@ own truncation caps stayed silent under an `"ok"` `countsMeta` (now `"partial"`,
 - **Phase 5 — Cleanup + docs closeout.** Deletions (§8);
   architecture.md/api.md/known-issues/changelog/verification-log updates;
   final full smoke (§FST-style). **Production deploy is a separate,
-  merchant-gated step** (deploy-prod runbook; `--config shopify.app.toml`).
+  merchant-gated step** (deploy-prod runbook; `npm run deploy:prod`, config
+  `shopify.app.production.toml`).
 
 Testing note: everything lands under `test/**/*.test.ts` (vitest); no
 side-effecting e2e is required by this design (Playwright optional later).

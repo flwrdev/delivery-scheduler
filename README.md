@@ -38,8 +38,10 @@ npm run typecheck && npm run lint && npm run build
 
 ```bash
 gcloud run deploy delivery-scheduler --source . --region us-central1   # backend
-npm run deploy -- --allow-updates --config shopify.app.toml            # app config + extensions
+npm run deploy:prod                                                     # app config + extensions
 ```
 
-⚠️ Always pass `--config shopify.app.toml` on prod releases — a bare deploy
-can hit the cached dev-app config. Full runbook: [docs/cloud-run-neon.md](docs/cloud-run-neon.md).
+⚠️ Never run the bare `shopify app deploy` / `npm run deploy` — always use
+`npm run deploy:dev` or `npm run deploy:prod` explicitly. `shopify.app.toml` is
+the DEV config (default), `shopify.app.production.toml` is PROD. Full runbook:
+[docs/cloud-run-neon.md](docs/cloud-run-neon.md).
