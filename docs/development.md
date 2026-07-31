@@ -23,29 +23,31 @@ npx prisma studio          # inspect Postgres data locally
 
 ## Testing notes
 
-> ⚠️ **Embedded-admin smoke tests ALWAYS hit the deployed Cloud Run build, not
-> your working tree (verified live 2026-07-11).** `shopify.app.toml` sets
+> ⚠️ **`npm run dev` (default, no flags) now runs against the separate DEV
+> app — the safe default since the 2026-07-31 config swap (ADR-14).**
+> `shopify.app.toml` (unnamed/default file) is `delivery-scheduler-DEV` (own
+> client_id `51f7d1b7…`, installed on the dev store `flowercart-dev` only,
+> `automatically_update_urls_on_dev = true` is safe on this config because
+> it's a distinct app). Open the app in the `flowercart-dev` admin — the
+> iframe then serves your working tree from the tunnel. Caveat: verify the
+> dev app's webhook `api_version` in `shopify.app.toml` before trusting it
+> for webhook-parity tests — it has drifted from prod's `2026-04` pin before.
+>
+> **To smoke-test against the deployed PROD build instead** (verified live
+> 2026-07-11): run `npm run dev:prod-preview` (`--config shopify.app.production.toml`).
+> Embedded-admin smoke tests through THAT config ALWAYS hit the deployed
+> Cloud Run build, not your working tree — `shopify.app.production.toml` sets
 > `automatically_update_urls_on_dev = false`, and the SAME app (client_id
 > `a9127e5f…`, handle `delivery-scheduler-11`) is installed on both the
 > production store (`hsrwva-nr`) and the dev store (`flowercart-dev`). So even
-> with `npm run dev` running, opening the app in EITHER store's admin — via the
-> sidebar, a direct URL, or the dev-console "Web" preview link — loads the
-> registered `application_url` (Cloud Run) in the `app-iframe`, i.e. the last
-> DEPLOYED build. Do not flip `automatically_update_urls_on_dev` to `true` on
-> this config: it would repoint the production app's URL at your tunnel while
-> dev runs. To smoke-test app-home changes you must either (a) deploy to Cloud
-> Run first, or (b) run dev against the SEPARATE dev app. See the
-> 2026-07-11 verification-log rows.
->
-> **Option (b) exists since 2026-07-11:** `shopify.app.delivery-scheduler-dev.toml`
-> (name `delivery-scheduler-DEV`, own client_id `51f7d1b7…`, installed on the
-> dev store `flowercart-dev` only). Run
-> `npm run dev -- --config delivery-scheduler-dev` and open the app in the
-> flowercart-dev admin — the iframe then serves your working tree from the
-> tunnel (`automatically_update_urls_on_dev = true` is safe on THAT config
-> because it is a distinct app). Caveat: the dev app's webhook
-> `api_version` is `2026-10` (prod pins `2026-04`) — fine for app-home smoke
-> tests, but don't use the dev app for webhook-parity testing.
+> with `dev:prod-preview` running, opening the app in EITHER store's admin —
+> via the sidebar, a direct URL, or the dev-console "Web" preview link — loads
+> the registered `application_url` (Cloud Run) in the `app-iframe`, i.e. the
+> last DEPLOYED build, NOT your tunnel. Do not flip
+> `automatically_update_urls_on_dev` to `true` on `shopify.app.production.toml`:
+> it would repoint the production app's URL at your tunnel while dev runs. To
+> smoke-test app-home changes against your working tree, use the default
+> `npm run dev` (DEV app) instead. See the 2026-07-11 verification-log rows.
 
 > **Customer-account extension dev-testing caveat (2026-07-13).** The
 > `delivery-reschedule-customer` extension hardcodes `APP_BASE_URL` to the
@@ -75,7 +77,7 @@ Vitest is configured standalone (`vitest.config.ts`) — Node environment by def
 - **Double cold-start (Cloud Run + Neon).** Cloud Run scales to zero (`--min-instances 0`) and Neon Free Postgres auto-suspends when idle. Any route that resolved a Prisma/Neon session woke *both* on the first hit of the day, giving a 4–7s delay. Fixed for the product-pagination route by dropping its session lookup (manual App Proxy signature verification + Storefront API) — see [verification log 2026-07-02](./verification-log.md) and [decisions.md ADR-2/ADR-3/ADR-6](./decisions.md). A plain Cloud Run container cold start is still possible on the first hit of the day; the stronger fix (theme calling the Storefront API directly) was deferred to the separate theme repo.
 - **Hosting setup / secrets.** See [`cloud-run-neon.md`](./cloud-run-neon.md) — the recommended low-cost Cloud Run + Neon Free path. Section **§6** covers the Storefront Access Token setup specifically.
 - **`SHOPIFY_STOREFRONT_ACCESS_TOKEN` — manual one-time setup.** Required by `apps.schedule-rules.products.ts`. Configure it in **both** local `.env` and the Cloud Run secret (same pattern as `SHOPIFY_API_SECRET`). If unset, that route returns `502` — it does not fall back to the Admin API. Full steps in [`cloud-run-neon.md` §6](./cloud-run-neon.md).
-- **API version pin.** `shopify.app.toml` uses `2026-04`.
+- **API version pin.** `shopify.app.production.toml` (PROD) pins `2026-04`; verify `shopify.app.toml` (DEV) separately, it has drifted before.
 
 ## Auth mechanisms (dev-workflow angle)
 

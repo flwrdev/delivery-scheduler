@@ -30,7 +30,8 @@ a first-glance mental model.
 ## Commands
 
 ```bash
-npm run dev        # shopify app dev (tunnel + local dev; does NOT auto-apply migrations)
+npm run dev        # shopify app dev against the DEV app (default, safe); does NOT auto-apply migrations
+npm run dev:prod-preview # shopify app dev against the PROD app config (read-only preview; automatically_update_urls_on_dev=false there)
 npm run build      # react-router build
 npm run start      # react-router-serve ./build/server/index.js
 npm run typecheck  # react-router typegen && tsc --noEmit
@@ -45,19 +46,22 @@ npx playwright test --config e2e/playwright.config.ts # e2e (separate from vites
 
 # Production deploys (merchant go required — stop-and-ask gate):
 gcloud run deploy delivery-scheduler --source . --region us-central1   # backend (project lalamove-map)
-npm run deploy -- --allow-updates --config shopify.app.toml            # app config + extensions to the PROD app
-# ⚠️ ALWAYS pass --config shopify.app.toml on prod releases — a bare `npm run deploy`
-# can release to the DEV app instead (the CLI caches the last-used config; seen 2026-07-13).
+npm run deploy:prod                                                     # app config + extensions to the PROD app
+# ⚠️ NEVER use the bare `shopify app deploy` / `npm run deploy` — always npm run deploy:dev
+# or npm run deploy:prod explicitly. (shopify.app.toml = DEV, shopify.app.production.toml = PROD,
+# swapped 2026-07-31 after a bare deploy hit the DEV app on 2026-07-13; see ADR-14.)
 ```
 
 Only `test/**/*.test.{ts,tsx}` are picked up by vitest; `e2e/` specs are excluded and
-run separately. API version is pinned to `2026-04` in `shopify.app.toml`. Full dev /
-testing / deployment (Cloud Run + Neon cold-start) notes are in `docs/development.md`.
+run separately. API version is pinned per config: `2026-04` in `shopify.app.production.toml`
+(prod), `2026-04` in `shopify.app.toml` (dev — see `docs/development.md` for any drift
+between the file and what's live on Partners). Full dev / testing / deployment (Cloud Run +
+Neon cold-start) notes are in `docs/development.md`.
 
 ## Read before editing (source of truth)
 
 Read in this order before touching `app/`, `extensions/`, `prisma/`,
-or `shopify.app.toml`:
+or `shopify.app.toml` / `shopify.app.production.toml`:
 
 1. `docs/architecture.md` — system topology + data model (source of truth)
 2. `docs/api.md` — routes, auth mechanisms, order write-path contract
