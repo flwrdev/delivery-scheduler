@@ -135,7 +135,7 @@ The four delivery-schedule write paths (the 4th — merchant reschedule — adde
 
 **`orders/create` failure contract (hardened 2026-07-29):** the handler is failure-tolerant end to end — the rules read (its Postgres hit included) and both sync calls are individually guarded, so an upstream/Neon failure logs and returns 200 instead of a 5xx that Shopify retries and eventually flags the subscription for. The counts read passes `excludeOrderId` for the order being synced, so a webhook redelivery (whose `custom.date` is already written) can no longer count the order against its own slot and stamp a legal in-capacity order `attention:capacity`. A truncated counts scan (`countsMeta.status: "partial"`, see [scheduler-v2-ux.md §5](./scheduler-v2-ux.md)) is logged alongside the `"error"` case; the capacity check still runs fail-open either way.
 
-**Merchant path validation (administrative override, ADR-10 / §5 matrix):** `validateMerchantRescheduleSelection` hard-enforces only data integrity (date format, slot exists, blocked date/slot); slot capacity is warn + explicit confirm override (server responds `capacity_override_required` with the projected load unless `capacityOverride=1`; the projection's "already in the target date+slot" test compares the slot through the canonical comparator and the date as an exact ISO string, so a drifted stored spelling no longer double-counts an order that is not moving); the customer gates (`resched` lock, `≥2-days`, `FULFILLED`, cutoff/prep window, `maxDays`) deliberately do NOT apply. Per REC-5 (declined hardening) the merchant op has **no pre-write race-guard recheck** — the customer route keeps its own `RECHECK_ORDER_STATE_QUERY` behavior.
+**Merchant path validation (administrative override, ADR-10 / §5 matrix):** `validateMerchantRescheduleSelection` hard-enforces only data integrity (date format, slot exists, blocked date/slot); slot capacity is warn + explicit confirm override (server responds `capacity_override_required` with the projected load unless `capacityOverride=1`; the projection's "already in the target date+slot" test compares the slot through the canonical comparator and the date as an exact ISO string, so a drifted stored spelling no longer double-counts an order that is not moving); the customer gates (`resched` lock, current-date-still-bookable (`canRescheduleDelivery`), `FULFILLED`, cutoff/prep window, `maxDays`) deliberately do NOT apply. Per REC-5 (declined hardening) the merchant op has **no pre-write race-guard recheck** — the customer route keeps its own `RECHECK_ORDER_STATE_QUERY` behavior.
 
 **Important:** The `RESCHEDULED_ORDER_TAG = "resched"` constant is centralized in [`app/lib/constants.ts`](../app/lib/constants.ts).
 
@@ -228,7 +228,7 @@ sequenceDiagram
     CA_RE->>CA_RE: verify session token + shop/customer context
     CA_RE->>SADM: ORDER_CUSTOMER_QUERY (ownership + state)
     CA_RE->>CA_RE: verify customer owns order
-    CA_RE->>CA_RE: gate: not FULFILLED/IN_PROGRESS/SCHEDULED,<br/>no 'resched' tag,<br/>canRescheduleDelivery (≥2 days ahead)
+    CA_RE->>CA_RE: gate: not FULFILLED/IN_PROGRESS/SCHEDULED,<br/>no 'resched' tag,<br/>canRescheduleDelivery (current date still bookable<br/>per schedule rules cutoffHour)
     CA_RE->>Eng: validateDeliverySelection
     CA_RE->>SADM: RECHECK_ORDER_STATE_QUERY (race guard)
     CA_RE->>SADM: metafieldsSet (custom.date, custom.time_slot,<br/>$app.reschedule_status='confirmed',<br/>$app.reschedule_requested_at)
@@ -316,7 +316,7 @@ stateDiagram-v2
     Reschedulable --> Rescheduled: customer reschedule via /public/customer-account/reschedule
     Rescheduled --> Locked: 'resched' tag added (one online reschedule max)
     Reschedulable --> AdminOnly: displayFulfillmentStatus ∈<br/>{FULFILLED, PARTIALLY_FULFILLED,<br/>IN_PROGRESS, SCHEDULED}
-    Reschedulable --> AdminOnly: deliveryDate < today+2<br/>(timezone-aware,<br/>canRescheduleDelivery)
+    Reschedulable --> AdminOnly: deliveryDate no longer bookable<br/>(getMinSelectableDate / cutoffHour,<br/>canRescheduleDelivery)
     Locked --> AdminOnly
     AdminOnly --> [*]
 ```
