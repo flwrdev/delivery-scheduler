@@ -172,7 +172,7 @@ describe("sendMessengerGenericTemplate (phase 5 product carousel)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("POSTs the generic template attachment shape", async () => {
+  it("POSTs the generic template attachment shape (button-less, picture-tap default action)", async () => {
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ message_id: "mid.car" }), { status: 200 }),
     );
@@ -184,10 +184,7 @@ describe("sendMessengerGenericTemplate (phase 5 product carousel)", () => {
           title: "Sweet Heart",
           subtitle: "₱799",
           imageUrl: "https://cdn.shopify.com/sh.jpg",
-          buttons: [
-            { type: "postback", title: "Piliin ito", payload: "PRODUCT_gid://shopify/ProductVariant/111" },
-            { type: "web_url", title: "Tingnan sa website", url: "https://flowercart.store/products/sweet-heart" },
-          ],
+          defaultActionUrl: "https://flowercart.store/products/sweet-heart",
         },
       ],
     });
@@ -207,18 +204,10 @@ describe("sendMessengerGenericTemplate (phase 5 product carousel)", () => {
                 title: "Sweet Heart",
                 subtitle: "₱799",
                 image_url: "https://cdn.shopify.com/sh.jpg",
-                buttons: [
-                  {
-                    type: "postback",
-                    title: "Piliin ito",
-                    payload: "PRODUCT_gid://shopify/ProductVariant/111",
-                  },
-                  {
-                    type: "web_url",
-                    title: "Tingnan sa website",
-                    url: "https://flowercart.store/products/sweet-heart",
-                  },
-                ],
+                default_action: {
+                  type: "web_url",
+                  url: "https://flowercart.store/products/sweet-heart",
+                },
               },
             ],
           },
