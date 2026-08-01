@@ -47,9 +47,74 @@ export function estimateDeliveryFeePhp(roadKm: number): number {
   return Math.round(BASE_FARE_PHP + first + beyond + HANDLING_FEE_PHP);
 }
 
+// Merchant's flat quoting table ("Delivery Fees by City", Meta knowledge base,
+// updated 2026-07). This is what the agent QUOTES; checkout still charges the
+// Lalamove-computed rate for NCR.
+const CITY_FLAT_FEE_PHP: Record<string, number> = {
+  manila: 150,
+  malabon: 150,
+  navotas: 150,
+  valenzuela: 200,
+  mandaluyong: 200,
+  "san juan": 200,
+  makati: 200,
+  pasay: 200,
+  "quezon city": 200,
+  pasig: 250,
+  taguig: 250,
+  paranaque: 250,
+  "las pinas": 250,
+  marikina: 250,
+  pateros: 250,
+  muntinlupa: 300,
+};
+
+// Caloocan is split in the merchant's table: South P150, North P200.
+function caloocanFlatFee(zip: string): number {
+  return Number(zip) >= 1420 ? 200 : 150;
+}
+
+// Towns OUTSIDE Metro Manila from the same table — covered, pero conditional:
+// deliveries can take longer; advance booking recommended.
+const PROVINCIAL_AREAS: Array<{ name: string; province: string; feePhp: number }> = [
+  { name: "Meycauayan", province: "Bulacan", feePhp: 200 },
+  { name: "Marilao", province: "Bulacan", feePhp: 200 },
+  { name: "Obando", province: "Bulacan", feePhp: 200 },
+  { name: "Cainta", province: "Rizal", feePhp: 250 },
+  { name: "Taytay", province: "Rizal", feePhp: 250 },
+  { name: "Rodriguez (Montalban)", province: "Rizal", feePhp: 250 },
+  { name: "Antipolo", province: "Rizal", feePhp: 300 },
+  { name: "San Mateo", province: "Rizal", feePhp: 300 },
+  { name: "Binangonan", province: "Rizal", feePhp: 300 },
+  { name: "Angono", province: "Rizal", feePhp: 300 },
+  { name: "Bocaue", province: "Bulacan", feePhp: 300 },
+  { name: "Balagtas", province: "Bulacan", feePhp: 300 },
+  { name: "San Jose del Monte", province: "Bulacan", feePhp: 300 },
+  { name: "Cavite City", province: "Cavite", feePhp: 300 },
+  { name: "Bacoor", province: "Cavite", feePhp: 300 },
+  { name: "Imus", province: "Cavite", feePhp: 300 },
+  { name: "Kawit", province: "Cavite", feePhp: 300 },
+  { name: "Molino", province: "Cavite", feePhp: 300 },
+  { name: "Noveleta", province: "Cavite", feePhp: 400 },
+  { name: "Rosario", province: "Cavite", feePhp: 400 },
+  { name: "General Trias", province: "Cavite", feePhp: 450 },
+  { name: "Dasmariñas", province: "Cavite", feePhp: 450 },
+  { name: "San Pedro", province: "Laguna", feePhp: 450 },
+  { name: "Biñan", province: "Laguna", feePhp: 450 },
+  { name: "Santa Rosa", province: "Laguna", feePhp: 450 },
+  { name: "Cabuyao", province: "Laguna", feePhp: 450 },
+  { name: "Calamba", province: "Laguna", feePhp: 450 },
+];
+
+const PROVINCIAL_NOTE =
+  "Outside-Metro-Manila area: covered, but deliveries can take longer — advance booking is recommended (same-day not guaranteed).";
+
 export interface CoverageMatch extends NcrZipEntry {
   estimatedKm?: number;
   estimatedFeePhp?: number;
+  /** Merchant's flat quoted fee for this city/town (the fee the agent quotes). */
+  flatFeePhp?: number;
+  provincial?: boolean;
 }
 
 export interface CheckDeliveryCoverageInput {
@@ -58,22 +123,44 @@ export interface CheckDeliveryCoverageInput {
 }
 
 export type CheckDeliveryCoverageResult =
-  | { ok: true; covered: true; matches: CoverageMatch[]; feeNote: string }
+  | { ok: true; covered: true; matches: CoverageMatch[]; feeNote: string; provincialNote?: string }
   | { ok: true; covered: false; note: string }
   | { ok: false; error: string };
 
 const FEE_NOTE =
-  "Estimated fee only (straight-line based) — the exact fee is computed by Lalamove at checkout. Free shipping on orders P2,500 and up.";
+  "flatFeePhp is the shop's quoted delivery fee for that city. The exact checkout fee is Lalamove-computed and can differ slightly. Free shipping on orders P2,500 and up.";
+
+function flatFeeFor(entry: NcrZipEntry): number | undefined {
+  const cityNorm = entry.city
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+  if (cityNorm === "caloocan") {
+    return caloocanFlatFee(entry.zip);
+  }
+  return CITY_FLAT_FEE_PHP[cityNorm];
+}
 
 function toMatch(entry: NcrZipEntry): CoverageMatch {
+  const match: CoverageMatch = { ...entry, flatFeePhp: flatFeeFor(entry) };
   if (entry.lat === undefined || entry.lng === undefined) {
-    return { ...entry };
+    return match;
   }
   const roadKm =
     Math.round(haversineKm(PICKUP_POINT, { lat: entry.lat, lng: entry.lng }) * ROAD_FACTOR * 10) /
     10;
-  return { ...entry, estimatedKm: roadKm, estimatedFeePhp: estimateDeliveryFeePhp(roadKm) };
+  return { ...match, estimatedKm: roadKm, estimatedFeePhp: estimateDeliveryFeePhp(roadKm) };
 }
+
+const NORMALIZED_PROVINCIAL = PROVINCIAL_AREAS.map((p) => ({
+  p,
+  nameNorm: p.name
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim(),
+}));
 
 function normalize(value: string): string {
   return value
@@ -129,22 +216,42 @@ export function checkDeliveryCoverage(
   }
 
   if (areaNorm) {
-    // City-level match first, then area substring both directions.
+    // NCR: city-level match first, then area substring both directions.
     const cityMatches = NORMALIZED_ENTRIES.filter(
       ({ cityNorm }) => cityNorm === areaNorm || areaNorm.includes(cityNorm),
     );
-    const pool = cityMatches.length
+    const ncrPool = cityMatches.length
       ? cityMatches
       : NORMALIZED_ENTRIES.filter(
           ({ areaNorm: candidate }) =>
             candidate.includes(areaNorm) || (areaNorm.length >= 4 && areaNorm.includes(candidate)),
         );
-    if (pool.length) {
+
+    // Provincial towns from the merchant's fee table. Names like "Dasmarinas"
+    // exist BOTH as an NCR village and a Cavite city — return both and let the
+    // agent ask the customer which one they mean.
+    const provincial = NORMALIZED_PROVINCIAL.filter(
+      ({ nameNorm }) =>
+        nameNorm.includes(areaNorm) || (areaNorm.length >= 4 && areaNorm.includes(nameNorm)),
+    );
+
+    if (ncrPool.length || provincial.length) {
+      const matches: CoverageMatch[] = [
+        ...ncrPool.slice(0, MAX_MATCHES).map((candidate) => toMatch(candidate.entry)),
+        ...provincial.slice(0, MAX_MATCHES).map(({ p }) => ({
+          area: p.name,
+          zip: "",
+          city: `${p.name}, ${p.province}`,
+          flatFeePhp: p.feePhp,
+          provincial: true,
+        })),
+      ].slice(0, MAX_MATCHES + 2);
       return {
         ok: true,
         covered: true,
-        matches: pool.slice(0, MAX_MATCHES).map((p) => toMatch(p.entry)),
+        matches,
         feeNote: FEE_NOTE,
+        ...(provincial.length ? { provincialNote: PROVINCIAL_NOTE } : {}),
       };
     }
   }
@@ -152,6 +259,6 @@ export function checkDeliveryCoverage(
   return {
     ok: true,
     covered: false,
-    note: "That place is not in the Metro Manila delivery list — deliveries are within Metro Manila only.",
+    note: "That place is not in the delivery coverage list.",
   };
 }

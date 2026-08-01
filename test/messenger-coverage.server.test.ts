@@ -86,6 +86,51 @@ describe("checkDeliveryCoverage", () => {
   });
 });
 
+describe("flat per-city delivery fees (merchant's quoting table, 2026-07)", () => {
+  it("quotes P150 for Manila and P200 for QC", () => {
+    const manila = checkDeliveryCoverage({ zip: "1000" });
+    if (manila.ok && manila.covered) {
+      expect(manila.matches[0].flatFeePhp).toBe(150);
+    }
+    const qc = checkDeliveryCoverage({ area: "Quezon City" });
+    if (qc.ok && qc.covered) {
+      expect(qc.matches[0].flatFeePhp).toBe(200);
+    }
+  });
+
+  it("splits Caloocan by zip: South (14:00-19) = P150, North (1420+) = P200", () => {
+    const south = checkDeliveryCoverage({ zip: "1405" });
+    if (south.ok && south.covered) {
+      expect(south.matches[0].flatFeePhp).toBe(150);
+    }
+    const north = checkDeliveryCoverage({ zip: "1425" });
+    if (north.ok && north.covered) {
+      expect(north.matches[0].flatFeePhp).toBe(200);
+    }
+  });
+
+  it("covers provincial towns from the fee table with their flat fee and a condition note", () => {
+    // "Dasmariñas" is BOTH a Makati village and a Cavite city — both returned.
+    const dasma = checkDeliveryCoverage({ area: "Dasmariñas" });
+    expect(dasma).toMatchObject({ ok: true, covered: true });
+    if (dasma.ok && dasma.covered) {
+      const cavite = dasma.matches.find((m) => m.provincial);
+      expect(cavite?.flatFeePhp).toBe(450);
+      expect(dasma.provincialNote).toBeTruthy();
+    }
+
+    const meycauayan = checkDeliveryCoverage({ area: "meycauayan" });
+    if (meycauayan.ok && meycauayan.covered) {
+      expect(meycauayan.matches[0].flatFeePhp).toBe(200);
+    }
+  });
+
+  it("still rejects places in neither list", () => {
+    const result = checkDeliveryCoverage({ area: "Baguio" });
+    expect(result).toMatchObject({ ok: true, covered: false });
+  });
+});
+
 describe("delivery fee estimation (Lalamove motorcycle + handling fee)", () => {
   it("computes haversine distance within tolerance (pickup to Makati CPO ~10km)", async () => {
     const { haversineKm, PICKUP_POINT } = await import(
