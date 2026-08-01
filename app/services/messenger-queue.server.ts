@@ -84,8 +84,12 @@ export async function enqueueMessengerEchoTask({
             },
             body: Buffer.from(rawPayload, "utf8").toString("base64"),
           },
-          // Bounded so a hung worker attempt fails fast and retries.
-          dispatchDeadline: "30s",
+          // Bounded so a hung worker attempt eventually retries — but generous
+          // enough for a multi-tool LLM turn. 30s caused LIVE duplicate replies
+          // (2026-08-02 smoke test): Cloud Tasks re-dispatched while the first
+          // attempt was still mid-LLM, and both attempts sent before repliedAt
+          // was written. Keep this comfortably above the worst-case turn.
+          dispatchDeadline: "180s",
         },
       }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),

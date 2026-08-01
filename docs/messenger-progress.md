@@ -263,3 +263,30 @@ Page fields na isu-subscribe (eksaktong 5): `messages`, `messaging_postbacks`,
   tap; laging get_product_details muna bago i-quote ang napiling product.
 - Tests: 363/363 (products service, generic template caps, postback recording, carousel
   attach/failure/empty sa agent loop).
+
+## Phase 6 — Draft order + invoice (2026-08-02, PENDING scope approval)
+
+**Gate:** one order in Shopify, never two. (Built + unit-proven; live gate test naka-hold
+hanggang ma-approve ng merchant ang bagong scopes.)
+
+- `app/services/messenger-orders.server.ts` — NEW: slot-filling state machine (code
+  advances state, LLM language lang; fields sa fixed order product→date→slot→recipient→
+  address→phone; jump-back clears only that field) + idempotent draftOrderCreate.
+- Idempotency: conversationOrderKey (UUID) sa Neon BAGO ang anumang Shopify call; dala ng
+  draft bilang custom attribute + tag `mo-key-<uuid>`; check-before-create; ambiguous/
+  timeout → lookup-by-tag adopt, never blind retry; stale-key guard; created-replay =
+  zero Shopify calls. Gate tests: duplicate mid, timeout-retry, replay — laging ISANG create.
+- Frozen shapes: draft carries "Delivery Date"/"Delivery Time" customAttributes + [date,
+  slot] tags (exact checkout shape) + `messenger` tag; existing orders/create sync ang
+  bahala sa metafields pag nabayaran ang invoice. reserveInventoryUntil 15 min.
+- Deterministic CONFIRM: [TAP] CONFIRM_ORDER_<key> ay code path, hindi LLM; code-composed
+  ang summary (Confirm ✅ / Baguhin quick replies) at ang confirm reply.
+- Webhook: quick_reply.payload recorded na bilang "[TAP] <payload>" (dating title lang).
+- **ENV GATE**: MESSENGER_ORDERS_ENABLED=true ang kailangan bago mag-alok ng ordering ang
+  bot — naka-OFF by default dahil kailangan pa ng read/write_draft_orders scopes
+  (config deploy + merchant re-approval sa store) bago gumana ang draftOrderCreate.
+- Gate-review adds (main agent): sanitizeMessengerText (markdown strip sa lahat ng sends;
+  live smoke test nakakita ng literal **), search_products purpose=lookup (walang carousel
+  sa pagpili ng pangalan), Cloud Tasks dispatchDeadline 30s→180s (live duplicate-reply fix).
+- Tests: 418/418. New migration 20260802000000 (orderStateJson + conversationOrderKey sa
+  MessengerThread) — auto-applied sa prod via docker-start; sa local: npm run setup.

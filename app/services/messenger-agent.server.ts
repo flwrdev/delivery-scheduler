@@ -20,11 +20,14 @@ import {
 } from "./messenger-llm.server";
 import type { LlmContentBlock, LlmMessage } from "./messenger-llm.server";
 import type { MessengerProduct, SearchShopProductsResult } from "./messenger-products.server";
+import { buildOrderSummaryText, confirmMessengerOrder } from "./messenger-orders.server";
+import type { UpdateOrderStateResult } from "./messenger-orders.server";
 import {
   MESSENGER_NOT_CONFIGURED_MESSAGE,
   sendMessengerGenericTemplate,
   sendMessengerTextMessage,
 } from "./messenger-send.server";
+import type { MessengerQuickReply } from "./messenger-send.server";
 
 // Messenger rejects text messages longer than 2000 chars.
 const MESSENGER_TEXT_LIMIT = 2000;
@@ -46,7 +49,14 @@ export type ProcessAgentTurnResult =
   | { status: "not_configured" }
   | { status: "retryable_failure"; error: string };
 
-function buildSystemPrompt(now: Date): string {
+// Phase-6 ordering is env-gated: the read/write_draft_orders scopes need a
+// config deploy + merchant re-approval before draft creation can work, so the
+// bot must not OFFER ordering until the merchant flips this on.
+export function messengerOrdersEnabled(): boolean {
+  return process.env.MESSENGER_ORDERS_ENABLED?.trim() === "true";
+}
+
+function buildSystemPrompt(now: Date, ordersEnabled: boolean): string {
   return [
     "You are FlowerBot, the customer service and sales assistant of The Flowercart, a flower shop in the Philippines that delivers within Metro Manila.",
     "",
@@ -65,13 +75,31 @@ function buildSystemPrompt(now: Date): string {
     "- After resolving a date, always echo it back WITH the weekday (e.g. \"Huwebes, Dec 24\") so the customer can catch a wrong parse.",
     "- Delivery time slots come ONLY from get_available_slots, and only for a resolved date. Never invent or offer a slot that is not in the tool result.",
     "- If the requested date is closed or full, offer the nearest available dates from the tool result.",
-    "- You cannot take orders or payments yet. If asked, say the ordering assistant is 'malapit na' and offer to check delivery dates, or hand them to the page for now.",
     "",
+    ...(ordersEnabled
+      ? []
+      : [
+          "- You cannot take orders or payments yet. If asked, say the ordering assistant is 'malapit na' and offer to check delivery dates, or hand them to the page for now.",
+          "",
+        ]),
+    ...(ordersEnabled
+      ? [
+          "ORDERING (you CAN take orders — collected step by step, saved by update_order):",
+          "- Details are collected in this exact order: bouquet → delivery date → time slot → recipient name → delivery address → recipient phone; card message and special instructions are optional. Ask ONLY for the next missing detail (the update_order result's 'missing' list is the source of truth for what has been collected — never rely on your own memory of the conversation).",
+          "- Call update_order EVERY time the customer gives or changes an order detail. The code validates and SAVES each field; a detail you did not pass to update_order does not exist.",
+          "- Product: pass the variant_id from search_products / get_product_details (or a [TAP] PRODUCT_ payload). Date: resolve_date first, then pass the ISO date. Slot: pass the exact slot value (a [TAP] SLOT_ payload carries it after 'SLOT_').",
+          "- Address: also pass address_area (barangay/city) or address_zip so coverage is checked. If the address is rejected as outside coverage, apologize and point to https://flowercart.store/pages/delivery-coverage.",
+          "- To CHANGE a detail ('baguhin ang petsa'), call update_order with clear=[that field] plus the new value if given. Never restart the whole order; everything else stays saved.",
+          "- When update_order returns readyToConfirm=true, a formatted order summary with a Confirm button is sent AUTOMATICALLY right after your reply — keep your text to one short line (e.g. 'Paki-check po ang summary sa baba 👇'), do NOT repeat the details, and do NOT say the order is placed.",
+          "- The order is placed ONLY after the customer taps Confirm; the system then creates it and sends the secure Shopify checkout link where they pay (online via Xendit or per the COD rules). Never claim an order is confirmed, reserved, or placed before that tap.",
+          "",
+        ]
+      : []),
     "PRODUCT DISCOVERY:",
     "- When the customer asks about products, available bouquets, prices, recommendations, or a budget, ALWAYS call search_products (use max_price/min_price for budgets like 'below 1000'). 'Ano mga available na bouquet niyo?' = search_products with no filters — never answer product questions from general knowledge or by just linking the website.",
     "- A product carousel (photos, live prices, buttons) is sent AUTOMATICALLY right after your reply whenever search_products returns products — so keep your text short (isang maikling intro lang, e.g. 'Heto po ang mga maganda naming options 🌸') and NEVER list the product names or prices in your text.",
     "- If search_products returns zero products, say walang exact match at i-suggest ang website, or ask for a different budget/keyword.",
-    "- The cards have NO buttons (tap on the picture opens the product page). The customer PICKS a bouquet by typing its name (e.g. 'yung Sweet Heart' or 'kunin ko na yung Autumn Morning'): call search_products with that name as the query, and when it clearly matches one product, confirm it with the LIVE price and offer the next step (delivery date check, or handoff to a person to place the order).",
+    "- The cards have NO buttons (tap on the picture opens the product page). The customer PICKS a bouquet by typing its name (e.g. 'yung Sweet Heart' or 'kunin ko na yung Autumn Morning'): call search_products with that name as the query AND purpose='lookup' (no carousel is sent for a lookup), and when it clearly matches one product, confirm it with the LIVE price and offer the next step.",
     "- A customer message that starts with [TAP] is a button tap, not typed text. [TAP] PRODUCT_<variantId> means they picked that product from an older card: ALWAYS call get_product_details with that variant id first (the card may be old — never trust its price), then confirm with the LIVE price.",
     "- If get_product_details says the variant is unavailable or not found, apologize briefly and offer to search alternatives.",
     "- If you cannot help or the customer asks for a human, tell them a person from The Flowercart will follow up in this thread.",
@@ -141,8 +169,35 @@ function isProductsResult(value: unknown): value is Extract<SearchShopProductsRe
   return candidate?.ok === true && Array.isArray(candidate.products);
 }
 
+function isOrderUpdateResult(value: unknown): value is Extract<UpdateOrderStateResult, { ok: true }> {
+  const candidate = value as { ok?: boolean; readyToConfirm?: unknown; state?: unknown };
+  return (
+    candidate?.ok === true &&
+    typeof candidate.readyToConfirm === "boolean" &&
+    typeof candidate.state === "object" &&
+    candidate.state !== null
+  );
+}
+
+// Deterministic CONFIRM path (phase 6): the [TAP] CONFIRM_ORDER_<key> payload
+// is handled by CODE — the LLM never decides whether an order is created.
+const CONFIRM_TAP_PATTERN = /^\[TAP\]\s+CONFIRM_ORDER_(.+)$/;
+
+const EDIT_ORDER_PAYLOAD = "EDIT_ORDER";
+
 function formatPricePhp(price: number): string {
   return `₱${price.toLocaleString("en-PH")}`;
+}
+
+// Messenger renders plain text only. The prompt already forbids markdown, but
+// the LLM slips (live 2026-08-02 smoke test: customers saw literal asterisks)
+// — so the code strips it deterministically before every send.
+export function sanitizeMessengerText(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1: $2")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/__([^_\n]+)__/g, "$1")
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s.,!?):;])/gm, "$1$2");
 }
 
 // Merchant decision (2026-08-02): WALANG buttons sa cards — natatakpan ng
@@ -159,6 +214,143 @@ function productCarouselElements(products: MessengerProduct[]) {
     }));
 }
 
+interface DeliverReplyArgs {
+  psid: string;
+  mid: string;
+  replyText: string;
+  quickReplies?: MessengerQuickReply[];
+  needsDisclosure: boolean;
+  /** Optional best-effort product carousel sent after the text. */
+  products?: MessengerProduct[] | null;
+}
+
+// Shared send + bookkeeping tail for both the LLM path and the deterministic
+// confirm path. Once the text send succeeds this MUST report success — a
+// Cloud Tasks retry after that point would send a duplicate.
+async function deliverReplyAndBookkeep({
+  psid,
+  mid,
+  replyText,
+  quickReplies,
+  needsDisclosure,
+  products,
+}: DeliverReplyArgs): Promise<ProcessAgentTurnResult> {
+  const finalReplyText = `${needsDisclosure ? `${BOT_DISCLOSURE}\n` : ""}${sanitizeMessengerText(
+    replyText,
+  )}`.slice(0, MESSENGER_TEXT_LIMIT);
+
+  let sendResult: Awaited<ReturnType<typeof sendMessengerTextMessage>>;
+  try {
+    sendResult = await sendMessengerTextMessage({
+      psid,
+      text: finalReplyText,
+      quickReplies,
+    });
+  } catch (error) {
+    return {
+      status: "retryable_failure",
+      error: error instanceof Error ? error.message : "Messenger send threw.",
+    };
+  }
+
+  if (!sendResult.ok) {
+    if (sendResult.error === MESSENGER_NOT_CONFIGURED_MESSAGE) {
+      return { status: "not_configured" };
+    }
+    return { status: "retryable_failure", error: sendResult.error };
+  }
+
+  // The reply is out — the carousel is best-effort: a failure after the text
+  // send must never trigger a retry.
+  if (products) {
+    const elements = productCarouselElements(products);
+    if (elements.length) {
+      const carousel = await sendMessengerGenericTemplate({ psid, elements });
+      if (carousel.ok) {
+        console.log(`[messenger-agent] product carousel sent mid=${mid} elements=${elements.length}`);
+      } else {
+        console.warn(`[messenger-agent] product carousel failed mid=${mid}: ${carousel.error}`);
+      }
+    }
+  }
+
+  try {
+    await prisma.messengerMessage.update({
+      where: { mid },
+      data: { repliedAt: new Date(), replyMid: sendResult.messageId },
+    });
+    await prisma.messengerMessage.create({
+      data: {
+        psid,
+        role: "bot",
+        bodyJson: JSON.stringify({ text: finalReplyText }),
+        mid: sendResult.messageId,
+      },
+    });
+    if (needsDisclosure) {
+      await prisma.messengerThread.update({
+        where: { psid },
+        data: { disclosedBot: true },
+      });
+    }
+  } catch (error) {
+    console.warn(
+      `[messenger-agent] reply bookkeeping failed for mid=${mid}: ${
+        error instanceof Error ? error.message : "unknown"
+      }`,
+    );
+  }
+
+  return { status: "sent", replyMid: sendResult.messageId };
+}
+
+// The confirm tap runs WITHOUT the LLM: code decides creation, code composes
+// the reply. Transient create failures surface as retryable_failure so the
+// Cloud Tasks retry re-runs the idempotent create (check-before-create makes
+// the replay converge on one draft order).
+async function processConfirmTap(
+  psid: string,
+  mid: string,
+  orderKey: string,
+  needsDisclosure: boolean,
+): Promise<ProcessAgentTurnResult> {
+  const result = await confirmMessengerOrder(psid, orderKey);
+  console.log(
+    `[messenger-agent] confirm tap mid=${mid} ok=${result.ok}${result.ok ? "" : ` code=${result.code}`}`,
+  );
+
+  if (!result.ok && result.code === "transient") {
+    return { status: "retryable_failure", error: result.error };
+  }
+
+  let replyText: string;
+  if (result.ok) {
+    replyText = [
+      result.alreadyCreated
+        ? "Na-create na po ang order ninyo kanina pa — heto ulit ang payment link:"
+        : `Salamat po! Na-create na ang order ninyo${
+            result.draftOrderName ? ` (${result.draftOrderName})` : ""
+          }. 🎉`,
+      "",
+      "Bayaran po dito para ma-book ang delivery (secure Shopify checkout):",
+      result.invoiceUrl,
+      "",
+      "Naka-reserve po ang bulaklak ng 15 minutes habang nagbabayad. Kapag nakabayad na, makakatanggap kayo ng confirmation email.",
+    ].join("\n");
+  } else if (result.code === "incomplete") {
+    replyText =
+      "May kulang pa po sa order details kaya hindi pa ito ma-confirm. Ituloy lang po natin — sabihin niyo lang ang susunod na detalye. 🌸";
+  } else if (result.code === "stale_key") {
+    replyText =
+      "Mukhang luma na po ang Confirm button na iyan (may binago tayo sa order). Paki-review ulit ang latest na summary bago i-confirm. 🌸";
+  } else {
+    replyText =
+      "Pasensya na po — nagka-technical issue sa pag-create ng order. Subukan ulit i-tap ang Confirm mamaya, o mag-iwan ng message at may taga-Flowercart na tutulong sa inyo.";
+  }
+
+  return deliverReplyAndBookkeep({ psid, mid, replyText, needsDisclosure });
+}
+
 export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTurnResult> {
   const message = await prisma.messengerMessage.findUnique({ where: { mid } });
   if (!message) {
@@ -169,6 +361,19 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   }
 
   const thread = await prisma.messengerThread.findUnique({ where: { psid: message.psid } });
+  const needsDisclosure = thread ? !thread.disclosedBot : true;
+
+  // Deterministic CONFIRM path — never routed through the LLM.
+  let inboundText = "";
+  try {
+    inboundText = String((JSON.parse(message.bodyJson) as { text?: unknown }).text ?? "");
+  } catch {
+    // Fall through — the history builder tolerates unparseable rows.
+  }
+  const confirmMatch = CONFIRM_TAP_PATTERN.exec(inboundText.trim());
+  if (confirmMatch) {
+    return processConfirmTap(message.psid, mid, confirmMatch[1].trim(), needsDisclosure);
+  }
 
   // Most-recent window, then chronological for the LLM. History is cut at the
   // current mid so rapid follow-ups are answered by their own tasks in order.
@@ -180,7 +385,11 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   const historyRows = [...recentRows].reverse();
 
   const now = new Date();
-  const system = buildSystemPrompt(now);
+  const ordersEnabled = messengerOrdersEnabled();
+  const system = buildSystemPrompt(now, ordersEnabled);
+  const tools = ordersEnabled
+    ? MESSENGER_AGENT_TOOLS
+    : MESSENGER_AGENT_TOOLS.filter((tool) => tool.name !== "update_order");
   const messages = historyToLlmMessages(historyRows, mid);
   if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
     // The conversation must end on the customer's message for the LLM turn.
@@ -190,9 +399,10 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   let finalText = "";
   let lastOpenSlots: Extract<GetAvailableDeliverySlotsResult, { available: true }> | null = null;
   let lastProducts: MessengerProduct[] | null = null;
+  let lastOrderReady: { orderKey: string; summaryText: string } | null = null;
 
   for (let iteration = 0; iteration < MAX_LLM_ITERATIONS; iteration += 1) {
-    const turn = await runLlmTurn({ system, messages, tools: MESSENGER_AGENT_TOOLS });
+    const turn = await runLlmTurn({ system, messages, tools });
     if (!turn.ok) {
       if (turn.notConfigured || turn.error === MESSENGER_LLM_NOT_CONFIGURED_MESSAGE) {
         console.error("[messenger-agent] LLM not configured — dropping turn");
@@ -219,13 +429,26 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
     messages.push({ role: "assistant", content: turn.blocks as LlmContentBlock[] });
     const results: LlmContentBlock[] = [];
     for (const toolUse of toolUses) {
-      const result = await executeAgentTool(toolUse.name, toolUse.input, now);
+      const result = await executeAgentTool(toolUse.name, toolUse.input, now, {
+        psid: message.psid,
+      });
       console.log(`[messenger-agent] tool ${toolUse.name} mid=${mid}`);
       if (toolUse.name === "get_available_slots" && isOpenSlotsResult(result)) {
         lastOpenSlots = result;
       }
       if (toolUse.name === "search_products" && isProductsResult(result) && result.products.length) {
-        lastProducts = result.products;
+        // purpose="lookup" = the customer is PICKING a named bouquet, not
+        // browsing — a carousel there is noise (live smoke-test feedback).
+        const purpose = (toolUse.input as { purpose?: unknown } | null)?.purpose;
+        lastProducts = purpose === "lookup" ? null : result.products;
+      }
+      if (toolUse.name === "update_order" && isOrderUpdateResult(result)) {
+        // The LATEST update decides: a later edit in the same turn can move
+        // the state back to collecting, dropping the confirm prompt.
+        lastOrderReady =
+          result.readyToConfirm && result.orderKey
+            ? { orderKey: result.orderKey, summaryText: buildOrderSummaryText(result.state) }
+            : null;
       }
       results.push({
         type: "tool_result",
@@ -240,86 +463,33 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
     return { status: "retryable_failure", error: "LLM produced no final text within the tool-loop limit." };
   }
 
-  const needsDisclosure = thread ? !thread.disclosedBot : true;
-  const replyText = `${needsDisclosure ? `${BOT_DISCLOSURE}\n` : ""}${finalText}`.slice(
-    0,
-    MESSENGER_TEXT_LIMIT,
-  );
-
-  // A carousel message right after would dismiss quick replies in the UI — a
-  // product turn keeps the carousel and drops the slot buttons.
-  const quickReplies =
-    lastOpenSlots && !lastProducts
-      ? lastOpenSlots.slots.slice(0, QUICK_REPLY_LIMIT).map((slot) => ({
-          title: slot.label.slice(0, QUICK_REPLY_TITLE_LIMIT),
-          payload: `SLOT_${slot.value}`,
-        }))
-      : undefined;
-
-  let sendResult: Awaited<ReturnType<typeof sendMessengerTextMessage>>;
-  try {
-    sendResult = await sendMessengerTextMessage({
-      psid: message.psid,
-      text: replyText,
-      quickReplies,
-    });
-  } catch (error) {
-    return {
-      status: "retryable_failure",
-      error: error instanceof Error ? error.message : "Messenger send threw.",
-    };
+  // Order ready → append the DETERMINISTIC summary (never the LLM's wording)
+  // and attach the Confirm / Baguhin quick replies (master doc Commitment
+  // rule: no draft order without an explicit confirmation tap).
+  let replyText = finalText;
+  let quickReplies: MessengerQuickReply[] | undefined;
+  if (lastOrderReady) {
+    replyText = `${finalText}\n\n${lastOrderReady.summaryText}`;
+    quickReplies = [
+      { title: "Confirm ✅", payload: `CONFIRM_ORDER_${lastOrderReady.orderKey}` },
+      { title: "Baguhin", payload: EDIT_ORDER_PAYLOAD },
+    ];
+  } else if (lastOpenSlots && !lastProducts) {
+    // A carousel message right after would dismiss quick replies in the UI —
+    // a product turn keeps the carousel and drops the slot buttons.
+    quickReplies = lastOpenSlots.slots.slice(0, QUICK_REPLY_LIMIT).map((slot) => ({
+      title: slot.label.slice(0, QUICK_REPLY_TITLE_LIMIT),
+      payload: `SLOT_${slot.value}`,
+    }));
   }
 
-  if (!sendResult.ok) {
-    if (sendResult.error === MESSENGER_NOT_CONFIGURED_MESSAGE) {
-      return { status: "not_configured" };
-    }
-    return { status: "retryable_failure", error: sendResult.error };
-  }
-
-  // The reply is out — from here on this attempt MUST report success, or a
-  // Cloud Tasks retry would send a duplicate. The carousel is best-effort for
-  // the same reason: a failure after the text send must never trigger a retry.
-  if (lastProducts) {
-    const elements = productCarouselElements(lastProducts);
-    if (elements.length) {
-      const carousel = await sendMessengerGenericTemplate({ psid: message.psid, elements });
-      if (carousel.ok) {
-        console.log(
-          `[messenger-agent] product carousel sent mid=${mid} elements=${elements.length}`,
-        );
-      } else {
-        console.warn(`[messenger-agent] product carousel failed mid=${mid}: ${carousel.error}`);
-      }
-    }
-  }
-
-  try {
-    await prisma.messengerMessage.update({
-      where: { mid },
-      data: { repliedAt: new Date(), replyMid: sendResult.messageId },
-    });
-    await prisma.messengerMessage.create({
-      data: {
-        psid: message.psid,
-        role: "bot",
-        bodyJson: JSON.stringify({ text: replyText }),
-        mid: sendResult.messageId,
-      },
-    });
-    if (needsDisclosure) {
-      await prisma.messengerThread.update({
-        where: { psid: message.psid },
-        data: { disclosedBot: true },
-      });
-    }
-  } catch (error) {
-    console.warn(
-      `[messenger-agent] reply bookkeeping failed for mid=${mid}: ${
-        error instanceof Error ? error.message : "unknown"
-      }`,
-    );
-  }
-
-  return { status: "sent", replyMid: sendResult.messageId };
+  return deliverReplyAndBookkeep({
+    psid: message.psid,
+    mid,
+    replyText,
+    quickReplies,
+    needsDisclosure,
+    // A carousel after the summary would dismiss the Confirm quick replies.
+    products: lastOrderReady ? null : lastProducts,
+  });
 }

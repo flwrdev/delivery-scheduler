@@ -126,3 +126,13 @@ Human-readable, newest-first narrative of the architecture history. Each line is
 - Kasama rin kaninang araw: km-based estimate ang primary fee quote (provincial towns
   geocoded, stale flat table removed), COD Metro Manila only, provincial same-day yes,
   website-audit knowledge (contact/self-service/policies/flower care).
+
+## 2026-08-02 — Messenger phase 6 build (env-gated) + live-defect fixes
+
+- Phase 6 draft order + invoice: state machine + idempotent create (messenger-orders
+  service), deterministic CONFIRM tap, quick-reply payload recording. ENV-GATED sa
+  MESSENGER_ORDERS_ENABLED (scopes read/write_draft_orders pending merchant approval).
+- Live fixes mula sa subagent smoke test: markdown sanitizer sa outgoing replies,
+  purpose=lookup (walang carousel sa name-pick), Cloud Tasks dispatchDeadline 180s
+  (duplicate-reply root cause), button-less carousel cards (default_action sa picture).
+- Prisma migration 20260802000000: MessengerThread.orderStateJson + conversationOrderKey.
