@@ -7,6 +7,60 @@
 
 ---
 
+## Phase 4 — LLM + slot tool
+
+**Date:** 2026-08-01
+**Gate:** "correct resolved date, correct available slots"
+**Gate result:** ✅ PASSED (2026-08-01, rev 00181-wlq) — apat na live test messages,
+lahat ng sagot na-verify laban sa aktwal na `DeliveryScheduleConfig`:
+
+| Test | Sagot ng bot | Verified |
+|---|---|---|
+| "pwede ba bukas?" (5:58 PM, lampas 5PM cutoff) | "Linggo, August 2" + 4 slots | ✓ Aug 2 2026 = Sunday; cutoff pushed min date sa bukas; slots = exact config |
+| "sa Sabado sana" | "Sabado po ay August 8" + slots | ✓ next-occurrence (Aug 1 ay Sabado → Aug 8) |
+| "available ba Dec 24?" | "Huwebes, Dec 24… hanggang Aug 26 lang" + nearest dates | ✓ Dec 24 2026 = Thursday; Aug 2 + maxDays 25 − 1 = Aug 26 EXACT; walang inimbentong availability |
+| "magkano ang roses?" (trick) | Walang presyo; ni-refer sa ordering assistant | ✓ truthfulness rule humawak — walang tool, walang presyo |
+
+**Provider (merchant-approved):** Claude Sonnet 5 via `@anthropic-ai/sdk`,
+nakapako sa `messenger-llm.server.ts` — ang nag-iisang provider-swap file.
+Secret `anthropic-api-key` sa Secret Manager (key validated 200 bago in-store;
+value hindi kailanman na-print). Env: `MESSENGER_SHOP` (plain).
+
+### Files (lahat sa commit 383966b)
+
+`messenger-llm.server.ts` (thin interface), `messenger-agent-tools.server.ts`
+(resolve_date — structured phrase input, arithmetic sa code, Asia/Manila,
+weekday echo EN+Fil; get_available_slots — direktang tawag sa scheduler
+engine, nearest-dates fallback), `messenger-agent.server.ts` (orchestrator:
+Neon history, Manila-datetime system prompt na may verbatim truthfulness
+rule, tool loop max 5, bot disclosure once, slot quick replies, repliedAt
+zero-duplicate bookkeeping), quick replies sa `messenger-send.server.ts`.
+Tests 327/327.
+
+### Deviations
+
+1. **Official Anthropic SDK** (hindi plain fetch tulad ng Messenger side) —
+   ang "no SDK wrapper" ng master doc ay para sa Messenger/Graph; ang LLM
+   ay nasa likod ng thin interface kaya nananatiling one-file swap.
+2. **Slot quick replies auto-attached ng code** (hindi ng LLM) mula sa
+   huling successful get_available_slots ng turn — "the LLM handles
+   language; the code advances state."
+3. **INCIDENT sa parehong araw (resolved):** habang ina-author ang phase-3
+   migration, ang `prisma migrate diff --shadow-database-url <live URL>` ay
+   nag-wipe ng Neon rows; narecover ang buong config via Neon time-travel
+   minuto bago magsara ang 6h window. Buong detalye + standing rule sa
+   `docs/known-issues.md` at verification-log.
+
+### Open questions
+
+1. Phase 5 next: product carousel (Generic Template, postback → variant,
+   live Shopify prices). Kakailanganin ng Storefront/Admin product reads.
+2. Token rotation (page token + siguraduhing hindi na kailangan i-rotate
+   ang Anthropic key na hindi dumaan sa chat) — nakatakdang LAST STEP bago
+   production-ready, per merchant.
+
+---
+
 ## Phase 3 — Queue + Neon
 
 **Date:** 2026-08-01
