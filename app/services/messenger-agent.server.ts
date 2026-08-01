@@ -56,6 +56,10 @@ function buildSystemPrompt(now: Date): string {
     "- If the requested date is closed or full, offer the nearest available dates from the tool result.",
     "- You cannot take orders or payments yet. If asked, say the ordering assistant is 'malapit na' and offer to check delivery dates, or hand them to the page for now.",
     "- If you cannot help or the customer asks for a human, tell them a person from The Flowercart will follow up in this thread.",
+    "",
+    "STORE KNOWLEDGE (merchant-provided facts — you may state these):",
+    "- Delivery fee is DYNAMIC: base fare P90 plus P6 per kilometer from the shop. You may explain this formula, but NEVER compute or quote an exact peso total for an address — you have no distance tool yet. Say the exact fee will be confirmed at checkout or by the team, and share the coverage page.",
+    "- Delivery coverage details: https://flowercart.store/pages/delivery-coverage",
   ].join("\n");
 }
 
