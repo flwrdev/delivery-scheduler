@@ -1,5 +1,24 @@
+// Delivery Schedule + COD fee notice — ONE Thank You page card
+// (purchase.thank-you.block.render).
+//
+// Merged 2026-07-31: the COD fee notice used to be its own block
+// (extensions/cod-fee-notice) rendered as a separate inset banner, which sat
+// on a different left gutter than this block's plain section. Both now render
+// inside one bordered card so the Thank You page reads as a single clean
+// "Delivery Schedule" unit; cod-fee-notice renders nothing and can be removed
+// from the checkout editor.
+//
+// COD detection: shopify.selectedPaymentOptions IS populated on the Thank You
+// page (verified live 2026-07-28) and manual COD arrives with type
+// "paymentOnDelivery" — NOT "manualPayment" (that type covers other manual
+// methods like bank deposit, which carry no COD fee). The +₱70 fee lands
+// POST-purchase via order edit (orders/create webhook), so Thank-You totals
+// never include it — the card shows the real amount to hand the rider.
+
 import '@shopify/ui-extensions/preact';
 import {render} from "preact";
+
+const DEFAULT_COD_FEE = 70;
 
 export default async () => {
   render(<Extension />, document.body);
@@ -17,21 +36,71 @@ function Extension() {
   const deliveryTime =
     getCartMetafieldValue(appMetafields, 'custom', 'time_slot') ??
     getAttributeValue(attributes, 'Delivery Time');
+  const hasSchedule = Boolean(deliveryDate || deliveryTime);
 
-  if (!deliveryDate && !deliveryTime) {
+  const cod = getCodNotice();
+
+  if (!hasSchedule && !cod) {
     return null;
   }
 
   return (
-    <s-section heading="Delivery Schedule">
+    <s-box border="base" borderRadius="base" padding="base">
       <s-stack direction="block" gap="base">
-        {deliveryDate ? (
-          <s-text>Date: {formatDisplayDate(deliveryDate)}</s-text>
+        {hasSchedule ? (
+          <s-stack direction="block" gap="small-200">
+            <s-heading>Delivery Schedule</s-heading>
+            {deliveryDate ? (
+              <s-text>Date: {formatDisplayDate(deliveryDate)}</s-text>
+            ) : null}
+            {deliveryTime ? <s-text>Time slot: {deliveryTime}</s-text> : null}
+          </s-stack>
         ) : null}
-        {deliveryTime ? <s-text>Time slot: {deliveryTime}</s-text> : null}
+        {hasSchedule && cod ? <s-divider /> : null}
+        {cod ? (
+          <s-stack direction="block" gap="small-200">
+            <s-heading>Cash on Delivery</s-heading>
+            <s-text>
+              A {cod.feeFormatted} COD fee has been added to your order.
+            </s-text>
+            {cod.totalFormatted ? (
+              <s-text type="emphasis">
+                Total to pay on delivery: {cod.totalFormatted}
+              </s-text>
+            ) : null}
+          </s-stack>
+        ) : null}
       </s-stack>
-    </s-section>
+    </s-box>
   );
+}
+
+function getCodNotice() {
+  const selectedOptions = shopify.selectedPaymentOptions?.value ?? [];
+  const isCashOnDelivery = selectedOptions.some(
+    (option) => option.type === 'paymentOnDelivery',
+  );
+  if (!isCashOnDelivery) {
+    return null;
+  }
+
+  const feeSetting = Number(shopify.settings.value?.fee_amount);
+  const fee =
+    Number.isFinite(feeSetting) && feeSetting > 0
+      ? feeSetting
+      : DEFAULT_COD_FEE;
+
+  const total = shopify.cost.totalAmount.value;
+  const currency = total?.currencyCode ?? 'PHP';
+  const totalWithFee = total ? Number(total.amount) + fee : null;
+
+  return {
+    feeFormatted: shopify.i18n.formatCurrency(fee, {currency}),
+    totalFormatted:
+      totalWithFee != null
+        ? shopify.i18n.formatCurrency(totalWithFee, {currency})
+        : null,
+  };
 }
 
 function getCartMetafieldValue(appMetafields, namespace, key) {
