@@ -9,13 +9,26 @@
 
 ## Phase 2 — Echo bot
 
-**Date:** 2026-07-27
+**Date:** 2026-08-01 (unang attempt 2026-07-27)
 **Gate:** "your own text comes back in Messenger"
-**Gate result:** ⏳ PENDING (code deployed, live echo hindi pa naitest) —
-Cloud Run rev `delivery-scheduler-00166-5ss` serving 100% (2026-07-27); post-deploy
-probes: root HEAD 200, GET verify 403 at POST 401 (designed degradation — wala pang
-secrets). Kailangan pa: merchant secrets → Meta dashboard callback + subscriptions →
-live echo test.
+**Gate result:** ✅ PASSED (2026-08-01) — merchant nag-send ng `hello` sa
+The Flowercart page, eksaktong `Echo: hello` ang balik nang isang beses.
+Log evidence (rev 00169-5xn, 04:44:01Z): `[messenger] echoed mid=m_ZQLJ…
+reply=m_t1VK…` — isang log line lang, patunay ng `is_echo` loop guard.
+
+**Saga papunta sa gate (lahat may live log evidence):**
+
+- ✅ Inbound: mula 2026-07-27 08:23Z, lahat ng events ay `messaging=1 standby=0`
+  (naayos ang routing/handover saga — Business Suite Inbox routing + sticky
+  thread control). Postbacks tama ang pag-skip.
+- ✅ `messenger-verify-token` proven: pumasa ang Meta callback verification.
+- ✅ `messenger-app-secret` proven: 0 rejected-signature sa 24h ng live POSTs.
+- ❌→✅ `messenger-page-token`: namatay ang v1 (`Graph API 401: session has
+  been invalidated…` — security-flux sa merchant FB account). 2026-07-27:
+  bagong token → Secret Manager version 2 → Cloud Run rev 00169-5xn.
+  2026-08-01: echo gate passed sa token v2.
+- Post-gate cleanup: tinanggal na ang TEMP diagnostic logs sa route
+  (entry-shape / standby / skipped-event) — pending redeploy ng backend.
 
 ### Evidence
 
@@ -59,6 +72,14 @@ live echo test.
    Drive folder — hindi pa naka-sync ang `flowercart-messenger-build` sa machine
    na ito; ang human ang mag-a-upload. (Files-to-copy para sa Drive: ang tatlong
    `app/` files sa itaas + ang route test.)
+6. **Page token na-proxy ni Claude (2026-07-27, explicit merchant authorization).**
+   Ang master-doc rule na "human pastes secrets only" ay ni-waive ng merchant
+   para ma-unblock ang gate: si Claude ang nag-generate ng token sa Meta
+   dashboard, nag-store sa Secret Manager (v2), at nag-update ng Cloud Run.
+   Ang token ay dumaan sa Claude session context. **Obligasyon: i-rotate ang
+   `messenger-page-token` (bagong generate + bagong secret version + bagong
+   revision) BAGO ideklarang production-ready.** Wala pa ring token sa repo
+   o sa docs.
 
 ### Config (walang values dito — pangalan lang)
 
