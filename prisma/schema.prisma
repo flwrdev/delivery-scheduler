@@ -44,6 +44,14 @@ model MessengerThread {
   disclosedBot      Boolean            @default(false)
   state             String             @default("idle")
   shopifyCustomerId String?
+  // Phase 6 slot-filling state machine: the fields collected so far for the
+  // in-progress order (JSON, see MessengerOrderState). Conversation state
+  // only — the order itself lives in Shopify (locked decision #1).
+  orderStateJson    String?
+  // Phase 6 idempotency guard: UUID written here BEFORE draftOrderCreate and
+  // carried on the draft order as both a custom attribute and a tag
+  // (mo-key-<uuid>). Check-before-create searches drafts by that tag.
+  conversationOrderKey String?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   messages          MessengerMessage[]

@@ -34,6 +34,12 @@ interface MessengerWebhookEvent {
     mid?: string;
     text?: unknown;
     is_echo?: boolean;
+    // Phase 6: quick-reply taps (slot buttons, order Confirm) arrive as a
+    // normal message whose text is the button TITLE; the machine-readable
+    // payload rides in quick_reply.payload.
+    quick_reply?: {
+      payload?: unknown;
+    };
   };
   // Phase 5: carousel button taps (messaging_postbacks). Postbacks carry no
   // mid — a synthetic pb:<psid>:<timestamp> key gives them the same dedupe.
@@ -116,7 +122,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       let mid: string;
       let text: string;
       const message = event.message;
-      if (message && !message.is_echo && typeof message.text === "string" && message.text) {
+      const quickReplyPayload =
+        message && !message.is_echo && typeof message.quick_reply?.payload === "string"
+          ? message.quick_reply.payload
+          : "";
+      if (message && quickReplyPayload) {
+        // Quick-reply tap: record the machine payload, never the button title
+        // (the payload is what the deterministic paths key on, e.g.
+        // CONFIRM_ORDER_<key>). Same [TAP] cue as postbacks.
+        if (typeof message.mid !== "string" || !message.mid) {
+          console.warn("[messenger] quick-reply event without mid — skipped");
+          continue;
+        }
+        mid = message.mid;
+        text = `[TAP] ${quickReplyPayload}`;
+      } else if (message && !message.is_echo && typeof message.text === "string" && message.text) {
         if (typeof message.mid !== "string" || !message.mid) {
           console.warn("[messenger] text message event without mid — skipped");
           continue;

@@ -23,6 +23,8 @@ import { checkDeliveryCoverage } from "./messenger-coverage.server";
 import type { CheckDeliveryCoverageInput } from "./messenger-coverage.server";
 import { getVariantLive, searchShopProducts } from "./messenger-products.server";
 import type { SearchShopProductsInput } from "./messenger-products.server";
+import { updateMessengerOrderState } from "./messenger-orders.server";
+import type { UpdateOrderStateInput } from "./messenger-orders.server";
 import type { LlmToolDefinition } from "./messenger-llm.server";
 import { unauthenticated } from "../shopify.server";
 
@@ -368,6 +370,13 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
         },
         min_price: { type: "number", description: "Optional minimum price in PHP." },
         max_price: { type: "number", description: "Optional maximum price in PHP." },
+        purpose: {
+          type: "string",
+          enum: ["browse", "lookup"],
+          description:
+            "browse (default) = the customer is exploring, a carousel will be sent. " +
+            "lookup = the customer is PICKING a specific bouquet by name — no carousel is sent.",
+        },
       },
       required: [],
     },
@@ -389,13 +398,69 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
       required: ["variant_id"],
     },
   },
+  {
+    name: "update_order",
+    description:
+      "Save order details the customer just gave (phase 6 ordering). Call this EVERY time the " +
+      "customer provides or changes an order detail — the tool validates and PERSISTS it; anything " +
+      "not saved here is lost. Required details are collected in this order: product (variant_id) → " +
+      "delivery_date (ISO, from resolve_date) → time_slot (an OPEN slot value for that date) → " +
+      "recipient_name → address (with address_area or address_zip for the coverage check) → phone. " +
+      "card_message and special_instructions are optional. To change a detail ('baguhin ang petsa'), " +
+      "pass clear=[\"delivery_date\"] plus the new value if given — never restart the order. " +
+      "The result lists what is still missing; when readyToConfirm=true a formatted summary with a " +
+      "Confirm button is sent to the customer automatically after your reply.",
+    input_schema: {
+      type: "object",
+      properties: {
+        variant_id: {
+          type: "string",
+          description: "gid://shopify/ProductVariant/... of the chosen bouquet (from search_products / get_product_details / a [TAP] PRODUCT_ payload).",
+        },
+        delivery_date: {
+          type: "string",
+          description: "ISO date YYYY-MM-DD from resolve_date. Never compute this yourself.",
+        },
+        time_slot: {
+          type: "string",
+          description: "Exact slot value from get_available_slots or a [TAP] SLOT_ payload (e.g. 9AM-12PM).",
+        },
+        recipient_name: { type: "string", description: "Full name of the recipient." },
+        address: { type: "string", description: "Complete delivery address as the customer typed it." },
+        address_area: {
+          type: "string",
+          description: "Barangay/area/city of the address — required (or address_zip) for the coverage check.",
+        },
+        address_zip: { type: "string", description: "Zip code of the address, if the customer gave one." },
+        phone: { type: "string", description: "Recipient's contact number." },
+        card_message: { type: "string", description: "Optional card message." },
+        special_instructions: {
+          type: "string",
+          description: "Optional rider/delivery instructions (e.g. surprise delivery, 'do not call recipient').",
+        },
+        clear: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Fields to clear before applying new values: product, delivery_date, time_slot, recipient_name, address, phone, card_message, special_instructions — or \"all\" to start a new order.",
+        },
+      },
+      required: [],
+    },
+  },
 ];
+
+export interface AgentToolContext {
+  /** The Messenger thread the turn belongs to (needed by stateful tools). */
+  psid?: string;
+}
 
 /** Dispatch a tool call from the orchestrator loop. Never throws. */
 export async function executeAgentTool(
   name: string,
   input: unknown,
   now = new Date(),
+  context: AgentToolContext = {},
 ): Promise<unknown> {
   try {
     if (name === "resolve_date") {
@@ -422,6 +487,23 @@ export async function executeAgentTool(
     if (name === "get_product_details") {
       const raw = (input ?? {}) as { variant_id?: string };
       return await getVariantLive(raw.variant_id ?? "");
+    }
+    if (name === "update_order") {
+      if (!context.psid) {
+        return { ok: false, error: "update_order needs a conversation context." };
+      }
+      // Validators are injected here so messenger-orders has no import cycle
+      // with this module (CODE validates; the LLM only relays language).
+      return await updateMessengerOrderState(
+        context.psid,
+        (input ?? {}) as UpdateOrderStateInput,
+        {
+          getVariant: getVariantLive,
+          getSlots: getAvailableDeliverySlots,
+          checkCoverage: checkDeliveryCoverage,
+        },
+        now,
+      );
     }
     return { ok: false, error: `Unknown tool: ${name}` };
   } catch (error) {

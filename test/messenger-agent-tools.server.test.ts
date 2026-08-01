@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { rulesMock, adminMock } = vi.hoisted(() => ({
+const { rulesMock, adminMock, updateOrderMock } = vi.hoisted(() => ({
   rulesMock: vi.fn(),
   adminMock: vi.fn(),
+  updateOrderMock: vi.fn(),
 }));
 
 vi.mock("../app/services/schedule-rules.server", () => ({
@@ -11,9 +12,14 @@ vi.mock("../app/services/schedule-rules.server", () => ({
 vi.mock("../app/shopify.server", () => ({
   unauthenticated: { admin: adminMock },
 }));
+// Fully mocked: messenger-orders imports db.server (Prisma) and shopify.server.
+vi.mock("../app/services/messenger-orders.server", () => ({
+  updateMessengerOrderState: updateOrderMock,
+}));
 
 import { DEFAULT_DELIVERY_SCHEDULE_RULES } from "../app/lib/delivery-availability";
 import {
+  executeAgentTool,
   getAvailableDeliverySlots,
   MESSENGER_AGENT_TOOLS,
   resolveDeliveryDate,
@@ -23,18 +29,50 @@ import {
 const NOW_MANILA_NOON_SAT = new Date("2026-08-01T04:00:00Z");
 
 describe("MESSENGER_AGENT_TOOLS registry", () => {
-  it("exposes exactly the phase-4 + phase-5 tool set", () => {
+  it("exposes exactly the phase-4 + phase-5 + phase-6 tool set", () => {
     expect(MESSENGER_AGENT_TOOLS.map((t) => t.name).sort()).toEqual([
       "check_delivery_coverage",
       "get_available_slots",
       "get_product_details",
       "resolve_date",
       "search_products",
+      "update_order",
     ]);
     for (const tool of MESSENGER_AGENT_TOOLS) {
       expect(tool.description.length).toBeGreaterThan(10);
       expect(tool.input_schema.type).toBe("object");
     }
+  });
+});
+
+describe("executeAgentTool — update_order dispatch (phase 6)", () => {
+  beforeEach(() => {
+    updateOrderMock.mockReset();
+  });
+
+  it("routes to the state machine with the thread psid and injected validators", async () => {
+    updateOrderMock.mockResolvedValue({ ok: true, missing: [], readyToConfirm: false });
+    const input = { recipient_name: "Maria" };
+    const result = await executeAgentTool("update_order", input, NOW_MANILA_NOON_SAT, {
+      psid: "PSID-1",
+    });
+    expect(result).toEqual({ ok: true, missing: [], readyToConfirm: false });
+    expect(updateOrderMock).toHaveBeenCalledTimes(1);
+    const [psid, passedInput, deps, now] = updateOrderMock.mock.calls[0];
+    expect(psid).toBe("PSID-1");
+    expect(passedInput).toEqual(input);
+    expect(typeof deps.getVariant).toBe("function");
+    expect(typeof deps.getSlots).toBe("function");
+    expect(typeof deps.checkCoverage).toBe("function");
+    expect(now).toBe(NOW_MANILA_NOON_SAT);
+  });
+
+  it("fails designed when the turn has no psid context", async () => {
+    const result = (await executeAgentTool("update_order", {}, NOW_MANILA_NOON_SAT)) as {
+      ok: boolean;
+    };
+    expect(result.ok).toBe(false);
+    expect(updateOrderMock).not.toHaveBeenCalled();
   });
 });
 

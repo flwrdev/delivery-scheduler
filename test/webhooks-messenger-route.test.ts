@@ -389,3 +389,98 @@ describe("webhooks.messenger action — postback events (phase 5 carousel taps)"
     );
   });
 });
+
+describe("webhooks.messenger action — quick-reply taps (phase 6 Confirm path)", () => {
+  beforeEach(() => {
+    vi.stubEnv("MESSENGER_APP_SECRET", APP_SECRET);
+    recordMock.mockResolvedValue({ status: "new" });
+    enqueueMock.mockResolvedValue({ ok: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.clearAllMocks();
+  });
+
+  it("records the quick_reply PAYLOAD as [TAP] text — never the button title", async () => {
+    const body = pageBody({
+      sender: { id: "24680" },
+      timestamp: 1753600002000,
+      message: {
+        mid: "m.qr.confirm.1",
+        text: "Confirm ✅", // the visible title — must NOT be recorded
+        quick_reply: { payload: "CONFIRM_ORDER_3f1c9d2e-1111-2222-3333-444455556666" },
+      },
+    });
+    const res = (await action({
+      request: makeSignedPostRequest(body),
+      params: {},
+      context: {},
+    } as never)) as Response;
+
+    expect(res.status).toBe(200);
+    expect(recordMock).toHaveBeenCalledWith({
+      psid: "24680",
+      mid: "m.qr.confirm.1",
+      text: "[TAP] CONFIRM_ORDER_3f1c9d2e-1111-2222-3333-444455556666",
+    });
+    expect(enqueueMock).toHaveBeenCalledWith({ mid: "m.qr.confirm.1" });
+  });
+
+  it("records a slot quick reply the same way (existing SLOT_ payloads keep working)", async () => {
+    const body = pageBody({
+      sender: { id: "24680" },
+      timestamp: 1753600002001,
+      message: { mid: "m.qr.slot.1", text: "9AM-12PM", quick_reply: { payload: "SLOT_9AM-12PM" } },
+    });
+    await action({ request: makeSignedPostRequest(body), params: {}, context: {} } as never);
+    expect(recordMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mid: "m.qr.slot.1", text: "[TAP] SLOT_9AM-12PM" }),
+    );
+  });
+
+  it("falls back to plain text when quick_reply has no string payload", async () => {
+    const body = pageBody({
+      sender: { id: "24680" },
+      timestamp: 1753600002002,
+      message: { mid: "m.qr.bad.1", text: "hello", quick_reply: {} },
+    });
+    await action({ request: makeSignedPostRequest(body), params: {}, context: {} } as never);
+    expect(recordMock).toHaveBeenCalledWith(expect.objectContaining({ text: "hello" }));
+  });
+
+  it("never records a quick reply on an echo event", async () => {
+    const body = pageBody({
+      sender: { id: "24680" },
+      timestamp: 1753600002003,
+      message: {
+        mid: "m.qr.echo.1",
+        text: "Confirm ✅",
+        is_echo: true,
+        quick_reply: { payload: "CONFIRM_ORDER_x" },
+      },
+    });
+    const res = (await action({
+      request: makeSignedPostRequest(body),
+      params: {},
+      context: {},
+    } as never)) as Response;
+    expect(res.status).toBe(200);
+    expect(recordMock).not.toHaveBeenCalled();
+  });
+
+  it("skips a quick reply without a mid (cannot dedupe it)", async () => {
+    const body = pageBody({
+      sender: { id: "24680" },
+      timestamp: 1753600002004,
+      message: { text: "Confirm ✅", quick_reply: { payload: "CONFIRM_ORDER_x" } },
+    });
+    const res = (await action({
+      request: makeSignedPostRequest(body),
+      params: {},
+      context: {},
+    } as never)) as Response;
+    expect(res.status).toBe(200);
+    expect(recordMock).not.toHaveBeenCalled();
+  });
+});

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { prismaMock, llmMock, executeToolMock, sendMock, carouselMock } = vi.hoisted(() => ({
+const { prismaMock, llmMock, executeToolMock, sendMock, carouselMock, confirmMock, summaryMock } =
+  vi.hoisted(() => ({
   prismaMock: {
     messengerThread: { findUnique: vi.fn(), update: vi.fn() },
     messengerMessage: {
@@ -10,11 +11,13 @@ const { prismaMock, llmMock, executeToolMock, sendMock, carouselMock } = vi.hois
       update: vi.fn(),
     },
   },
-  llmMock: vi.fn(),
-  executeToolMock: vi.fn(),
-  sendMock: vi.fn(),
-  carouselMock: vi.fn(),
-}));
+    llmMock: vi.fn(),
+    executeToolMock: vi.fn(),
+    sendMock: vi.fn(),
+    carouselMock: vi.fn(),
+    confirmMock: vi.fn(),
+    summaryMock: vi.fn(),
+  }));
 
 vi.mock("../app/db.server", () => ({ default: prismaMock }));
 vi.mock("../app/services/messenger-llm.server", async (importOriginal) => {
@@ -27,6 +30,12 @@ vi.mock("../app/services/messenger-agent-tools.server", () => ({
   executeAgentTool: executeToolMock,
   getManilaNowLabel: () => "Saturday, August 1, 2026 at 12:00 PM",
   MESSENGER_AGENT_TOOLS: [],
+}));
+// Fully mocked (no importOriginal): the real module imports shopify.server
+// and db.server.
+vi.mock("../app/services/messenger-orders.server", () => ({
+  confirmMessengerOrder: confirmMock,
+  buildOrderSummaryText: summaryMock,
 }));
 vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
   const original = await importOriginal<typeof import("../app/services/messenger-send.server")>();
@@ -85,6 +94,13 @@ beforeEach(() => {
   sendMock.mockResolvedValue({ ok: true, messageId: "mid.bot.new" });
   carouselMock.mockResolvedValue({ ok: true, messageId: "mid.bot.carousel" });
   executeToolMock.mockResolvedValue({ ok: true });
+  confirmMock.mockResolvedValue({
+    ok: true,
+    invoiceUrl: "https://shop.example/invoice/abc",
+    draftOrderName: "#D123",
+    alreadyCreated: false,
+  });
+  summaryMock.mockReturnValue("🧾 ORDER SUMMARY (deterministic)");
 });
 
 afterEach(() => {
@@ -174,6 +190,7 @@ describe("processAgentTurnByMid", () => {
       "resolve_date",
       { base: "tomorrow" },
       expect.any(Date),
+      { psid: PSID },
     );
     expect(llmMock).toHaveBeenCalledTimes(2);
 
@@ -346,5 +363,255 @@ describe("processAgentTurnByMid", () => {
     prismaMock.messengerMessage.update.mockRejectedValue(new Error("db hiccup"));
     const result = await processAgentTurnByMid(MID);
     expect(result.status).toBe("sent");
+  });
+
+  it("passes the thread psid to every tool call (stateful tools need it)", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "t1", name: "update_order", input: { phone: "0917" } }],
+      })
+      .mockResolvedValueOnce(textTurn("Noted po!"));
+    await processAgentTurnByMid(MID);
+    expect(executeToolMock).toHaveBeenCalledWith(
+      "update_order",
+      { phone: "0917" },
+      expect.any(Date),
+      { psid: PSID },
+    );
+  });
+});
+
+describe("processAgentTurnByMid — order summary + Confirm quick replies (phase 6)", () => {
+  function readyUpdateResult(orderKey = "key-1") {
+    return {
+      ok: true,
+      state: { status: "awaiting_confirm", productTitle: "Sweet Heart", pricePhp: 799 },
+      missing: [],
+      readyToConfirm: true,
+      orderKey,
+      errors: [],
+      note: "ready",
+    };
+  }
+
+  it("appends the DETERMINISTIC summary and attaches Confirm/Baguhin quick replies when ready", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "t1", name: "update_order", input: { phone: "0917..." } }],
+      })
+      .mockResolvedValueOnce(textTurn("Paki-check po ang summary sa baba 👇"));
+    executeToolMock.mockResolvedValue(readyUpdateResult("key-77"));
+
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+
+    const sendArgs = sendMock.mock.calls[0][0];
+    expect(sendArgs.text).toContain("Paki-check po ang summary");
+    expect(sendArgs.text).toContain("🧾 ORDER SUMMARY (deterministic)");
+    expect(sendArgs.quickReplies).toEqual([
+      { title: "Confirm ✅", payload: "CONFIRM_ORDER_key-77" },
+      { title: "Baguhin", payload: "EDIT_ORDER" },
+    ]);
+    expect(summaryMock).toHaveBeenCalledWith(readyUpdateResult().state);
+  });
+
+  it("does not attach Confirm quick replies while details are still missing", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "t1", name: "update_order", input: {} }],
+      })
+      .mockResolvedValueOnce(textTurn("Ano pong address?"));
+    executeToolMock.mockResolvedValue({
+      ok: true,
+      state: { status: "collecting" },
+      missing: ["address", "phone"],
+      readyToConfirm: false,
+      errors: [],
+      note: "",
+    });
+
+    await processAgentTurnByMid(MID);
+    expect(sendMock.mock.calls[0][0].quickReplies).toBeUndefined();
+  });
+
+  it("skips the product carousel when the confirm prompt is attached (it would dismiss the buttons)", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [
+          { type: "tool_use", id: "t1", name: "search_products", input: {} },
+          { type: "tool_use", id: "t2", name: "update_order", input: {} },
+        ],
+      })
+      .mockResolvedValueOnce(textTurn("Heto po ang summary 👇"));
+    executeToolMock.mockImplementation(async (name: string) =>
+      name === "search_products"
+        ? {
+            ok: true,
+            note: "n",
+            products: [
+              { productTitle: "X", variantId: "gid://shopify/ProductVariant/1", pricePhp: 1, available: true },
+            ],
+          }
+        : readyUpdateResult(),
+    );
+
+    await processAgentTurnByMid(MID);
+    expect(carouselMock).not.toHaveBeenCalled();
+    expect(sendMock.mock.calls[0][0].quickReplies?.[0].payload).toBe("CONFIRM_ORDER_key-1");
+  });
+});
+
+describe("processAgentTurnByMid — deterministic CONFIRM path (phase 6 gate)", () => {
+  const CONFIRM_MID = "mid.confirm.1";
+  const ORDER_KEY = "3f1c9d2e-1111-2222-3333-444455556666";
+
+  function confirmRow(overrides: Record<string, unknown> = {}) {
+    return customerRow({
+      mid: CONFIRM_MID,
+      bodyJson: JSON.stringify({ text: `[TAP] CONFIRM_ORDER_${ORDER_KEY}` }),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    prismaMock.messengerMessage.findUnique.mockResolvedValue(confirmRow());
+  });
+
+  it("creates the order via code — the LLM is never consulted", async () => {
+    const result = await processAgentTurnByMid(CONFIRM_MID);
+    expect(result).toMatchObject({ status: "sent", replyMid: "mid.bot.new" });
+    expect(confirmMock).toHaveBeenCalledWith(PSID, ORDER_KEY);
+    expect(llmMock).not.toHaveBeenCalled();
+
+    const sendArgs = sendMock.mock.calls[0][0];
+    expect(sendArgs.text).toContain("https://shop.example/invoice/abc");
+    expect(sendArgs.text).toContain("15 minutes");
+
+    // Standard reply bookkeeping still runs (zero-duplicate guarantee).
+    const updateArgs = prismaMock.messengerMessage.update.mock.calls[0][0];
+    expect(updateArgs.where).toEqual({ mid: CONFIRM_MID });
+    expect(updateArgs.data.repliedAt).toBeInstanceOf(Date);
+  });
+
+  it("GATE: the same CONFIRM mid delivered twice runs the create exactly once", async () => {
+    const first = await processAgentTurnByMid(CONFIRM_MID);
+    expect(first.status).toBe("sent");
+
+    // The first pass set repliedAt — the duplicate delivery sees it.
+    prismaMock.messengerMessage.findUnique.mockResolvedValue(
+      confirmRow({ repliedAt: new Date(), replyMid: "mid.bot.new" }),
+    );
+    const second = await processAgentTurnByMid(CONFIRM_MID);
+    expect(second.status).toBe("skipped");
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns retryable_failure on a transient create failure (Cloud Tasks retries the idempotent path)", async () => {
+    confirmMock.mockResolvedValue({ ok: false, code: "transient", error: "ETIMEDOUT" });
+    const result = await processAgentTurnByMid(CONFIRM_MID);
+    expect(result.status).toBe("retryable_failure");
+    expect(sendMock).not.toHaveBeenCalled();
+    // repliedAt untouched — the retry may still act.
+    expect(prismaMock.messengerMessage.update).not.toHaveBeenCalled();
+  });
+
+  it("re-sends the SAME invoice link when the create already happened (alreadyCreated replay)", async () => {
+    confirmMock.mockResolvedValue({
+      ok: true,
+      invoiceUrl: "https://shop.example/invoice/abc",
+      draftOrderName: "#D123",
+      alreadyCreated: true,
+    });
+    const result = await processAgentTurnByMid(CONFIRM_MID);
+    expect(result.status).toBe("sent");
+    expect(sendMock.mock.calls[0][0].text).toContain("https://shop.example/invoice/abc");
+  });
+
+  it("answers a stale confirm tap with a fixed message and finishes the turn (no retry)", async () => {
+    confirmMock.mockResolvedValue({ ok: false, code: "stale_key", error: "stale" });
+    const result = await processAgentTurnByMid(CONFIRM_MID);
+    expect(result.status).toBe("sent");
+    expect(sendMock.mock.calls[0][0].text).toContain("Confirm");
+    expect(llmMock).not.toHaveBeenCalled();
+  });
+
+  it("answers an incomplete order with a fixed message and finishes the turn", async () => {
+    confirmMock.mockResolvedValue({ ok: false, code: "incomplete", error: "missing phone" });
+    const result = await processAgentTurnByMid(CONFIRM_MID);
+    expect(result.status).toBe("sent");
+    expect(sendMock.mock.calls[0][0].text).toContain("kulang");
+  });
+
+  it("answers a permanent failure with an apology and finishes the turn (retry cannot help)", async () => {
+    confirmMock.mockResolvedValue({ ok: false, code: "failed", error: "Variant gone" });
+    const result = await processAgentTurnByMid(CONFIRM_MID);
+    expect(result.status).toBe("sent");
+    expect(sendMock.mock.calls[0][0].text).toContain("technical issue");
+  });
+
+  it("prepends the bot disclosure on a first-contact confirm tap", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(threadRow({ disclosedBot: false }));
+    await processAgentTurnByMid(CONFIRM_MID);
+    expect(sendMock.mock.calls[0][0].text).toContain("automated");
+    expect(prismaMock.messengerThread.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { disclosedBot: true } }),
+    );
+  });
+});
+
+describe("sanitizeMessengerText (Messenger renders plain text only)", () => {
+  it("strips markdown bold/italics/links but keeps plain lists and URLs", async () => {
+    const { sanitizeMessengerText } = await import("../app/services/messenger-agent.server");
+    expect(sanitizeMessengerText("**Sweet Heart** ay available at **P799**.")).toBe(
+      "Sweet Heart ay available at P799.",
+    );
+    expect(sanitizeMessengerText("Bisitahin: *https://flowercart.store* po!")).toBe(
+      "Bisitahin: https://flowercart.store po!",
+    );
+    expect(sanitizeMessengerText("[coverage page](https://flowercart.store/pages/delivery-coverage)")).toBe(
+      "coverage page: https://flowercart.store/pages/delivery-coverage",
+    );
+    expect(sanitizeMessengerText("- 9AM-12PM\n- 12PM-3PM")).toBe("- 9AM-12PM\n- 12PM-3PM");
+    expect(sanitizeMessengerText("around P333 po ang estimate")).toBe("around P333 po ang estimate");
+  });
+
+  it("is applied to the outgoing reply", async () => {
+    llmMock.mockResolvedValue(textTurn("**Autumn Morning** po ay available at **P799**"));
+    await processAgentTurnByMid(MID);
+    const sendArgs = sendMock.mock.calls[0][0];
+    expect(sendArgs.text).toContain("Autumn Morning po ay available at P799");
+    expect(sendArgs.text).not.toContain("**");
+  });
+});
+
+describe("phase-6 ordering env gate", () => {
+  it("hides the ORDERING prompt + update_order tool while MESSENGER_ORDERS_ENABLED is unset", async () => {
+    await processAgentTurnByMid(MID);
+    const { system, tools } = llmMock.mock.calls[0][0];
+    expect(system).toContain("cannot take orders or payments yet");
+    expect(system).not.toContain("ORDERING (you CAN take orders");
+    expect((tools ?? []).map((t: { name: string }) => t.name)).not.toContain("update_order");
+  });
+
+  it("enables the ORDERING prompt + update_order tool when the flag is true", async () => {
+    vi.stubEnv("MESSENGER_ORDERS_ENABLED", "true");
+    try {
+      await processAgentTurnByMid(MID);
+      const { system } = llmMock.mock.calls[0][0];
+      expect(system).toContain("ORDERING (you CAN take orders");
+      expect(system).not.toContain("cannot take orders or payments yet");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
