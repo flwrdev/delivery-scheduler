@@ -35,7 +35,7 @@ interface MessengerWebhookEvent {
 
 interface MessengerWebhookBody {
   object?: string;
-  entry?: Array<{ messaging?: MessengerWebhookEvent[] }>;
+  entry?: Array<{ messaging?: MessengerWebhookEvent[]; standby?: unknown[] }>;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {

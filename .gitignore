@@ -47,3 +47,5 @@ shopify.app.toml.bak.*
 # Per-repo isolated browser profiles (chrome-devtools + playwright MCP)
 # Defined in .mcp.json via --userDataDir/--user-data-dir ${CLAUDE_PROJECT_DIR}/.browser/.
 .browser/
+# Playwright MCP session artifacts (console logs + page snapshots)
+.playwright-mcp/
