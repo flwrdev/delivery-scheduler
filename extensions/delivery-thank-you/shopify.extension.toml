@@ -3,7 +3,7 @@
 
 # The version of APIs your extension will receive. Learn more:
 # https://shopify.dev/docs/api/usage/versioning
-api_version = "2026-01"
+api_version = "2026-04"
 
 [[extensions]]
 name = "Delivery Schedule Thank You"
@@ -26,3 +26,13 @@ key = "date"
 [[extensions.metafields]]
 namespace = "custom"
 key = "time_slot"
+
+# COD fee display (merged from the retired cod-fee-notice block).
+# Keep in sync with the COD fee product variant price (COD-FEE) and the
+# /app/cod-settings fee field — this only controls what the card DISPLAYS.
+[extensions.settings]
+[[extensions.settings.fields]]
+key = "fee_amount"
+type = "number_decimal"
+name = "COD fee amount"
+description = "Displayed COD fee. Must match the COD Fee product price (default 70)."
