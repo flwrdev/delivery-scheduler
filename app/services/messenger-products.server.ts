@@ -67,7 +67,7 @@ async function getAdminClient(): Promise<
 
 const SEARCH_PRODUCTS_QUERY = `#graphql
   query MessengerProductSearch($first: Int!, $query: String!) {
-    products(first: $first, query: $query, sortKey: BEST_SELLING) {
+    products(first: $first, query: $query) {
       nodes {
         title
         onlineStoreUrl
@@ -160,10 +160,9 @@ export async function searchShopProducts(
     console.log(`[messenger-products] search matched ${products.length} product(s)`);
     return { ok: true, products, note: PRODUCTS_NOTE };
   } catch (error) {
-    return {
-      ok: false,
-      error: `Product search failed: ${error instanceof Error ? error.message : "unknown"}`,
-    };
+    const detail = error instanceof Error ? error.message : "unknown";
+    console.warn(`[messenger-products] search failed: ${detail}`);
+    return { ok: false, error: `Product search failed: ${detail}` };
   }
 }
 
@@ -216,9 +215,8 @@ export async function getVariantLive(variantId: string): Promise<GetVariantLiveR
     }
     return { ok: true, product: toProduct(node.product.title, node.product, node) };
   } catch (error) {
-    return {
-      ok: false,
-      error: `Variant lookup failed: ${error instanceof Error ? error.message : "unknown"}`,
-    };
+    const detail = error instanceof Error ? error.message : "unknown";
+    console.warn(`[messenger-products] variant lookup failed: ${detail}`);
+    return { ok: false, error: `Variant lookup failed: ${detail}` };
   }
 }
