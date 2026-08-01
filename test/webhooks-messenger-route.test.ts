@@ -12,7 +12,10 @@ const { recordMock, deleteMock, processMock, enqueueMock } = vi.hoisted(() => ({
 vi.mock("../app/services/messenger-events.server", () => ({
   recordInboundTextMessage: recordMock,
   deleteRecordedMessage: deleteMock,
-  processEchoByMid: processMock,
+}));
+
+vi.mock("../app/services/messenger-agent.server", () => ({
+  processAgentTurnByMid: processMock,
 }));
 
 vi.mock("../app/services/messenger-queue.server", async (importOriginal) => {

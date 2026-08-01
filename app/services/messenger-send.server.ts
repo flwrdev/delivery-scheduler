@@ -15,9 +15,16 @@ export const MESSENGER_NOT_CONFIGURED_MESSAGE =
 
 const SEND_TIMEOUT_MS = 5000;
 
+export interface MessengerQuickReply {
+  title: string;
+  payload: string;
+}
+
 export interface SendMessengerTextMessageInput {
   psid: string;
   text: string;
+  /** Optional tap choices (phase 4+: slot selection is quick replies only). */
+  quickReplies?: MessengerQuickReply[];
 }
 
 export type SendMessengerTextMessageResult =
@@ -27,11 +34,21 @@ export type SendMessengerTextMessageResult =
 export async function sendMessengerTextMessage({
   psid,
   text,
+  quickReplies,
 }: SendMessengerTextMessageInput): Promise<SendMessengerTextMessageResult> {
   const accessToken = process.env.MESSENGER_PAGE_ACCESS_TOKEN?.trim();
   const pageId = process.env.MESSENGER_PAGE_ID?.trim();
   if (!accessToken || !pageId) {
     return { ok: false, error: MESSENGER_NOT_CONFIGURED_MESSAGE };
+  }
+
+  const message: { text: string; quick_replies?: unknown[] } = { text };
+  if (quickReplies?.length) {
+    message.quick_replies = quickReplies.map((reply) => ({
+      content_type: "text",
+      title: reply.title,
+      payload: reply.payload,
+    }));
   }
 
   try {
@@ -46,7 +63,7 @@ export async function sendMessengerTextMessage({
         body: JSON.stringify({
           recipient: { id: psid },
           messaging_type: "RESPONSE",
-          message: { text },
+          message,
         }),
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       },

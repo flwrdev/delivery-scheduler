@@ -1,9 +1,9 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 import { verifyMetaWebhookSignature } from "../lib/verify-meta-signature.server";
+import { processAgentTurnByMid } from "../services/messenger-agent.server";
 import {
   deleteRecordedMessage,
-  processEchoByMid,
   recordInboundTextMessage,
 } from "../services/messenger-events.server";
 import { enqueueMessengerEchoTask } from "../services/messenger-queue.server";
@@ -134,7 +134,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           console.log(`[messenger] enqueued mid=${mid}`);
         } else if (enqueued.notConfigured) {
           // Local dev fallback — no queue, process inline.
-          const result = await processEchoByMid(mid);
+          const result = await processAgentTurnByMid(mid);
           console.log(`[messenger] inline processed mid=${mid} status=${result.status}`);
         } else {
           console.warn(`[messenger] enqueue failed for mid=${mid}: ${enqueued.error}`);
