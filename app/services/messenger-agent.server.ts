@@ -58,9 +58,12 @@ function buildSystemPrompt(now: Date): string {
     "- If you cannot help or the customer asks for a human, tell them a person from The Flowercart will follow up in this thread.",
     "",
     "STORE KNOWLEDGE (merchant-provided facts — you may state these):",
-    "- Delivery fee is DYNAMIC: base fare P90 plus P6 per kilometer from the shop. You may explain this formula, but NEVER compute or quote an exact peso total for an address — you have no distance tool yet. Say the exact fee will be confirmed at checkout or by the team, and share the coverage page.",
+    "- Delivery fee (Lalamove motorcycle + handling): base fare P49 + P6/km for the first 5km + P5/km beyond, plus P40 handling — roughly P90 base. The EXACT fee is computed by Lalamove at checkout.",
+    "- FREE SHIPPING on orders P2,500 and up.",
+    "- Payment methods: Xendit (cards, bank transfer, QR, e-wallets) or Cash on Delivery. COD has an extra P70 fee added automatically to the total, is available only for orders up to P2,500, and rider booking can take a bit longer on COD.",
+    "- When check_delivery_coverage returns estimatedFeePhp, quote it as an ESTIMATE only (e.g. 'tantiyang P134 po') and always add that the exact fee shows at checkout. Never present the estimate as final, and never compute a fee yourself without the tool.",
     "- Delivery coverage details: https://flowercart.store/pages/delivery-coverage",
-    "- When the customer mentions a place or zip code (asking if you deliver there), call check_delivery_coverage — coverage answers come ONLY from that tool, never from your own geography knowledge.",
+    "- When the customer mentions a place or zip code (asking if you deliver there or how much delivery costs), call check_delivery_coverage — coverage and fee-estimate answers come ONLY from that tool, never from your own geography knowledge.",
   ].join("\n");
 }
 

@@ -67,6 +67,14 @@ describe("checkDeliveryCoverage", () => {
     }
   });
 
+  it("maps common aliases like BGC to the sheet's spelling", () => {
+    const result = checkDeliveryCoverage({ area: "BGC" });
+    expect(result).toMatchObject({ ok: true, covered: true });
+    if (result.ok && result.covered) {
+      expect(result.matches[0].area.toLowerCase()).toContain("fort bonifacio");
+    }
+  });
+
   it("reports an out-of-coverage place as not covered", () => {
     const result = checkDeliveryCoverage({ area: "Cebu City" });
     expect(result).toMatchObject({ ok: true, covered: false });
@@ -75,5 +83,40 @@ describe("checkDeliveryCoverage", () => {
   it("errors when neither zip nor area is given", () => {
     const result = checkDeliveryCoverage({});
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("delivery fee estimation (Lalamove motorcycle + handling fee)", () => {
+  it("computes haversine distance within tolerance (pickup to Makati CPO ~10km)", async () => {
+    const { haversineKm, PICKUP_POINT } = await import(
+      "../app/services/messenger-coverage.server"
+    );
+    const km = haversineKm(PICKUP_POINT, { lat: 14.554, lng: 121.018 });
+    expect(km).toBeGreaterThan(8);
+    expect(km).toBeLessThan(12);
+  });
+
+  it("applies the fee bands: base P49 + P6/km first 5km + P5/km beyond + P40 handling", async () => {
+    const { estimateDeliveryFeePhp } = await import(
+      "../app/services/messenger-coverage.server"
+    );
+    // 3 km: 49 + 18 + 0 + 40 = 107
+    expect(estimateDeliveryFeePhp(3)).toBe(107);
+    // 8 km: 49 + 30 + 15 + 40 = 134
+    expect(estimateDeliveryFeePhp(8)).toBe(134);
+    // Exactly 5 km: 49 + 30 + 40 = 119
+    expect(estimateDeliveryFeePhp(5)).toBe(119);
+  });
+
+  it("includes an estimated km + fee on covered matches that carry coordinates", () => {
+    const result = checkDeliveryCoverage({ zip: "1632" });
+    expect(result.ok).toBe(true);
+    if (result.ok && result.covered) {
+      const withEstimate = result.matches.find((m) => m.estimatedFeePhp !== undefined);
+      if (withEstimate) {
+        expect(withEstimate.estimatedKm).toBeGreaterThan(0);
+        expect(withEstimate.estimatedFeePhp).toBeGreaterThanOrEqual(89);
+      }
+    }
   });
 });
