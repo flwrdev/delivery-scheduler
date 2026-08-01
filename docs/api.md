@@ -81,14 +81,16 @@ API version sa `shopify.app.toml` is `2026-04`.
 | Path | File | Auth |
 | --- | --- | --- |
 | `GET /webhooks/messenger` (verify handshake) + `POST /webhooks/messenger` (events) | [webhooks.messenger.ts](../app/routes/webhooks.messenger.ts) | GET: `hub.verify_token` vs `MESSENGER_VERIFY_TOKEN`; POST: `X-Hub-Signature-256` HMAC over the raw body via [verify-meta-signature.server.ts](../app/lib/verify-meta-signature.server.ts) |
+| `POST /webhooks/messenger/worker` (Cloud Tasks worker) | [webhooks.messenger_.worker.ts](../app/routes/webhooks.messenger_.worker.ts) | `X-Messenger-Worker-Signature` HMAC over the raw task payload (same `sha256=<hex>` format + verifier lib) keyed with `MESSENGER_WORKER_SECRET` — the app's SIXTH auth surface, invoked only by Cloud Tasks |
 
-Phase 2 (echo bot) of the FlowerCart Messenger agent — master context lives outside the repo (`flowercart-messenger-CLAUDE.md` + the `flowercart-agent-architecture.md` companion). Contract highlights:
+Phase 3 (queue + Neon) of the FlowerCart Messenger agent — master context lives outside the repo (`flowercart-messenger-CLAUDE.md` + the `flowercart-agent-architecture.md` companion). Contract highlights:
 
-- **Writes NOTHING to any order, metafield, tag, or Postgres** — the §2 write-paths table is unchanged. Its only outbound side effect is a Messenger Send API text reply via [messenger-send.server.ts](../app/services/messenger-send.server.ts) (plain `fetch`, pinned Graph API version, token in the Authorization header only).
-- After a valid signature the route ALWAYS returns 200 (send failures are logged) — Meta redelivers on non-200 and disables the webhook after repeated failures. Invalid/missing signature → 401.
+- **Writes NOTHING to any order, metafield, or tag** — the §2 write-paths table is unchanged. Postgres now holds the CONVERSATION (`MessengerThread`/`MessengerMessage` — see [architecture.md](./architecture.md)), never the order. The only outbound side effect is a Messenger Send API text reply via [messenger-send.server.ts](../app/services/messenger-send.server.ts) (plain `fetch`, pinned Graph API version, token in the Authorization header only).
+- Ingress shape (phase 3): webhook = verify → record in Neon (`MessengerMessage.mid` unique = Meta-redelivery dedupe) → enqueue a Cloud Tasks task (`{ mid }`, queue `messenger-events`, us-central1) → 200. The worker route does the send and is retry-idempotent: `repliedAt` is set right after a successful send, and a retry that finds it set skips. If the queue is not configured (local dev) the webhook processes inline; if the enqueue itself fails, the recorded row is deleted so Meta's redelivery can reprocess.
+- Worker status contract with Cloud Tasks (it retries any non-2xx, max 5 attempts): 200 = done or unfixable (unknown mid, already replied, malformed payload, send not configured); 503 = transient send failure, retry.
+- After a valid signature the WEBHOOK always returns 200 — Meta redelivers on non-200 and disables the webhook after repeated failures. Invalid/missing signature → 401 (both routes).
 - `message.is_echo` events are skipped (the `message_echoes` page field is subscribed — without the skip the bot would echo its own replies forever). `entry[].standby` is ignored in v1.
-- Phase 2 deviation: the echo send is awaited inline BEFORE the 200 (Cloud Run throttles CPU after the response, so fire-and-forget dies); phase 3 replaces this with fast-ack + Cloud Tasks.
-- Env: `MESSENGER_APP_SECRET`, `MESSENGER_VERIFY_TOKEN`, `MESSENGER_PAGE_ACCESS_TOKEN` (Secret Manager) + `MESSENGER_PAGE_ID` (plain). All optional on fresh checkouts — the route degrades to designed 403/401/not-configured failures.
+- Env: `MESSENGER_APP_SECRET`, `MESSENGER_VERIFY_TOKEN`, `MESSENGER_PAGE_ACCESS_TOKEN`, `MESSENGER_WORKER_SECRET` (Secret Manager) + `MESSENGER_PAGE_ID`, `MESSENGER_TASKS_QUEUE_PATH`, `MESSENGER_WORKER_URL` (plain). All optional on fresh checkouts — the routes degrade to designed 403/401/not-configured failures and the queue falls back to inline processing.
 
 > **Courier dispatch note:** Last-mile courier booking is handled by the **official Shopify Lalamove app**, not this app. The former custom Lalamove callback endpoint (`webhooks.lalamove.ts`) and the `orders/cancelled` webhook (which existed only to cancel a Lalamove order) were removed 2026-07-04 — see the [verification log](./verification-log.md) and [decisions.md ADR-1](./decisions.md).
 
@@ -112,6 +114,8 @@ Phase 2 (echo bot) of the FlowerCart Messenger agent — master context lives ou
 | Session shop extractor            | [app/modules/session.server.js](../app/modules/session.server.js)                                                     |
 | Meta webhook signature verify (Messenger) | [app/lib/verify-meta-signature.server.ts](../app/lib/verify-meta-signature.server.ts) — `verifyMetaWebhookSignature` (HMAC-SHA256 over the raw body, timing-safe) |
 | Messenger Send API (Messenger)    | [app/services/messenger-send.server.ts](../app/services/messenger-send.server.ts) — `sendMessengerTextMessage` (plain fetch, pinned Graph version, result union, never throws) |
+| Messenger Cloud Tasks enqueue (Messenger) | [app/services/messenger-queue.server.ts](../app/services/messenger-queue.server.ts) — `enqueueMessengerEchoTask` (Cloud Tasks REST via plain fetch, metadata-server OAuth, HMAC-signed task payload, result union, never throws) |
+| Messenger Neon events (Messenger) | [app/services/messenger-events.server.ts](../app/services/messenger-events.server.ts) — `recordInboundTextMessage` (thread upsert + mid dedupe), `processEchoByMid` (retry-idempotent send), `deleteRecordedMessage` |
 
 ---
 

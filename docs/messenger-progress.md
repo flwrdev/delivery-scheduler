@@ -7,6 +7,84 @@
 
 ---
 
+## Phase 3 — Queue + Neon
+
+**Date:** 2026-08-01
+**Gate:** "5 rapid messages + 1 forced timeout → zero duplicate replies"
+**Gate result:** ✅ PASSED (2026-08-01) — 8 messages sent live (5+ rapid, isa
+may `[force-timeout]` marker), 8 na tig-iisang echo, ZERO duplicates
+(screenshot + logs). Log proof (rev 00177-9xt): `force-timeout hook engaged …
+stalling 45s` 06:12:40Z → Cloud Tasks retry 06:13:14Z → `skipped mid=…
+(already replied)` — ang retry ay hindi nag-send ulit.
+
+**Ingress shape ngayon:** webhook = verify → record sa Neon
+(`MessengerMessage.mid` unique = Meta-redelivery dedupe) → enqueue sa Cloud
+Tasks (`messenger-events`, us-central1, max 5 attempts, 30s dispatchDeadline)
+→ 200. Ang worker route `POST /webhooks/messenger/worker` (ika-6 na auth
+surface: HMAC `X-Messenger-Worker-Signature` keyed ng `MESSENGER_WORKER_SECRET`)
+ang nag-se-send; retry-idempotent via `repliedAt`. Queue not configured
+(local dev) → inline fallback; enqueue infra failure → burahin ang recorded
+row para maproseso ang Meta redelivery.
+
+### Evidence
+
+- `npm test` — **299/299** (34 bago: 6 queue service, 13 events service,
+  12 worker route, route tests reworked sa record→enqueue flow). Typecheck,
+  lint, build clean. TDD: lahat ng bagong test files pinanood munang pumalya
+  (missing module) bago ang implementation.
+- Live gate: tingnan sa itaas. Deploys: `00176-jfj` (phase 3 code) →
+  `00177-9xt` (TEMP gate hook) → **`00178-trn`** (final, hook removed),
+  root probe 200.
+- Worker route unsigned POST → 401 (live-probed).
+
+### Files touched
+
+| File | Ano |
+|---|---|
+| `prisma/schema.prisma` + migration `20260801000000_add_messenger_thread_message` | NEW models `MessengerThread`, `MessengerMessage` (mid unique, repliedAt/replyMid) |
+| `app/services/messenger-queue.server.ts` | NEW — Cloud Tasks createTask via plain fetch (metadata-server OAuth, HMAC-signed `{ mid }` payload) |
+| `app/services/messenger-events.server.ts` | NEW — `recordInboundTextMessage` (upsert + P2002 dedupe), `processEchoByMid` (repliedAt skip), `deleteRecordedMessage` |
+| `app/routes/webhooks.messenger_.worker.ts` | NEW — Cloud Tasks worker (200 = done/unfixable, 503 = retry) |
+| `app/routes/webhooks.messenger.ts` | echo send → record + enqueue (+ inline dev fallback) |
+| `test/messenger-{queue,events}.server.test.ts`, `test/webhooks-messenger-worker.test.ts` | NEW test files |
+
+### Infra (project lalamove-map)
+
+Cloud Tasks API enabled; queue `messenger-events` (us-central1, max-attempts 5,
+backoff 5s–120s); secret `messenger-worker-secret` (random 32-byte hex, piped
+diretso sa Secret Manager — hindi na-print); IAM: `cloudtasks.enqueuer` sa
+queue + `secretAccessor` sa secret para sa Cloud Run SA; Cloud Run env:
+`MESSENGER_TASKS_QUEUE_PATH`, `MESSENGER_WORKER_URL`, secret
+`MESSENGER_WORKER_SECRET`.
+
+### Deviations
+
+1. **HMAC task auth sa halip na Cloud Tasks OIDC.** Ang GCP-idiomatic na
+   OIDC token verification ay mangangailangan ng `google-auth-library` +
+   JWKS fetch; ang HMAC sa task payload (parehong `sha256=<hex>` format ni
+   Meta, parehong tested verifier lib) ay zero bagong dependency. Ang worker
+   URL ay public pero bawat task ay signed.
+2. **Prod Neon repair na hindi bahagi ng plano:** nawala ang
+   `_prisma_migrations` table sa prod DB (P3005 sa kahit anong bagong
+   revision boot; rev 00173 nag-boot pa noong 07-31 — cause unknown, hindi
+   galing sa repo). Merchant-approved fix: baseline ×3 via `prisma migrate
+   resolve --applied` + `migrate deploy`. Nakatala sa
+   `docs/known-issues.md` — kung umulit ang P3005, ulitin ang baseline at
+   imbestigahan ang Neon restore/branch history.
+3. **TEMP `[force-timeout]` gate hook** (45s stall pagkatapos ng send) —
+   deployed sa 00177-9xt para sa gate, tinanggal agad sa 00178-trn.
+4. **Inline fallback kapag walang queue config** — hindi nasa master doc;
+   dinagdag para gumana ang local dev nang walang Cloud Tasks emulator.
+   Sa prod laging naka-configure ang queue.
+
+### Open questions
+
+1. Phase 4 ang susunod: LLM + slot tool. **Bawal pumili ng LLM provider nang
+   walang go ng merchant** (master doc) — thin interface muna, tapos
+   itatanong bago pumili.
+
+---
+
 ## Phase 2 — Echo bot
 
 **Date:** 2026-08-01 (unang attempt 2026-07-27)
