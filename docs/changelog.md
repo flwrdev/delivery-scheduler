@@ -112,3 +112,17 @@ Human-readable, newest-first narrative of the architecture history. Each line is
 - **2026-05-23** (two entries) — Confirmed the Admin order-page extensions are read-only; diagram cleanup + dead-code removal, and added the enforcement skill. → [full entry](./verification-log.md)
 
 - **2026-05-22** — Initial full architecture sweep across extensions, routes, services, Prisma schema, and order metafields/tags. → [full entry](./verification-log.md)
+
+## 2026-08-02 — Messenger phase 5: product carousel (live variant resolution)
+
+- NEW `app/services/messenger-products.server.ts`: live Admin GraphQL product search
+  (cap 8) + postback-time variant re-validation. READ-ONLY — walang order writes.
+- `messenger-send.server.ts`: `sendMessengerGenericTemplate` (Generic Template carousel,
+  Messenger hard caps enforced).
+- `webhooks.messenger.ts`: postback events recorded/enqueued na (synthetic mid
+  `pb:<psid>:<timestamp>`, text `[TAP] <payload>`).
+- Agent: `search_products` + `get_product_details` tools; carousel auto-attach after the
+  text reply; slot quick replies dropped kapag may carousel sa same turn.
+- Kasama rin kaninang araw: km-based estimate ang primary fee quote (provincial towns
+  geocoded, stale flat table removed), COD Metro Manila only, provincial same-day yes,
+  website-audit knowledge (contact/self-service/policies/flower care).

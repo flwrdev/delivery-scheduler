@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { prismaMock, llmMock, executeToolMock, sendMock } = vi.hoisted(() => ({
+const { prismaMock, llmMock, executeToolMock, sendMock, carouselMock } = vi.hoisted(() => ({
   prismaMock: {
     messengerThread: { findUnique: vi.fn(), update: vi.fn() },
     messengerMessage: {
@@ -13,6 +13,7 @@ const { prismaMock, llmMock, executeToolMock, sendMock } = vi.hoisted(() => ({
   llmMock: vi.fn(),
   executeToolMock: vi.fn(),
   sendMock: vi.fn(),
+  carouselMock: vi.fn(),
 }));
 
 vi.mock("../app/db.server", () => ({ default: prismaMock }));
@@ -29,7 +30,11 @@ vi.mock("../app/services/messenger-agent-tools.server", () => ({
 }));
 vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
   const original = await importOriginal<typeof import("../app/services/messenger-send.server")>();
-  return { ...original, sendMessengerTextMessage: sendMock };
+  return {
+    ...original,
+    sendMessengerTextMessage: sendMock,
+    sendMessengerGenericTemplate: carouselMock,
+  };
 });
 
 import { MESSENGER_LLM_NOT_CONFIGURED_MESSAGE } from "../app/services/messenger-llm.server";
@@ -78,6 +83,7 @@ beforeEach(() => {
   prismaMock.messengerThread.update.mockResolvedValue({});
   llmMock.mockResolvedValue(textTurn("Sige po!"));
   sendMock.mockResolvedValue({ ok: true, messageId: "mid.bot.new" });
+  carouselMock.mockResolvedValue({ ok: true, messageId: "mid.bot.carousel" });
   executeToolMock.mockResolvedValue({ ok: true });
 });
 
@@ -206,6 +212,89 @@ describe("processAgentTurnByMid", () => {
       { title: "9AM-12PM", payload: "SLOT_9AM-12PM" },
       { title: "12PM-3PM", payload: "SLOT_12PM-3PM" },
     ]);
+  });
+
+  it("sends a product carousel after the text when the turn searched products (phase 5)", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [
+          { type: "tool_use", id: "toolu_p", name: "search_products", input: { max_price: 1000 } },
+        ],
+      })
+      .mockResolvedValueOnce(textTurn("Heto po ang mga options namin 🌸"));
+    executeToolMock.mockResolvedValue({
+      ok: true,
+      note: "live prices",
+      products: [
+        {
+          productTitle: "Sweet Heart",
+          variantId: "gid://shopify/ProductVariant/111",
+          pricePhp: 799,
+          imageUrl: "https://cdn.shopify.com/sweetheart.jpg",
+          url: "https://flowercart.store/products/sweet-heart",
+          available: true,
+        },
+        {
+          productTitle: "Autumn Morning",
+          variantId: "gid://shopify/ProductVariant/222",
+          pricePhp: 799,
+          available: false,
+        },
+      ],
+    });
+
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+    expect(carouselMock).toHaveBeenCalledTimes(1);
+    const { psid, elements } = carouselMock.mock.calls[0][0];
+    expect(psid).toBe(PSID);
+    expect(elements).toHaveLength(2);
+    expect(elements[0].title).toBe("Sweet Heart");
+    expect(elements[0].buttons[0]).toEqual({
+      type: "postback",
+      title: "Piliin ito",
+      payload: "PRODUCT_gid://shopify/ProductVariant/111",
+    });
+    expect(elements[0].buttons[1].type).toBe("web_url");
+    expect(elements[1].subtitle).toContain("out of stock");
+    expect(elements[1].buttons).toHaveLength(1);
+  });
+
+  it("still reports sent when the carousel send fails after the text went out", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "toolu_p2", name: "search_products", input: {} }],
+      })
+      .mockResolvedValueOnce(textTurn("Heto po 🌸"));
+    executeToolMock.mockResolvedValue({
+      ok: true,
+      note: "n",
+      products: [
+        { productTitle: "X", variantId: "gid://shopify/ProductVariant/1", pricePhp: 1, available: true },
+      ],
+    });
+    carouselMock.mockResolvedValue({ ok: false, error: "Graph API 500" });
+
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+  });
+
+  it("does not send a carousel when search_products found nothing", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "toolu_p3", name: "search_products", input: {} }],
+      })
+      .mockResolvedValueOnce(textTurn("Walang exact match po."));
+    executeToolMock.mockResolvedValue({ ok: true, note: "n", products: [] });
+
+    await processAgentTurnByMid(MID);
+    expect(carouselMock).not.toHaveBeenCalled();
   });
 
   it("prepends the bot disclosure once for a new thread and marks it disclosed", async () => {

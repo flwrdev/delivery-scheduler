@@ -21,6 +21,8 @@ import type { DeliveryScheduleRules } from "../lib/delivery-availability";
 import { getScheduleRulesWithBookedCounts } from "./schedule-rules.server";
 import { checkDeliveryCoverage } from "./messenger-coverage.server";
 import type { CheckDeliveryCoverageInput } from "./messenger-coverage.server";
+import { getVariantLive, searchShopProducts } from "./messenger-products.server";
+import type { SearchShopProductsInput } from "./messenger-products.server";
 import type { LlmToolDefinition } from "./messenger-llm.server";
 import { unauthenticated } from "../shopify.server";
 
@@ -349,6 +351,44 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
       required: [],
     },
   },
+  {
+    name: "search_products",
+    description:
+      "Search The Flowercart's LIVE Shopify catalog (bouquets, arrangements, add-ons) with current " +
+      "prices. Call this when the customer asks about products, prices, recommendations, or a budget " +
+      "(e.g. 'may below 1000 ba kayo?' -> max_price=1000). A product carousel with photos and buttons " +
+      "is sent to the customer AUTOMATICALLY after your reply — keep your text short and do NOT list " +
+      "the products or prices yourself.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional keyword from the product title, e.g. 'rose', 'sunflower'.",
+        },
+        min_price: { type: "number", description: "Optional minimum price in PHP." },
+        max_price: { type: "number", description: "Optional maximum price in PHP." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_product_details",
+    description:
+      "Re-validate a product variant LIVE (current price and availability). ALWAYS call this when a " +
+      "customer message starts with [TAP] PRODUCT_<variantId> — the tapped card may be days old, so " +
+      "never quote the card's price without re-checking here first.",
+    input_schema: {
+      type: "object",
+      properties: {
+        variant_id: {
+          type: "string",
+          description: "The gid://shopify/ProductVariant/... id from the tapped card's payload.",
+        },
+      },
+      required: ["variant_id"],
+    },
+  },
 ];
 
 /** Dispatch a tool call from the orchestrator loop. Never throws. */
@@ -369,6 +409,19 @@ export async function executeAgentTool(
         (input ?? {}) as GetAvailableDeliverySlotsInput,
         now,
       );
+    }
+    if (name === "search_products") {
+      const raw = (input ?? {}) as { query?: string; min_price?: number; max_price?: number };
+      const mapped: SearchShopProductsInput = {
+        ...(raw.query ? { query: raw.query } : {}),
+        ...(typeof raw.min_price === "number" ? { minPricePhp: raw.min_price } : {}),
+        ...(typeof raw.max_price === "number" ? { maxPricePhp: raw.max_price } : {}),
+      };
+      return await searchShopProducts(mapped);
+    }
+    if (name === "get_product_details") {
+      const raw = (input ?? {}) as { variant_id?: string };
+      return await getVariantLive(raw.variant_id ?? "");
     }
     return { ok: false, error: `Unknown tool: ${name}` };
   } catch (error) {

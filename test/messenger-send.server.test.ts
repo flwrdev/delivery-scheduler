@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MESSENGER_GRAPH_API_VERSION,
   MESSENGER_NOT_CONFIGURED_MESSAGE,
+  sendMessengerGenericTemplate,
   sendMessengerTextMessage,
 } from "../app/services/messenger-send.server";
 
@@ -147,5 +148,107 @@ describe("sendMessengerTextMessage", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.toLowerCase()).toContain("timed out");
+  });
+});
+
+describe("sendMessengerGenericTemplate (phase 5 product carousel)", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubEnv("MESSENGER_PAGE_ACCESS_TOKEN", TOKEN);
+    vi.stubEnv("MESSENGER_PAGE_ID", PAGE_ID);
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects an empty carousel without calling fetch", async () => {
+    const result = await sendMessengerGenericTemplate({ psid: "123", elements: [] });
+    expect(result.ok).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("POSTs the generic template attachment shape", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ message_id: "mid.car" }), { status: 200 }),
+    );
+
+    const result = await sendMessengerGenericTemplate({
+      psid: "123",
+      elements: [
+        {
+          title: "Sweet Heart",
+          subtitle: "₱799",
+          imageUrl: "https://cdn.shopify.com/sh.jpg",
+          buttons: [
+            { type: "postback", title: "Piliin ito", payload: "PRODUCT_gid://shopify/ProductVariant/111" },
+            { type: "web_url", title: "Tingnan sa website", url: "https://flowercart.store/products/sweet-heart" },
+          ],
+        },
+      ],
+    });
+
+    expect(result).toEqual({ ok: true, messageId: "mid.car" });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      recipient: { id: "123" },
+      messaging_type: "RESPONSE",
+      message: {
+        attachment: {
+          type: "template",
+          payload: {
+            template_type: "generic",
+            elements: [
+              {
+                title: "Sweet Heart",
+                subtitle: "₱799",
+                image_url: "https://cdn.shopify.com/sh.jpg",
+                buttons: [
+                  {
+                    type: "postback",
+                    title: "Piliin ito",
+                    payload: "PRODUCT_gid://shopify/ProductVariant/111",
+                  },
+                  {
+                    type: "web_url",
+                    title: "Tingnan sa website",
+                    url: "https://flowercart.store/products/sweet-heart",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    });
+  });
+
+  it("enforces the Messenger hard caps: 10 elements, 80-char title, 3 buttons", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ message_id: "mid.car" }), { status: 200 }),
+    );
+
+    const longTitle = "x".repeat(120);
+    const manyButtons = Array.from({ length: 5 }, (_, i) => ({
+      type: "postback" as const,
+      title: `B${i}`,
+      payload: `P${i}`,
+    }));
+    const elements = Array.from({ length: 12 }, () => ({
+      title: longTitle,
+      buttons: manyButtons,
+    }));
+
+    await sendMessengerGenericTemplate({ psid: "123", elements });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const sent = JSON.parse(init.body).message.attachment.payload.elements;
+    expect(sent).toHaveLength(10);
+    expect(sent[0].title).toHaveLength(80);
+    expect(sent[0].buttons).toHaveLength(3);
   });
 });
