@@ -34,6 +34,37 @@ model Session {
   refreshTokenExpires DateTime?
 }
 
+// FlowerCart Messenger agent (phase 3+): Neon holds the CONVERSATION, never
+// the order — Shopify is the order ledger (master doc, locked decision #1).
+model MessengerThread {
+  psid              String             @id
+  humanControl      Boolean            @default(false)
+  humanControlAt    DateTime?
+  lastCustomerAt    DateTime?
+  disclosedBot      Boolean            @default(false)
+  state             String             @default("idle")
+  shopifyCustomerId String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  messages          MessengerMessage[]
+}
+
+model MessengerMessage {
+  id        String          @id @default(cuid())
+  psid      String
+  role      String // "customer" | "bot"
+  bodyJson  String // JSON: { text } for now; richer shapes in later phases
+  mid       String          @unique // webhook dedupe (Meta redelivers on non-200)
+  // Set once the worker has successfully replied to this inbound message —
+  // a Cloud Tasks retry that finds repliedAt set must NOT send again.
+  repliedAt DateTime?
+  replyMid  String?
+  createdAt DateTime        @default(now())
+  thread    MessengerThread @relation(fields: [psid], references: [psid])
+
+  @@index([psid, createdAt])
+}
+
 model DeliveryScheduleConfig {
   id                String   @id @default(cuid())
   shop              String   @unique

@@ -1,9 +1,15 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 import { verifyMetaWebhookSignature } from "../lib/verify-meta-signature.server";
-import { sendMessengerTextMessage } from "../services/messenger-send.server";
+import {
+  deleteRecordedMessage,
+  processEchoByMid,
+  recordInboundTextMessage,
+} from "../services/messenger-events.server";
+import { enqueueMessengerEchoTask } from "../services/messenger-queue.server";
 
-// Facebook Messenger webhook (FlowerCart Messenger agent, phase 2 echo bot).
+// Facebook Messenger webhook (FlowerCart Messenger agent, phase 3: fast-ack
+// ingress — verify, dedupe, enqueue).
 //
 // This is the app's FIFTH auth surface: Meta signs every POST with
 // X-Hub-Signature-256 (HMAC-SHA256 of the raw body, app secret) — it does NOT
@@ -11,18 +17,15 @@ import { sendMessengerTextMessage } from "../services/messenger-send.server";
 //
 // Contract with Meta: after the signature verifies, ALWAYS return 200 — Meta
 // redelivers on non-200 and disables the webhook after repeated failures.
-// Send failures are logged, never surfaced as 5xx.
 //
-// Phase 2 deviation (recorded in PROGRESS.md): the echo send is awaited inline
-// BEFORE the 200. Cloud Run throttles CPU once the response returns, so
-// fire-and-forget work dies mid-flight; the real fast-ack + enqueue shape
-// arrives in phase 3 with Cloud Tasks.
+// Per text event: record in Neon (MessengerMessage.mid unique = redelivery
+// dedupe) → enqueue a Cloud Tasks task → 200. The worker route does the send.
+// If the queue is not configured (local dev), processing runs inline instead.
+// If the enqueue itself fails, the recorded row is deleted so the Meta
+// redelivery of the same mid is not swallowed with no task ever queued.
 //
 // Log hygiene: log event counts, mids, and error strings — never message text
 // or full payloads.
-
-// Messenger rejects text messages longer than 2000 chars.
-const MESSENGER_TEXT_LIMIT = 2000;
 
 interface MessengerWebhookEvent {
   sender?: { id?: string };
@@ -108,18 +111,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         console.warn("[messenger] text message event without sender.id — skipped");
         continue;
       }
+      const mid = message.mid;
+      if (typeof mid !== "string" || !mid) {
+        console.warn("[messenger] text message event without mid — skipped");
+        continue;
+      }
 
-      const echoText = `Echo: ${message.text}`.slice(0, MESSENGER_TEXT_LIMIT);
       try {
-        const result = await sendMessengerTextMessage({ psid, text: echoText });
-        if (result.ok) {
-          console.log(`[messenger] echoed mid=${message.mid ?? "?"} reply=${result.messageId}`);
+        const recorded = await recordInboundTextMessage({ psid, mid, text: message.text });
+        if (recorded.status === "duplicate") {
+          console.log(`[messenger] duplicate mid=${mid} — skipped (redelivery dedupe)`);
+          continue;
+        }
+        if (recorded.status === "error") {
+          // Not recorded — leave it to Meta's redelivery.
+          console.warn(`[messenger] record failed for mid=${mid}: ${recorded.error}`);
+          continue;
+        }
+
+        const enqueued = await enqueueMessengerEchoTask({ mid });
+        if (enqueued.ok) {
+          console.log(`[messenger] enqueued mid=${mid}`);
+        } else if (enqueued.notConfigured) {
+          // Local dev fallback — no queue, process inline.
+          const result = await processEchoByMid(mid);
+          console.log(`[messenger] inline processed mid=${mid} status=${result.status}`);
         } else {
-          console.warn(`[messenger] echo send failed: ${result.error}`);
+          console.warn(`[messenger] enqueue failed for mid=${mid}: ${enqueued.error}`);
+          await deleteRecordedMessage(mid);
         }
       } catch (error) {
         console.warn(
-          `[messenger] echo send threw: ${error instanceof Error ? error.message : "unknown"}`,
+          `[messenger] event handling threw for mid=${mid}: ${
+            error instanceof Error ? error.message : "unknown"
+          }`,
         );
       }
     }
