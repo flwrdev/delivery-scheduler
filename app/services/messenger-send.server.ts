@@ -31,24 +31,25 @@ export type SendMessengerTextMessageResult =
   | { ok: true; messageId: string }
   | { ok: false; error: string };
 
-export async function sendMessengerTextMessage({
-  psid,
-  text,
-  quickReplies,
-}: SendMessengerTextMessageInput): Promise<SendMessengerTextMessageResult> {
+/** One card in a Generic Template carousel (phase 5 product discovery). */
+export interface MessengerCarouselElement {
+  title: string;
+  subtitle?: string;
+  imageUrl?: string;
+  buttons: Array<
+    | { type: "postback"; title: string; payload: string }
+    | { type: "web_url"; title: string; url: string }
+  >;
+}
+
+async function postMessengerMessage(
+  psid: string,
+  message: unknown,
+): Promise<SendMessengerTextMessageResult> {
   const accessToken = process.env.MESSENGER_PAGE_ACCESS_TOKEN?.trim();
   const pageId = process.env.MESSENGER_PAGE_ID?.trim();
   if (!accessToken || !pageId) {
     return { ok: false, error: MESSENGER_NOT_CONFIGURED_MESSAGE };
-  }
-
-  const message: { text: string; quick_replies?: unknown[] } = { text };
-  if (quickReplies?.length) {
-    message.quick_replies = quickReplies.map((reply) => ({
-      content_type: "text",
-      title: reply.title,
-      payload: reply.payload,
-    }));
   }
 
   try {
@@ -91,4 +92,54 @@ export async function sendMessengerTextMessage({
       error: error instanceof Error ? error.message : "Failed to send Messenger message.",
     };
   }
+}
+
+export async function sendMessengerTextMessage({
+  psid,
+  text,
+  quickReplies,
+}: SendMessengerTextMessageInput): Promise<SendMessengerTextMessageResult> {
+  const message: { text: string; quick_replies?: unknown[] } = { text };
+  if (quickReplies?.length) {
+    message.quick_replies = quickReplies.map((reply) => ({
+      content_type: "text",
+      title: reply.title,
+      payload: reply.payload,
+    }));
+  }
+  return postMessengerMessage(psid, message);
+}
+
+// Messenger Generic Template hard limits: 10 elements max (we cap at 8 per the
+// master doc), 80-char title/subtitle, 3 buttons per element.
+const CAROUSEL_ELEMENT_LIMIT = 10;
+const CAROUSEL_TEXT_LIMIT = 80;
+const CAROUSEL_BUTTON_LIMIT = 3;
+
+export async function sendMessengerGenericTemplate({
+  psid,
+  elements,
+}: {
+  psid: string;
+  elements: MessengerCarouselElement[];
+}): Promise<SendMessengerTextMessageResult> {
+  if (!elements.length) {
+    return { ok: false, error: "Generic template needs at least one element." };
+  }
+
+  const message = {
+    attachment: {
+      type: "template",
+      payload: {
+        template_type: "generic",
+        elements: elements.slice(0, CAROUSEL_ELEMENT_LIMIT).map((element) => ({
+          title: element.title.slice(0, CAROUSEL_TEXT_LIMIT),
+          ...(element.subtitle ? { subtitle: element.subtitle.slice(0, CAROUSEL_TEXT_LIMIT) } : {}),
+          ...(element.imageUrl ? { image_url: element.imageUrl } : {}),
+          buttons: element.buttons.slice(0, CAROUSEL_BUTTON_LIMIT),
+        })),
+      },
+    },
+  };
+  return postMessengerMessage(psid, message);
 }

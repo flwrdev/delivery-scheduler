@@ -19,7 +19,12 @@ import {
   runLlmTurn,
 } from "./messenger-llm.server";
 import type { LlmContentBlock, LlmMessage } from "./messenger-llm.server";
-import { MESSENGER_NOT_CONFIGURED_MESSAGE, sendMessengerTextMessage } from "./messenger-send.server";
+import type { MessengerProduct, SearchShopProductsResult } from "./messenger-products.server";
+import {
+  MESSENGER_NOT_CONFIGURED_MESSAGE,
+  sendMessengerGenericTemplate,
+  sendMessengerTextMessage,
+} from "./messenger-send.server";
 
 // Messenger rejects text messages longer than 2000 chars.
 const MESSENGER_TEXT_LIMIT = 2000;
@@ -60,6 +65,13 @@ function buildSystemPrompt(now: Date): string {
     "- Delivery time slots come ONLY from get_available_slots, and only for a resolved date. Never invent or offer a slot that is not in the tool result.",
     "- If the requested date is closed or full, offer the nearest available dates from the tool result.",
     "- You cannot take orders or payments yet. If asked, say the ordering assistant is 'malapit na' and offer to check delivery dates, or hand them to the page for now.",
+    "",
+    "PRODUCT DISCOVERY:",
+    "- When the customer asks about products, prices, recommendations, or a budget, call search_products (use max_price/min_price for budgets like 'below 1000').",
+    "- A product carousel (photos, live prices, buttons) is sent AUTOMATICALLY right after your reply whenever search_products returns products — so keep your text short (isang maikling intro lang, e.g. 'Heto po ang mga maganda naming options 🌸') and NEVER list the product names or prices in your text.",
+    "- If search_products returns zero products, say walang exact match at i-suggest ang website, or ask for a different budget/keyword.",
+    "- A customer message that starts with [TAP] is a button tap, not typed text. [TAP] PRODUCT_<variantId> means they picked that product card: ALWAYS call get_product_details with that variant id first (the card may be old — never trust its price), then confirm the choice with the LIVE price and offer the next step (delivery date check, or handoff to a person to place the order).",
+    "- If get_product_details says the variant is unavailable or not found, apologize briefly and offer to search alternatives.",
     "- If you cannot help or the customer asks for a human, tell them a person from The Flowercart will follow up in this thread.",
     "",
     "STORE KNOWLEDGE (merchant-provided facts — you may state these):",
@@ -122,6 +134,35 @@ function isOpenSlotsResult(value: unknown): value is Extract<
   return candidate?.ok === true && candidate.available === true && Array.isArray(candidate.slots);
 }
 
+function isProductsResult(value: unknown): value is Extract<SearchShopProductsResult, { ok: true }> {
+  const candidate = value as { ok?: boolean; products?: unknown };
+  return candidate?.ok === true && Array.isArray(candidate.products);
+}
+
+function formatPricePhp(price: number): string {
+  return `₱${price.toLocaleString("en-PH")}`;
+}
+
+function productCarouselElements(products: MessengerProduct[]) {
+  return products
+    .filter((product) => product.variantId)
+    .map((product) => ({
+      title: product.productTitle,
+      subtitle: `${formatPricePhp(product.pricePhp)}${product.available ? "" : " — out of stock"}`,
+      ...(product.imageUrl ? { imageUrl: product.imageUrl } : {}),
+      buttons: [
+        {
+          type: "postback" as const,
+          title: "Piliin ito",
+          payload: `PRODUCT_${product.variantId}`,
+        },
+        ...(product.url
+          ? [{ type: "web_url" as const, title: "Tingnan sa website", url: product.url }]
+          : []),
+      ],
+    }));
+}
+
 export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTurnResult> {
   const message = await prisma.messengerMessage.findUnique({ where: { mid } });
   if (!message) {
@@ -152,6 +193,7 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
 
   let finalText = "";
   let lastOpenSlots: Extract<GetAvailableDeliverySlotsResult, { available: true }> | null = null;
+  let lastProducts: MessengerProduct[] | null = null;
 
   for (let iteration = 0; iteration < MAX_LLM_ITERATIONS; iteration += 1) {
     const turn = await runLlmTurn({ system, messages, tools: MESSENGER_AGENT_TOOLS });
@@ -186,6 +228,9 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
       if (toolUse.name === "get_available_slots" && isOpenSlotsResult(result)) {
         lastOpenSlots = result;
       }
+      if (toolUse.name === "search_products" && isProductsResult(result) && result.products.length) {
+        lastProducts = result.products;
+      }
       results.push({
         type: "tool_result",
         tool_use_id: toolUse.id,
@@ -205,12 +250,15 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
     MESSENGER_TEXT_LIMIT,
   );
 
-  const quickReplies = lastOpenSlots
-    ? lastOpenSlots.slots.slice(0, QUICK_REPLY_LIMIT).map((slot) => ({
-        title: slot.label.slice(0, QUICK_REPLY_TITLE_LIMIT),
-        payload: `SLOT_${slot.value}`,
-      }))
-    : undefined;
+  // A carousel message right after would dismiss quick replies in the UI — a
+  // product turn keeps the carousel and drops the slot buttons.
+  const quickReplies =
+    lastOpenSlots && !lastProducts
+      ? lastOpenSlots.slots.slice(0, QUICK_REPLY_LIMIT).map((slot) => ({
+          title: slot.label.slice(0, QUICK_REPLY_TITLE_LIMIT),
+          payload: `SLOT_${slot.value}`,
+        }))
+      : undefined;
 
   let sendResult: Awaited<ReturnType<typeof sendMessengerTextMessage>>;
   try {
@@ -234,7 +282,22 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   }
 
   // The reply is out — from here on this attempt MUST report success, or a
-  // Cloud Tasks retry would send a duplicate.
+  // Cloud Tasks retry would send a duplicate. The carousel is best-effort for
+  // the same reason: a failure after the text send must never trigger a retry.
+  if (lastProducts) {
+    const elements = productCarouselElements(lastProducts);
+    if (elements.length) {
+      const carousel = await sendMessengerGenericTemplate({ psid: message.psid, elements });
+      if (carousel.ok) {
+        console.log(
+          `[messenger-agent] product carousel sent mid=${mid} elements=${elements.length}`,
+        );
+      } else {
+        console.warn(`[messenger-agent] product carousel failed mid=${mid}: ${carousel.error}`);
+      }
+    }
+  }
+
   try {
     await prisma.messengerMessage.update({
       where: { mid },

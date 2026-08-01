@@ -236,3 +236,30 @@ Page fields na isu-subscribe (eksaktong 5): `messages`, `messaging_postbacks`,
    ang live test (operator checklist sa master doc).
 3. Development mode — app-role users lang (admin/developer/tester) ang
    makakatanggap ng echo; sinong account ang gagamitin sa gate test?
+
+## Phase 5 — Product carousel (2026-08-02)
+
+**Gate:** a tap resolves to the right variant (live re-validation, never the card price).
+
+- `app/services/messenger-products.server.ts` — NEW: `searchShopProducts` (Admin GraphQL
+  `products` query, `status:active` + optional title keyword + `price:>=/<=` bounds,
+  `sortKey: BEST_SELLING`, cap 8 per the master doc) at `getVariantLive` (variant gid →
+  live price/availability; tinatawag TUWING may `[TAP] PRODUCT_<variantId>` — hard rule:
+  never trust a rendered card). Same `unauthenticated.admin(MESSENGER_SHOP)` pattern ng
+  slots tool; designed failures, never throws, READ-ONLY (zero order writes).
+- `messenger-send.server.ts` — `sendMessengerGenericTemplate` (Generic Template, hindi
+  Product Template — locked decision #8): 10-element/80-char/3-button hard caps enforced;
+  shared `postMessengerMessage` core.
+- `webhooks.messenger.ts` — postbacks recorded na (dating ignored): synthetic mid
+  `pb:<psid>:<timestamp>` (o ang postback mid kung meron), text `[TAP] <payload>`,
+  same record→enqueue→worker path at dedupe ng text messages.
+- Orchestrator — `search_products` tool result → carousel auto-attach pagkatapos ng text
+  reply (best-effort: carousel failure after the text send ay LOG ONLY, hindi retry — no
+  duplicate risk). Cards: title, live ₱price (+ "out of stock"), image, `Piliin ito`
+  postback (`PRODUCT_<variantId>`) + `Tingnan sa website` URL button. Slot quick replies
+  ay dinodrop kapag may carousel sa same turn (Messenger UI dismisses them anyway).
+- System prompt — PRODUCT DISCOVERY section: search_products sa product/price/budget asks;
+  bawal i-enumerate ang products sa text (carousel na ang magpapakita); `[TAP]` = button
+  tap; laging get_product_details muna bago i-quote ang napiling product.
+- Tests: 363/363 (products service, generic template caps, postback recording, carousel
+  attach/failure/empty sa agent loop).

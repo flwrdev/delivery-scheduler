@@ -266,11 +266,15 @@ describe("webhooks.messenger action (POST events)", () => {
     expect(recordMock).not.toHaveBeenCalled();
   });
 
-  it("ignores postback-only events", async () => {
-    const event = { sender: { id: "111" }, postback: { payload: "GET_STARTED" } };
+  it("records postback events as [TAP] messages (phase 5 — no longer ignored)", async () => {
+    const event = { sender: { id: "111" }, timestamp: 5, postback: { payload: "GET_STARTED" } };
     const res = await runAction(makeSignedPostRequest(pageBody(event)));
     expect(res.status).toBe(200);
-    expect(recordMock).not.toHaveBeenCalled();
+    expect(recordMock).toHaveBeenCalledWith({
+      psid: "111",
+      mid: "pb:111:5",
+      text: "[TAP] GET_STARTED",
+    });
   });
 
   it("ignores standby-channel entries", async () => {
@@ -310,5 +314,78 @@ describe("webhooks.messenger action (POST events)", () => {
     const res = await runAction(makeSignedPostRequest("{not json"));
     expect(res.status).toBe(200);
     expect(recordMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("webhooks.messenger action — postback events (phase 5 carousel taps)", () => {
+  beforeEach(() => {
+    vi.stubEnv("MESSENGER_APP_SECRET", APP_SECRET);
+    recordMock.mockResolvedValue({ status: "new" });
+    enqueueMock.mockResolvedValue({ ok: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.clearAllMocks();
+  });
+
+  it("records a product postback as a [TAP] message with a synthetic mid and enqueues it", async () => {
+    const body = pageBody({
+      sender: { id: "24680" },
+      recipient: { id: "105284684761365" },
+      timestamp: 1753600001234,
+      postback: {
+        title: "Piliin ito",
+        payload: "PRODUCT_gid://shopify/ProductVariant/111",
+      },
+    });
+    const res = (await action({
+      request: makeSignedPostRequest(body),
+      params: {},
+      context: {},
+    } as never)) as Response;
+
+    expect(res.status).toBe(200);
+    expect(recordMock).toHaveBeenCalledWith({
+      psid: "24680",
+      mid: "pb:24680:1753600001234",
+      text: "[TAP] PRODUCT_gid://shopify/ProductVariant/111",
+    });
+    expect(enqueueMock).toHaveBeenCalledWith({ mid: "pb:24680:1753600001234" });
+  });
+
+  it("prefers the postback's own mid when Meta provides one", async () => {
+    const body = pageBody({
+      sender: { id: "24680" },
+      timestamp: 1753600001234,
+      postback: { mid: "m.postback.1", payload: "PRODUCT_gid://shopify/ProductVariant/2" },
+    });
+    await action({ request: makeSignedPostRequest(body), params: {}, context: {} } as never);
+    expect(recordMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mid: "m.postback.1" }),
+    );
+  });
+
+  it("ignores a postback without a payload", async () => {
+    const body = pageBody({
+      sender: { id: "24680" },
+      timestamp: 1753600001234,
+      postback: { title: "Get Started" },
+    });
+    const res = (await action({
+      request: makeSignedPostRequest(body),
+      params: {},
+      context: {},
+    } as never)) as Response;
+    expect(res.status).toBe(200);
+    expect(recordMock).not.toHaveBeenCalled();
+  });
+
+  it("still handles a plain text event exactly as before (no regression)", async () => {
+    const body = pageBody(textMessageEvent("13579", "hello"));
+    await action({ request: makeSignedPostRequest(body), params: {}, context: {} } as never);
+    expect(recordMock).toHaveBeenCalledWith(
+      expect.objectContaining({ psid: "13579", text: "hello" }),
+    );
   });
 });

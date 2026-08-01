@@ -29,10 +29,18 @@ import { enqueueMessengerEchoTask } from "../services/messenger-queue.server";
 
 interface MessengerWebhookEvent {
   sender?: { id?: string };
+  timestamp?: number;
   message?: {
     mid?: string;
     text?: unknown;
     is_echo?: boolean;
+  };
+  // Phase 5: carousel button taps (messaging_postbacks). Postbacks carry no
+  // mid — a synthetic pb:<psid>:<timestamp> key gives them the same dedupe.
+  postback?: {
+    title?: string;
+    payload?: string;
+    mid?: string;
   };
 }
 
@@ -99,26 +107,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // entry[].standby (subscribed but log-only in v1) is deliberately ignored.
   for (const entry of body.entry ?? []) {
     for (const event of entry.messaging ?? []) {
-      const message = event.message;
-      // is_echo is the loop guard: message_echoes is a subscribed field, so
-      // without this skip the bot would echo its own echoes forever.
-      if (!message || message.is_echo || typeof message.text !== "string" || !message.text) {
+      const psid = event.sender?.id;
+      if (!psid) {
+        console.warn("[messenger] event without sender.id — skipped");
         continue;
       }
 
-      const psid = event.sender?.id;
-      if (!psid) {
-        console.warn("[messenger] text message event without sender.id — skipped");
-        continue;
-      }
-      const mid = message.mid;
-      if (typeof mid !== "string" || !mid) {
-        console.warn("[messenger] text message event without mid — skipped");
+      let mid: string;
+      let text: string;
+      const message = event.message;
+      if (message && !message.is_echo && typeof message.text === "string" && message.text) {
+        if (typeof message.mid !== "string" || !message.mid) {
+          console.warn("[messenger] text message event without mid — skipped");
+          continue;
+        }
+        mid = message.mid;
+        text = message.text;
+      } else if (event.postback?.payload) {
+        // Carousel/button tap. The [TAP] prefix is the agent's cue that this is
+        // a button payload, not typed text (e.g. PRODUCT_<variantId>).
+        mid = event.postback.mid ?? `pb:${psid}:${event.timestamp ?? "0"}`;
+        text = `[TAP] ${event.postback.payload}`;
+      } else {
+        // is_echo is the loop guard: message_echoes is a subscribed field, so
+        // without this skip the bot would echo its own echoes forever.
         continue;
       }
 
       try {
-        const recorded = await recordInboundTextMessage({ psid, mid, text: message.text });
+        const recorded = await recordInboundTextMessage({ psid, mid, text });
         if (recorded.status === "duplicate") {
           console.log(`[messenger] duplicate mid=${mid} — skipped (redelivery dedupe)`);
           continue;
