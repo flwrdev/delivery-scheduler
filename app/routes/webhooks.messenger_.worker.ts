@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 
 import { verifyMetaWebhookSignature } from "../lib/verify-meta-signature.server";
-import { processEchoByMid } from "../services/messenger-events.server";
+import { processAgentTurnByMid } from "../services/messenger-agent.server";
 import { MESSENGER_WORKER_SIGNATURE_HEADER } from "../services/messenger-queue.server";
 
 // Cloud Tasks worker for the FlowerCart Messenger agent (phase 3).
@@ -16,7 +16,7 @@ import { MESSENGER_WORKER_SIGNATURE_HEADER } from "../services/messenger-queue.s
 //         malformed payload, sending not configured)
 //   503 — transient send failure; retry with backoff
 //
-// Zero-duplicate guarantee: processEchoByMid skips any message whose
+// Zero-duplicate guarantee: processAgentTurnByMid skips any message whose
 // repliedAt is already set, so a retry after a successful send is a no-op.
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -51,10 +51,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   try {
-    const result = await processEchoByMid(mid);
+    const result = await processAgentTurnByMid(mid);
     switch (result.status) {
       case "sent":
-        console.log(`[messenger-worker] echoed mid=${mid} reply=${result.replyMid}`);
+        console.log(`[messenger-worker] replied mid=${mid} reply=${result.replyMid}`);
         return new Response(null, { status: 200 });
       case "skipped":
         console.log(`[messenger-worker] skipped mid=${mid} (already replied or not a customer message)`);

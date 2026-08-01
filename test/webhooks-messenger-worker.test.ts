@@ -6,8 +6,8 @@ const { processMock } = vi.hoisted(() => ({
   processMock: vi.fn(),
 }));
 
-vi.mock("../app/services/messenger-events.server", () => ({
-  processEchoByMid: processMock,
+vi.mock("../app/services/messenger-agent.server", () => ({
+  processAgentTurnByMid: processMock,
 }));
 
 import { action } from "../app/routes/webhooks.messenger_.worker";

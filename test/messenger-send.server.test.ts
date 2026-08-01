@@ -70,6 +70,40 @@ describe("sendMessengerTextMessage", () => {
     });
   });
 
+  it("includes quick_replies in the message body when provided (phase 4 slot choices)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ message_id: "mid.qr" }));
+
+    const result = await sendMessengerTextMessage({
+      psid: "123",
+      text: "Piliin ang oras:",
+      quickReplies: [
+        { title: "9AM-12PM", payload: "SLOT_9AM-12PM" },
+        { title: "12PM-3PM", payload: "SLOT_12PM-3PM" },
+      ],
+    });
+
+    expect(result).toEqual({ ok: true, messageId: "mid.qr" });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      recipient: { id: "123" },
+      messaging_type: "RESPONSE",
+      message: {
+        text: "Piliin ang oras:",
+        quick_replies: [
+          { content_type: "text", title: "9AM-12PM", payload: "SLOT_9AM-12PM" },
+          { content_type: "text", title: "12PM-3PM", payload: "SLOT_12PM-3PM" },
+        ],
+      },
+    });
+  });
+
+  it("omits quick_replies entirely when the list is empty", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ message_id: "mid.abc" }));
+    await sendMessengerTextMessage({ psid: "123", text: "hi", quickReplies: [] });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body).message).toEqual({ text: "hi" });
+  });
+
   it("trims trailing whitespace/newlines from env values", async () => {
     vi.stubEnv("MESSENGER_PAGE_ACCESS_TOKEN", `${TOKEN}\n`);
     vi.stubEnv("MESSENGER_PAGE_ID", `${PAGE_ID}\n`);
