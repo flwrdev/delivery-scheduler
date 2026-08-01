@@ -36,7 +36,9 @@ export interface MessengerCarouselElement {
   title: string;
   subtitle?: string;
   imageUrl?: string;
-  buttons: Array<
+  /** Tap on the card/picture itself opens this URL (merchant: walang button para kita ang picture). */
+  defaultActionUrl?: string;
+  buttons?: Array<
     | { type: "postback"; title: string; payload: string }
     | { type: "web_url"; title: string; url: string }
   >;
@@ -136,7 +138,17 @@ export async function sendMessengerGenericTemplate({
           title: element.title.slice(0, CAROUSEL_TEXT_LIMIT),
           ...(element.subtitle ? { subtitle: element.subtitle.slice(0, CAROUSEL_TEXT_LIMIT) } : {}),
           ...(element.imageUrl ? { image_url: element.imageUrl } : {}),
-          buttons: element.buttons.slice(0, CAROUSEL_BUTTON_LIMIT),
+          ...(element.defaultActionUrl
+            ? {
+                default_action: {
+                  type: "web_url",
+                  url: element.defaultActionUrl,
+                },
+              }
+            : {}),
+          ...(element.buttons?.length
+            ? { buttons: element.buttons.slice(0, CAROUSEL_BUTTON_LIMIT) }
+            : {}),
         })),
       },
     },

@@ -252,14 +252,12 @@ describe("processAgentTurnByMid", () => {
     expect(psid).toBe(PSID);
     expect(elements).toHaveLength(2);
     expect(elements[0].title).toBe("Sweet Heart");
-    expect(elements[0].buttons[0]).toEqual({
-      type: "postback",
-      title: "Piliin ito",
-      payload: "PRODUCT_gid://shopify/ProductVariant/111",
-    });
-    expect(elements[0].buttons[1].type).toBe("web_url");
+    // Merchant decision: WALANG buttons — tap sa picture (default action) ang
+    // pupunta sa product page, para kita ang buong photo.
+    expect(elements[0].buttons).toBeUndefined();
+    expect(elements[0].defaultActionUrl).toBe("https://flowercart.store/products/sweet-heart");
     expect(elements[1].subtitle).toContain("out of stock");
-    expect(elements[1].buttons).toHaveLength(1);
+    expect(elements[1].defaultActionUrl).toBeUndefined();
   });
 
   it("still reports sent when the carousel send fails after the text went out", async () => {

@@ -55,6 +55,7 @@ function buildSystemPrompt(now: Date): string {
     "- Use EVERYDAY words; when a Tagalog word is deep or formal, use the common English word instead (say 'estimate', never 'tantiya').",
     "- FORMAT for easy reading, Messenger-style: short paragraphs with a blank line between thoughts — never one dense block of text. Lists (slots, dates) go on their own lines.",
     "- Answer what was asked; skip facts the customer didn't ask about unless it directly blocks their request.",
+    "- PLAIN TEXT ONLY: Messenger does not render markdown. Never write **bold**, *italics*, [links](url), or # headings — asterisks show up literally to the customer. Bare URLs and simple '-' lists are fine.",
     "",
     `Current date and time in Asia/Manila: ${getManilaNowLabel(now)}. All dates are in Asia/Manila.`,
     "",
@@ -70,7 +71,8 @@ function buildSystemPrompt(now: Date): string {
     "- When the customer asks about products, available bouquets, prices, recommendations, or a budget, ALWAYS call search_products (use max_price/min_price for budgets like 'below 1000'). 'Ano mga available na bouquet niyo?' = search_products with no filters — never answer product questions from general knowledge or by just linking the website.",
     "- A product carousel (photos, live prices, buttons) is sent AUTOMATICALLY right after your reply whenever search_products returns products — so keep your text short (isang maikling intro lang, e.g. 'Heto po ang mga maganda naming options 🌸') and NEVER list the product names or prices in your text.",
     "- If search_products returns zero products, say walang exact match at i-suggest ang website, or ask for a different budget/keyword.",
-    "- A customer message that starts with [TAP] is a button tap, not typed text. [TAP] PRODUCT_<variantId> means they picked that product card: ALWAYS call get_product_details with that variant id first (the card may be old — never trust its price), then confirm the choice with the LIVE price and offer the next step (delivery date check, or handoff to a person to place the order).",
+    "- The cards have NO buttons (tap on the picture opens the product page). The customer PICKS a bouquet by typing its name (e.g. 'yung Sweet Heart' or 'kunin ko na yung Autumn Morning'): call search_products with that name as the query, and when it clearly matches one product, confirm it with the LIVE price and offer the next step (delivery date check, or handoff to a person to place the order).",
+    "- A customer message that starts with [TAP] is a button tap, not typed text. [TAP] PRODUCT_<variantId> means they picked that product from an older card: ALWAYS call get_product_details with that variant id first (the card may be old — never trust its price), then confirm with the LIVE price.",
     "- If get_product_details says the variant is unavailable or not found, apologize briefly and offer to search alternatives.",
     "- If you cannot help or the customer asks for a human, tell them a person from The Flowercart will follow up in this thread.",
     "",
@@ -143,6 +145,9 @@ function formatPricePhp(price: number): string {
   return `₱${price.toLocaleString("en-PH")}`;
 }
 
+// Merchant decision (2026-08-02): WALANG buttons sa cards — natatakpan ng
+// dalawang malaking button ang picture. Tap sa picture mismo = product page;
+// ang in-chat na pagpili ay sa pag-type ng bouquet name.
 function productCarouselElements(products: MessengerProduct[]) {
   return products
     .filter((product) => product.variantId)
@@ -150,16 +155,7 @@ function productCarouselElements(products: MessengerProduct[]) {
       title: product.productTitle,
       subtitle: `${formatPricePhp(product.pricePhp)}${product.available ? "" : " — out of stock"}`,
       ...(product.imageUrl ? { imageUrl: product.imageUrl } : {}),
-      buttons: [
-        {
-          type: "postback" as const,
-          title: "Piliin ito",
-          payload: `PRODUCT_${product.variantId}`,
-        },
-        ...(product.url
-          ? [{ type: "web_url" as const, title: "Tingnan sa website", url: product.url }]
-          : []),
-      ],
+      ...(product.url ? { defaultActionUrl: product.url } : {}),
     }));
 }
 
