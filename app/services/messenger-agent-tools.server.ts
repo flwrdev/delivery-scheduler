@@ -19,6 +19,8 @@ import {
 } from "../lib/delivery-availability";
 import type { DeliveryScheduleRules } from "../lib/delivery-availability";
 import { getScheduleRulesWithBookedCounts } from "./schedule-rules.server";
+import { checkDeliveryCoverage } from "./messenger-coverage.server";
+import type { CheckDeliveryCoverageInput } from "./messenger-coverage.server";
 import type { LlmToolDefinition } from "./messenger-llm.server";
 import { unauthenticated } from "../shopify.server";
 
@@ -331,6 +333,22 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
       required: ["date"],
     },
   },
+  {
+    name: "check_delivery_coverage",
+    description:
+      "Check whether a place is inside The Flowercart's Metro Manila delivery coverage, " +
+      "using the shop's own zip/barangay list. Call this when the customer asks kung saan " +
+      "kayo nagde-deliver, kung covered ang lugar nila, o nagbanggit ng lugar/zip para sa delivery. " +
+      "Pass the zip code if given, else the barangay/area/city name.",
+    input_schema: {
+      type: "object",
+      properties: {
+        zip: { type: "string", description: "Philippine zip code, e.g. 1300." },
+        area: { type: "string", description: "Barangay, area, subdivision, or city name." },
+      },
+      required: [],
+    },
+  },
 ];
 
 /** Dispatch a tool call from the orchestrator loop. Never throws. */
@@ -342,6 +360,9 @@ export async function executeAgentTool(
   try {
     if (name === "resolve_date") {
       return resolveDeliveryDate((input ?? {}) as ResolveDeliveryDateInput, now);
+    }
+    if (name === "check_delivery_coverage") {
+      return checkDeliveryCoverage((input ?? {}) as CheckDeliveryCoverageInput);
     }
     if (name === "get_available_slots") {
       return await getAvailableDeliverySlots(
