@@ -2,14 +2,28 @@ import crypto from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { sendMock } = vi.hoisted(() => ({
-  sendMock: vi.fn(),
+const { recordMock, deleteMock, processMock, enqueueMock } = vi.hoisted(() => ({
+  recordMock: vi.fn(),
+  deleteMock: vi.fn(),
+  processMock: vi.fn(),
+  enqueueMock: vi.fn(),
 }));
 
-vi.mock("../app/services/messenger-send.server", () => ({
-  sendMessengerTextMessage: sendMock,
+vi.mock("../app/services/messenger-events.server", () => ({
+  recordInboundTextMessage: recordMock,
+  deleteRecordedMessage: deleteMock,
+  processEchoByMid: processMock,
 }));
 
+vi.mock("../app/services/messenger-queue.server", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../app/services/messenger-queue.server")>();
+  return {
+    ...original,
+    enqueueMessengerEchoTask: enqueueMock,
+  };
+});
+
+import { MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE } from "../app/services/messenger-queue.server";
 import { action, loader } from "../app/routes/webhooks.messenger";
 
 const APP_SECRET = "meta-app-secret";
@@ -116,8 +130,14 @@ describe("webhooks.messenger loader (GET verify handshake)", () => {
 describe("webhooks.messenger action (POST events)", () => {
   beforeEach(() => {
     vi.stubEnv("MESSENGER_APP_SECRET", APP_SECRET);
-    sendMock.mockReset();
-    sendMock.mockResolvedValue({ ok: true, messageId: "mid.reply" });
+    recordMock.mockReset();
+    deleteMock.mockReset();
+    processMock.mockReset();
+    enqueueMock.mockReset();
+    recordMock.mockResolvedValue({ status: "new" });
+    deleteMock.mockResolvedValue(undefined);
+    processMock.mockResolvedValue({ status: "sent", replyMid: "mid.reply" });
+    enqueueMock.mockResolvedValue({ ok: true, taskName: "projects/p/locations/l/queues/q/tasks/t" });
   });
 
   afterEach(() => {
@@ -128,12 +148,13 @@ describe("webhooks.messenger action (POST events)", () => {
     return (await action({ request, params: {}, context: {} } as never)) as Response;
   }
 
-  it("rejects a POST with no signature header and never calls send", async () => {
+  it("rejects a POST with no signature header and never touches storage", async () => {
     const res = await runAction(
       makeSignedPostRequest(pageBody(textMessageEvent("111", "hi")), { signature: null }),
     );
     expect(res.status).toBe(401);
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(recordMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
   });
 
   it("rejects a POST signed with the wrong secret", async () => {
@@ -141,14 +162,14 @@ describe("webhooks.messenger action (POST events)", () => {
       makeSignedPostRequest(pageBody(textMessageEvent("111", "hi")), { secret: "wrong" }),
     );
     expect(res.status).toBe(401);
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(recordMock).not.toHaveBeenCalled();
   });
 
   it("rejects when MESSENGER_APP_SECRET is not configured", async () => {
     vi.stubEnv("MESSENGER_APP_SECRET", "");
     const res = await runAction(makeSignedPostRequest(pageBody(textMessageEvent("111", "hi"))));
     expect(res.status).toBe(401);
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(recordMock).not.toHaveBeenCalled();
   });
 
   it("returns 405 for non-POST methods", async () => {
@@ -156,14 +177,22 @@ describe("webhooks.messenger action (POST events)", () => {
     expect(res.status).toBe(405);
   });
 
-  it("echoes a text message back to the sender", async () => {
-    const res = await runAction(makeSignedPostRequest(pageBody(textMessageEvent("111", "hi"))));
+  it("records a text message then enqueues its echo task (no inline send)", async () => {
+    const event = textMessageEvent("111", "hi");
+    const res = await runAction(makeSignedPostRequest(pageBody(event)));
     expect(res.status).toBe(200);
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledWith({ psid: "111", text: "Echo: hi" });
+    expect(recordMock).toHaveBeenCalledTimes(1);
+    expect(recordMock).toHaveBeenCalledWith({
+      psid: "111",
+      mid: (event.message as { mid: string }).mid,
+      text: "hi",
+    });
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+    expect(enqueueMock).toHaveBeenCalledWith({ mid: (event.message as { mid: string }).mid });
+    expect(processMock).not.toHaveBeenCalled();
   });
 
-  it("echoes once per text message across multiple entries", async () => {
+  it("records and enqueues once per text message across multiple entries", async () => {
     const body = {
       object: "page",
       entry: [
@@ -173,16 +202,55 @@ describe("webhooks.messenger action (POST events)", () => {
     };
     const res = await runAction(makeSignedPostRequest(body));
     expect(res.status).toBe(200);
-    expect(sendMock).toHaveBeenCalledTimes(3);
-    expect(sendMock).toHaveBeenNthCalledWith(2, { psid: "222", text: "Echo: two" });
+    expect(recordMock).toHaveBeenCalledTimes(3);
+    expect(enqueueMock).toHaveBeenCalledTimes(3);
   });
 
-  it("never echoes an echo event (loop prevention — message_echoes is subscribed)", async () => {
+  it("skips enqueue for a duplicate mid (Meta redelivery dedupe)", async () => {
+    recordMock.mockResolvedValue({ status: "duplicate" });
+    const res = await runAction(makeSignedPostRequest(pageBody(textMessageEvent("111", "hi"))));
+    expect(res.status).toBe(200);
+    expect(enqueueMock).not.toHaveBeenCalled();
+    expect(processMock).not.toHaveBeenCalled();
+  });
+
+  it("skips enqueue when recording fails (Meta will redeliver)", async () => {
+    recordMock.mockResolvedValue({ status: "error", error: "db down" });
+    const res = await runAction(makeSignedPostRequest(pageBody(textMessageEvent("111", "hi"))));
+    expect(res.status).toBe(200);
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
+
+  it("processes inline when the queue is not configured (local dev fallback)", async () => {
+    enqueueMock.mockResolvedValue({
+      ok: false,
+      notConfigured: true,
+      error: MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE,
+    });
+    const event = textMessageEvent("111", "hi");
+    const res = await runAction(makeSignedPostRequest(pageBody(event)));
+    expect(res.status).toBe(200);
+    expect(processMock).toHaveBeenCalledTimes(1);
+    expect(processMock).toHaveBeenCalledWith((event.message as { mid: string }).mid);
+    expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  it("deletes the recorded row on a queue infra failure so redelivery can reprocess", async () => {
+    enqueueMock.mockResolvedValue({ ok: false, error: "Cloud Tasks 500" });
+    const event = textMessageEvent("111", "hi");
+    const res = await runAction(makeSignedPostRequest(pageBody(event)));
+    expect(res.status).toBe(200);
+    expect(deleteMock).toHaveBeenCalledWith((event.message as { mid: string }).mid);
+    expect(processMock).not.toHaveBeenCalled();
+  });
+
+  it("never records an echo event (loop prevention — message_echoes is subscribed)", async () => {
     const res = await runAction(
       makeSignedPostRequest(pageBody(textMessageEvent("111", "Echo: hi", { is_echo: true }))),
     );
     expect(res.status).toBe(200);
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(recordMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
   });
 
   it("ignores attachment-only messages (no text)", async () => {
@@ -192,14 +260,14 @@ describe("webhooks.messenger action (POST events)", () => {
     };
     const res = await runAction(makeSignedPostRequest(pageBody(event)));
     expect(res.status).toBe(200);
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(recordMock).not.toHaveBeenCalled();
   });
 
   it("ignores postback-only events", async () => {
     const event = { sender: { id: "111" }, postback: { payload: "GET_STARTED" } };
     const res = await runAction(makeSignedPostRequest(pageBody(event)));
     expect(res.status).toBe(200);
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(recordMock).not.toHaveBeenCalled();
   });
 
   it("ignores standby-channel entries", async () => {
@@ -209,23 +277,28 @@ describe("webhooks.messenger action (POST events)", () => {
     };
     const res = await runAction(makeSignedPostRequest(body));
     expect(res.status).toBe(200);
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(recordMock).not.toHaveBeenCalled();
   });
 
   it("ignores payloads whose object is not page", async () => {
     const res = await runAction(makeSignedPostRequest({ object: "user", entry: [] }));
     expect(res.status).toBe(200);
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(recordMock).not.toHaveBeenCalled();
   });
 
-  it("still returns 200 when the send fails", async () => {
-    sendMock.mockResolvedValue({ ok: false, error: "Graph API 400: boom" });
+  it("still returns 200 when the inline fallback send fails", async () => {
+    enqueueMock.mockResolvedValue({
+      ok: false,
+      notConfigured: true,
+      error: MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE,
+    });
+    processMock.mockResolvedValue({ status: "retryable_failure" });
     const res = await runAction(makeSignedPostRequest(pageBody(textMessageEvent("111", "hi"))));
     expect(res.status).toBe(200);
   });
 
-  it("still returns 200 when the send throws", async () => {
-    sendMock.mockRejectedValue(new Error("unexpected"));
+  it("still returns 200 when recording throws unexpectedly", async () => {
+    recordMock.mockRejectedValue(new Error("unexpected"));
     const res = await runAction(makeSignedPostRequest(pageBody(textMessageEvent("111", "hi"))));
     expect(res.status).toBe(200);
   });
@@ -233,16 +306,6 @@ describe("webhooks.messenger action (POST events)", () => {
   it("returns 200 for a validly signed but malformed JSON body", async () => {
     const res = await runAction(makeSignedPostRequest("{not json"));
     expect(res.status).toBe(200);
-    expect(sendMock).not.toHaveBeenCalled();
-  });
-
-  it("truncates the echo to Messenger's 2000-char text limit", async () => {
-    const res = await runAction(
-      makeSignedPostRequest(pageBody(textMessageEvent("111", "x".repeat(3000)))),
-    );
-    expect(res.status).toBe(200);
-    const sentText = sendMock.mock.calls[0][0].text as string;
-    expect(sentText.startsWith("Echo: x")).toBe(true);
-    expect(sentText.length).toBe(2000);
+    expect(recordMock).not.toHaveBeenCalled();
   });
 });
