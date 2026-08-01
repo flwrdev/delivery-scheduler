@@ -111,7 +111,7 @@ const PROVINCIAL_AREAS: Array<{ name: string; province: string; lat: number; lng
 ];
 
 const PROVINCIAL_NOTE =
-  "Outside-Metro-Manila area: covered, but deliveries can take longer — advance booking is recommended (same-day not guaranteed).";
+  "Outside-Metro-Manila area: covered, and same-day delivery is available (same slots and cutoff as Metro Manila).";
 
 export interface CoverageMatch extends NcrZipEntry {
   estimatedKm?: number;
