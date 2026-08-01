@@ -109,19 +109,24 @@ describe("flat per-city delivery fees (merchant's quoting table, 2026-07)", () =
     }
   });
 
-  it("covers provincial towns from the fee table with their flat fee and a condition note", () => {
+  it("covers provincial towns with a km-based estimate and a condition note", () => {
     // "Dasmariñas" is BOTH a Makati village and a Cavite city — both returned.
     const dasma = checkDeliveryCoverage({ area: "Dasmariñas" });
     expect(dasma).toMatchObject({ ok: true, covered: true });
     if (dasma.ok && dasma.covered) {
       const cavite = dasma.matches.find((m) => m.provincial);
-      expect(cavite?.flatFeePhp).toBe(450);
+      // Distance-based estimate — dapat malapit sa ~P350 actual checkout rate,
+      // hindi ang lumang P450 flat na masyadong mataas.
+      expect(cavite?.estimatedFeePhp).toBeGreaterThan(280);
+      expect(cavite?.estimatedFeePhp).toBeLessThan(400);
+      expect(cavite?.flatFeePhp).toBeUndefined();
       expect(dasma.provincialNote).toBeTruthy();
     }
 
     const meycauayan = checkDeliveryCoverage({ area: "meycauayan" });
     if (meycauayan.ok && meycauayan.covered) {
-      expect(meycauayan.matches[0].flatFeePhp).toBe(200);
+      expect(meycauayan.matches[0].estimatedFeePhp).toBeGreaterThan(100);
+      expect(meycauayan.matches[0].estimatedKm).toBeGreaterThan(0);
     }
   });
 

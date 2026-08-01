@@ -48,8 +48,9 @@ export function estimateDeliveryFeePhp(roadKm: number): number {
 }
 
 // Merchant's flat quoting table ("Delivery Fees by City", Meta knowledge base,
-// updated 2026-07). This is what the agent QUOTES; checkout still charges the
-// Lalamove-computed rate for NCR.
+// updated 2026-07). Since 2026-08-02 the km-based estimate is the PRIMARY quote
+// (mas dikit sa distance-based checkout); this table is the NCR-only fallback
+// when an entry has no coordinates.
 const CITY_FLAT_FEE_PHP: Record<string, number> = {
   manila: 150,
   malabon: 150,
@@ -74,36 +75,39 @@ function caloocanFlatFee(zip: string): number {
   return Number(zip) >= 1420 ? 200 : 150;
 }
 
-// Towns OUTSIDE Metro Manila from the same table — covered, pero conditional:
-// deliveries can take longer; advance booking recommended.
-const PROVINCIAL_AREAS: Array<{ name: string; province: string; feePhp: number }> = [
-  { name: "Meycauayan", province: "Bulacan", feePhp: 200 },
-  { name: "Marilao", province: "Bulacan", feePhp: 200 },
-  { name: "Obando", province: "Bulacan", feePhp: 200 },
-  { name: "Cainta", province: "Rizal", feePhp: 250 },
-  { name: "Taytay", province: "Rizal", feePhp: 250 },
-  { name: "Rodriguez (Montalban)", province: "Rizal", feePhp: 250 },
-  { name: "Antipolo", province: "Rizal", feePhp: 300 },
-  { name: "San Mateo", province: "Rizal", feePhp: 300 },
-  { name: "Binangonan", province: "Rizal", feePhp: 300 },
-  { name: "Angono", province: "Rizal", feePhp: 300 },
-  { name: "Bocaue", province: "Bulacan", feePhp: 300 },
-  { name: "Balagtas", province: "Bulacan", feePhp: 300 },
-  { name: "San Jose del Monte", province: "Bulacan", feePhp: 300 },
-  { name: "Cavite City", province: "Cavite", feePhp: 300 },
-  { name: "Bacoor", province: "Cavite", feePhp: 300 },
-  { name: "Imus", province: "Cavite", feePhp: 300 },
-  { name: "Kawit", province: "Cavite", feePhp: 300 },
-  { name: "Molino", province: "Cavite", feePhp: 300 },
-  { name: "Noveleta", province: "Cavite", feePhp: 400 },
-  { name: "Rosario", province: "Cavite", feePhp: 400 },
-  { name: "General Trias", province: "Cavite", feePhp: 450 },
-  { name: "Dasmariñas", province: "Cavite", feePhp: 450 },
-  { name: "San Pedro", province: "Laguna", feePhp: 450 },
-  { name: "Biñan", province: "Laguna", feePhp: 450 },
-  { name: "Santa Rosa", province: "Laguna", feePhp: 450 },
-  { name: "Cabuyao", province: "Laguna", feePhp: 450 },
-  { name: "Calamba", province: "Laguna", feePhp: 450 },
+// Towns OUTSIDE Metro Manila from the merchant's coverage page — covered, pero
+// conditional: deliveries can take longer; advance booking recommended.
+// Town-center coordinates: one-time Nominatim geocode (2026-08-02, build-time).
+// Ang quoted fee nila ay ang km-based estimate — ang lumang flat table (P200-450)
+// ay masyadong malayo sa distance-based checkout rate kaya tinanggal.
+const PROVINCIAL_AREAS: Array<{ name: string; province: string; lat: number; lng: number }> = [
+  { name: "Meycauayan", province: "Bulacan", lat: 14.7345008, lng: 120.9571635 },
+  { name: "Marilao", province: "Bulacan", lat: 14.7575956, lng: 120.9484672 },
+  { name: "Obando", province: "Bulacan", lat: 14.70989, lng: 120.9365149 },
+  { name: "Bocaue", province: "Bulacan", lat: 14.7954178, lng: 120.9253578 },
+  { name: "Balagtas", province: "Bulacan", lat: 14.8177897, lng: 120.9064492 },
+  { name: "San Jose del Monte", province: "Bulacan", lat: 14.8101978, lng: 121.0474088 },
+  { name: "Cainta", province: "Rizal", lat: 14.5780161, lng: 121.1163072 },
+  { name: "Taytay", province: "Rizal", lat: 14.5587089, lng: 121.1359659 },
+  { name: "Rodriguez (Montalban)", province: "Rizal", lat: 14.7324642, lng: 121.1453418 },
+  { name: "Antipolo", province: "Rizal", lat: 14.5871972, lng: 121.1759246 },
+  { name: "San Mateo", province: "Rizal", lat: 14.6951949, lng: 121.1174024 },
+  { name: "Binangonan", province: "Rizal", lat: 14.4647563, lng: 121.1923358 },
+  { name: "Angono", province: "Rizal", lat: 14.5258481, lng: 121.1529683 },
+  { name: "Cavite City", province: "Cavite", lat: 14.4820919, lng: 120.908919 },
+  { name: "Bacoor", province: "Cavite", lat: 14.4596033, lng: 120.9598169 },
+  { name: "Imus", province: "Cavite", lat: 14.4290216, lng: 120.9365838 },
+  { name: "Kawit", province: "Cavite", lat: 14.4442694, lng: 120.9035361 },
+  { name: "Molino", province: "Cavite", lat: 14.3942698, lng: 120.9862923 },
+  { name: "Noveleta", province: "Cavite", lat: 14.4278394, lng: 120.8808454 },
+  { name: "Rosario", province: "Cavite", lat: 14.4167151, lng: 120.8552642 },
+  { name: "General Trias", province: "Cavite", lat: 14.3861207, lng: 120.8802855 },
+  { name: "Dasmariñas", province: "Cavite", lat: 14.3270819, lng: 120.9370871 },
+  { name: "San Pedro", province: "Laguna", lat: 14.3639435, lng: 121.056771 },
+  { name: "Biñan", province: "Laguna", lat: 14.3388259, lng: 121.0841826 },
+  { name: "Santa Rosa", province: "Laguna", lat: 14.3146042, lng: 121.1137004 },
+  { name: "Cabuyao", province: "Laguna", lat: 14.280145, lng: 121.1234786 },
+  { name: "Calamba", province: "Laguna", lat: 14.2060217, lng: 121.1556496 },
 ];
 
 const PROVINCIAL_NOTE =
@@ -128,7 +132,7 @@ export type CheckDeliveryCoverageResult =
   | { ok: false; error: string };
 
 const FEE_NOTE =
-  "flatFeePhp is the shop's quoted delivery fee for that city. The exact checkout fee is Lalamove-computed and can differ slightly. Free shipping on orders P2,500 and up.";
+  "Quote estimatedFeePhp as the delivery fee ESTIMATE — it mirrors the distance-based checkout computation. flatFeePhp (Metro Manila only) is the shop's typical per-city fee, a fallback when there is no estimate. The exact fee always shows at checkout. Free shipping on orders P2,500 and up.";
 
 function flatFeeFor(entry: NcrZipEntry): number | undefined {
   const cityNorm = entry.city
@@ -238,13 +242,19 @@ export function checkDeliveryCoverage(
     if (ncrPool.length || provincial.length) {
       const matches: CoverageMatch[] = [
         ...ncrPool.slice(0, MAX_MATCHES).map((candidate) => toMatch(candidate.entry)),
-        ...provincial.slice(0, MAX_MATCHES).map(({ p }) => ({
-          area: p.name,
-          zip: "",
-          city: `${p.name}, ${p.province}`,
-          flatFeePhp: p.feePhp,
-          provincial: true,
-        })),
+        ...provincial.slice(0, MAX_MATCHES).map(({ p }) => {
+          const roadKm =
+            Math.round(haversineKm(PICKUP_POINT, { lat: p.lat, lng: p.lng }) * ROAD_FACTOR * 10) /
+            10;
+          return {
+            area: p.name,
+            zip: "",
+            city: `${p.name}, ${p.province}`,
+            estimatedKm: roadKm,
+            estimatedFeePhp: estimateDeliveryFeePhp(roadKm),
+            provincial: true,
+          };
+        }),
       ].slice(0, MAX_MATCHES + 2);
       return {
         ok: true,
