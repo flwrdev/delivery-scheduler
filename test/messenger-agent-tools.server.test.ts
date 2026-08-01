@@ -23,8 +23,9 @@ import {
 const NOW_MANILA_NOON_SAT = new Date("2026-08-01T04:00:00Z");
 
 describe("MESSENGER_AGENT_TOOLS registry", () => {
-  it("exposes exactly resolve_date and get_available_slots", () => {
+  it("exposes exactly the phase-4 tool set", () => {
     expect(MESSENGER_AGENT_TOOLS.map((t) => t.name).sort()).toEqual([
+      "check_delivery_coverage",
       "get_available_slots",
       "resolve_date",
     ]);

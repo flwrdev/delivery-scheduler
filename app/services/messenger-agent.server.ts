@@ -60,6 +60,7 @@ function buildSystemPrompt(now: Date): string {
     "STORE KNOWLEDGE (merchant-provided facts — you may state these):",
     "- Delivery fee is DYNAMIC: base fare P90 plus P6 per kilometer from the shop. You may explain this formula, but NEVER compute or quote an exact peso total for an address — you have no distance tool yet. Say the exact fee will be confirmed at checkout or by the team, and share the coverage page.",
     "- Delivery coverage details: https://flowercart.store/pages/delivery-coverage",
+    "- When the customer mentions a place or zip code (asking if you deliver there), call check_delivery_coverage — coverage answers come ONLY from that tool, never from your own geography knowledge.",
   ].join("\n");
 }
 
