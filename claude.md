@@ -9,8 +9,10 @@ na nagdaragdag ng delivery-date / time-slot scheduling sa checkout at nag-si-syn
 ng state na iyon papunta sa Shopify orders.
 
 - **Delivery state lives on the Shopify ORDER, not in Postgres.** Postgres holds
-  only two Prisma models (`Session`, `DeliveryScheduleConfig`); a specific order's
-  date/slot/reschedule status lives as order metafields, tags, and customAttributes.
+  four Prisma models (`Session`, `DeliveryScheduleConfig`, plus the Messenger
+  agent's `MessengerThread`/`MessengerMessage` conversation pair — conversation
+  only, never the order); a specific order's date/slot/reschedule status lives
+  as order metafields, tags, and customAttributes.
 - **Booked-slot counts are computed live** via Admin GraphQL on every call — never
   cached locally, walang audit table (the `delivery.reschedule_history` metafield is
   the only persistent reschedule audit trail).

@@ -21,7 +21,7 @@ Lahat ng nodes/edges sa baba ay may corresponding file or config.
 
 ## What's actually in this repo
 
-This is a Shopify embedded app (React Router 7, ported from the Shopify Remix template) that adds delivery-date/time-slot scheduling to checkout and syncs that state onto Shopify orders. **Delivery state lives on the Shopify order, not in Postgres** — Postgres holds only two models (`Session`, `DeliveryScheduleConfig`); everything about a specific order's delivery date/slot/reschedule status is stored as order metafields, tags, and customAttributes. Booked-slot counts are live-derived and never persisted — since Scheduler V2 Phase 2 ([ADR-12](./decisions.md)) they come from a `metafields.custom.date:`-scoped Admin GraphQL orders search over the capacity-tracked dates, memoized in-process for 60 seconds. Last-mile courier dispatch is **not** handled here — it is delegated to the official Shopify Lalamove app (the former custom Lalamove integration was removed 2026-07-04; see [decisions.md ADR-1](./decisions.md)). The app has two outbound side channels besides the Shopify APIs: (1) **customer email** (2026-07-13, [ADR-11](./decisions.md)): the `/app/orders` `sendEmail` op sends plain-text mail through the merchant's business mailbox (Namecheap Private Email SMTP via nodemailer, [`services/send-customer-email.server.ts`](../app/services/send-customer-email.server.ts)) — an outbound side effect that **writes nothing to any order** (design: [customer-email-design.md](./customer-email-design.md)); and (2) the **Meta Messenger webhook** (2026-07-27, FlowerCart Messenger agent phase 2 — echo bot): `GET/POST /webhooks/messenger` receives Meta-signed page events and replies via the Messenger Send API ([`services/messenger-send.server.ts`](../app/services/messenger-send.server.ts)) — no DB, no Admin API, no session storage, zero order writes; route/auth detail in [api.md](./api.md#meta-messenger-webhook-flowercart-messenger-agent). Phase 3 adds Cloud Tasks + Neon conversation models (master context outside the repo).
+This is a Shopify embedded app (React Router 7, ported from the Shopify Remix template) that adds delivery-date/time-slot scheduling to checkout and syncs that state onto Shopify orders. **Delivery state lives on the Shopify order, not in Postgres** — Postgres holds four models (`Session`, `DeliveryScheduleConfig`, plus the Messenger-agent conversation pair `MessengerThread`/`MessengerMessage` since 2026-08-01); everything about a specific order's delivery date/slot/reschedule status is stored as order metafields, tags, and customAttributes. Booked-slot counts are live-derived and never persisted — since Scheduler V2 Phase 2 ([ADR-12](./decisions.md)) they come from a `metafields.custom.date:`-scoped Admin GraphQL orders search over the capacity-tracked dates, memoized in-process for 60 seconds. Last-mile courier dispatch is **not** handled here — it is delegated to the official Shopify Lalamove app (the former custom Lalamove integration was removed 2026-07-04; see [decisions.md ADR-1](./decisions.md)). The app has two outbound side channels besides the Shopify APIs: (1) **customer email** (2026-07-13, [ADR-11](./decisions.md)): the `/app/orders` `sendEmail` op sends plain-text mail through the merchant's business mailbox (Namecheap Private Email SMTP via nodemailer, [`services/send-customer-email.server.ts`](../app/services/send-customer-email.server.ts)) — an outbound side effect that **writes nothing to any order** (design: [customer-email-design.md](./customer-email-design.md)); and (2) the **Meta Messenger webhook** (FlowerCart Messenger agent — phase 3 since 2026-08-01): `GET/POST /webhooks/messenger` receives Meta-signed page events, records them in the Neon conversation models (`MessengerThread`/`MessengerMessage`, mid-unique dedupe), and enqueues a **Cloud Tasks** task (`messenger-events`, us-central1) that the HMAC-authed worker route `POST /webhooks/messenger/worker` processes via the Messenger Send API ([`services/messenger-send.server.ts`](../app/services/messenger-send.server.ts)) — no Admin API, no session storage, zero order writes; route/auth detail in [api.md](./api.md#meta-messenger-webhook-flowercart-messenger-agent). (Master context outside the repo.)
 
 The full route/extension/service inventory (extensions ×5, embedded admin routes, auth/bootstrap routes, App Proxy routes, customer-account JWT routes, webhooks, services/lib) lives in **[api.md](./api.md)** — along with the order write-path contract. The one-sentence version proved there: only **4 surfaces** actually mutate delivery-schedule state (`webhooks.orders.create.ts`; `apps.schedule-rules.reschedule.ts` with no live caller; `public.customer-account.reschedule.ts` the only live customer path; and the `/app/orders` merchant `reschedule` op added by Orders Ops V2 Phase 4, ADR-10), and all 5 extensions except `delivery-reschedule-customer` are read-only.
 
@@ -185,8 +185,34 @@ erDiagram
         datetime updatedAt
     }
 
+    MessengerThread {
+        string   psid PK
+        bool     humanControl
+        datetime humanControlAt
+        datetime lastCustomerAt
+        bool     disclosedBot
+        string   state
+        string   shopifyCustomerId
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    MessengerMessage {
+        string   id PK
+        string   psid FK
+        string   role
+        string   bodyJson
+        string   mid UK
+        datetime repliedAt
+        string   replyMid
+        datetime createdAt
+    }
+
     Session ||..o{ DeliveryScheduleConfig : "shop string (no FK)"
+    MessengerThread ||--o{ MessengerMessage : "psid"
 ```
+
+**Messenger conversation models (FlowerCart Messenger agent, phase 3):** Neon holds the CONVERSATION, never the order — Shopify stays the order ledger (master doc, locked decision #1). `MessengerMessage.mid` is unique and doubles as the webhook dedupe (Meta redelivers on non-200); `repliedAt`/`replyMid` make the Cloud Tasks worker retry-idempotent and record bot-sent mids for phase 7 human-takeover echo-matching. Route/queue detail in [api.md](./api.md#meta-messenger-webhook-flowercart-messenger-agent).
 
 **Override maps inside the JSON columns:** `disabledSlotsJson` and `slotCapacityJson` are date-keyed maps whose inner keys are **slot-value references**, not identifiers — successive editor generations wrote the same window under drifted spellings (`"9am - 12pm"` vs `"9AM-12PM"`). Every lookup therefore resolves the key through the canonical comparator, and the lenient read is the only place that prunes entries naming no configured slot ([ADR-13](./decisions.md)). Nothing about the column set or the stored shape changed.
 
