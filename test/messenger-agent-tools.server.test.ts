@@ -34,6 +34,7 @@ describe("MESSENGER_AGENT_TOOLS registry", () => {
       "check_delivery_coverage",
       "get_available_slots",
       "get_product_details",
+      "lookup_order",
       "resolve_date",
       "search_products",
       "update_order",

@@ -5,10 +5,11 @@
 //
 //   1. The slot-filling STATE MACHINE (master doc: "the LLM handles language;
 //      the code advances state"). Required fields, in this exact order:
-//      product/variant → delivery date → time slot → recipient name →
-//      delivery address → recipient phone (+ optional card message and
-//      special instructions). Collected state persists on
-//      MessengerThread.orderStateJson in Neon — never in the LLM's memory.
+//      product/variant → delivery date → time slot → add-on decision
+//      (streamline 2026-08-03: recipient/address/phone ay OPTIONAL na — ang
+//      checkout ang kokolekta; card message at special instructions optional).
+//      Collected state persists on MessengerThread.orderStateJson in Neon —
+//      never in the LLM's memory.
 //
 //   2. The IDEMPOTENT draft-order create. A conversationOrderKey (UUID) is
 //      written to Neon BEFORE draftOrderCreate and carried on the draft as
@@ -98,13 +99,14 @@ export interface MessengerOrderState {
   invoiceUrl?: string;
 }
 
+// 2026-08-03 streamline (merchant feedback): ang recipient/address/phone ay
+// HINDI na hinihingi sa chat — ang Shopify checkout na mismo ang kokolekta ng
+// shipping details ("expected ni customer na magbabayad na lang siya"). Kapag
+// kusang ibinigay, sine-save pa rin bilang checkout prefill bonus.
 const REQUIRED_FIELDS = [
   "product",
   "delivery_date",
   "time_slot",
-  "recipient_name",
-  "address",
-  "phone",
   "add_on",
 ] as const;
 
@@ -118,12 +120,6 @@ function hasField(state: MessengerOrderState, field: RequiredField): boolean {
       return Boolean(state.deliveryDate);
     case "time_slot":
       return Boolean(state.timeSlot);
-    case "recipient_name":
-      return Boolean(state.recipientName);
-    case "address":
-      return Boolean(state.address);
-    case "phone":
-      return Boolean(state.phone);
     case "add_on":
       return Boolean(state.addOnDecided);
   }
@@ -619,15 +615,20 @@ export function buildOrderSummaryText(state: {
         ]
       : []),
     `Delivery: ${dateLabel} • ${state.timeSlot ?? "—"}`,
-    `Recipient: ${state.recipientName ?? "—"}`,
-    `Address: ${state.address ?? "—"}`,
-    `Phone: ${state.phone ?? "—"}`,
-    `Card message: ${state.cardMessage ?? "(wala)"}`,
+    // Streamline 2026-08-03: shipping details ay sa checkout na pinupunan —
+    // lumalabas lang dito kapag kusang ibinigay sa chat.
+    ...(state.recipientName ? [`Recipient: ${state.recipientName}`] : []),
+    ...(state.address ? [`Address: ${state.address}`] : []),
+    ...(state.phone ? [`Phone: ${state.phone}`] : []),
+    ...(state.cardMessage ? [`Card message: ${state.cardMessage}`] : []),
   ];
   if (state.specialInstructions) {
     lines.push(`Special instructions: ${state.specialInstructions}`);
   }
-  lines.push("", "Kung tama po lahat, i-tap ang Confirm para makuha ang secure na payment link. 💐");
+  lines.push(
+    "",
+    "Kung tama po lahat, i-tap ang Confirm para makuha ang secure na payment link — doon niyo na ilalagay ang delivery address. 💐",
+  );
   return lines.join("\n");
 }
 
@@ -828,13 +829,20 @@ function buildDraftOrderInput(psid: string, state: MessengerOrderState, now: Dat
     reserveInventoryUntil: new Date(
       now.getTime() + RESERVE_INVENTORY_MINUTES * 60 * 1000,
     ).toISOString(),
-    shippingAddress: {
-      ...splitName(state.recipientName ?? ""),
-      address1: state.address,
-      ...(state.addressCity ? { city: state.addressCity } : {}),
-      phone: state.phone,
-      countryCode: "PH",
-    },
+    // Streamline 2026-08-03: ang shipping ay kadalasang sa CHECKOUT na
+    // pinupunan — isinasama lang ang address dito kapag kusang ibinigay sa
+    // chat (prefill bonus).
+    ...(state.address
+      ? {
+          shippingAddress: {
+            ...splitName(state.recipientName ?? ""),
+            address1: state.address,
+            ...(state.addressCity ? { city: state.addressCity } : {}),
+            ...(state.phone ? { phone: state.phone } : {}),
+            countryCode: "PH",
+          },
+        }
+      : {}),
   };
 }
 
@@ -981,5 +989,117 @@ export async function confirmMessengerOrder(
       return adopt(lookup.node);
     }
     return { ok: false, code: "transient", error: detail };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Order-status lookup by email (2026-08-03) — READ-ONLY
+// ---------------------------------------------------------------------------
+//
+// Merchant decision: email lang ang validation (para hindi na kailangang
+// hanapin ng customer ang order number sa email notification). Seguridad:
+// LIMITADO ang ibinubunyag — status at delivery info lang, KAILANMAN walang
+// address o buong contact details; ang mismong query-by-email ang verification
+// (walang match = walang sasabihin, ni hindi kinukumpirma ang existence).
+
+export interface MessengerOrderStatus {
+  name: string;
+  createdAt: string;
+  financialStatus: string;
+  fulfillmentStatus: string;
+  deliveryDate: string;
+  deliveryTime: string;
+}
+
+export type LookupOrdersByEmailResult =
+  | { ok: true; orders: MessengerOrderStatus[]; note: string }
+  | { ok: false; error: string };
+
+const ORDERS_BY_EMAIL_QUERY = `#graphql
+  query MessengerOrdersByEmail($query: String!) {
+    orders(first: 3, query: $query, sortKey: CREATED_AT, reverse: true) {
+      nodes {
+        name
+        createdAt
+        displayFinancialStatus
+        displayFulfillmentStatus
+        customAttributes {
+          key
+          value
+        }
+      }
+    }
+  }
+`;
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export async function lookupOrdersByEmail(email: string): Promise<LookupOrdersByEmailResult> {
+  const cleaned = email.trim().toLowerCase();
+  if (!EMAIL_PATTERN.test(cleaned)) {
+    return { ok: false, error: "That does not look like a valid email address." };
+  }
+
+  const client = await getAdminClient();
+  if (!client.ok) {
+    return { ok: false, error: client.error };
+  }
+
+  try {
+    const response = await client.admin.graphql(ORDERS_BY_EMAIL_QUERY, {
+      // Ang quotes sa search value ay nililinis — walang query injection sa
+      // Shopify search syntax.
+      variables: { query: `email:"${cleaned.replace(/["\\]/g, "")}"` },
+    });
+    const body = (await response.json()) as {
+      data?: {
+        orders?: {
+          nodes?: Array<{
+            name?: string;
+            createdAt?: string;
+            displayFinancialStatus?: string | null;
+            displayFulfillmentStatus?: string | null;
+            customAttributes?: Array<{ key?: string; value?: string | null }> | null;
+          }>;
+        };
+      };
+      errors?: Array<{ message?: string }>;
+    };
+    if (!response.ok || body.errors?.length) {
+      return {
+        ok: false,
+        error: body.errors?.map((e) => e.message).join("; ") || `HTTP ${response.status}`,
+      };
+    }
+
+    const attr = (
+      attrs: Array<{ key?: string; value?: string | null }> | null | undefined,
+      key: string,
+    ) => attrs?.find((a) => a.key === key)?.value ?? "";
+
+    const orders = (body.data?.orders?.nodes ?? []).map(
+      (node): MessengerOrderStatus => ({
+        name: node.name ?? "",
+        createdAt: node.createdAt ?? "",
+        financialStatus: node.displayFinancialStatus ?? "",
+        fulfillmentStatus: node.displayFulfillmentStatus ?? "",
+        deliveryDate: attr(node.customAttributes, DELIVERY_DATE_ATTRIBUTE_KEY),
+        deliveryTime: attr(node.customAttributes, DELIVERY_TIME_ATTRIBUTE_KEY),
+      }),
+    );
+
+    console.log(`[messenger-orders] email lookup returned ${orders.length} order(s)`);
+    return {
+      ok: true,
+      orders,
+      note: orders.length
+        ? "Share ONLY the status and delivery schedule — never an address or payment details."
+        : "No orders found for that email. Do not confirm or deny whether the email exists in the system.",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Order lookup failed.",
+    };
   }
 }
