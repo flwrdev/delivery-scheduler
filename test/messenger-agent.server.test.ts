@@ -9,11 +9,14 @@ const {
   senderActionMock,
   confirmMock,
   summaryMock,
+  claimFollowUpMock,
+  enqueueFollowUpMock,
 } = vi.hoisted(() => ({
   prismaMock: {
     messengerThread: { findUnique: vi.fn(), update: vi.fn() },
     messengerMessage: {
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       findMany: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
@@ -26,6 +29,8 @@ const {
     senderActionMock: vi.fn(),
     confirmMock: vi.fn(),
     summaryMock: vi.fn(),
+    claimFollowUpMock: vi.fn(),
+    enqueueFollowUpMock: vi.fn(),
   }));
 
 vi.mock("../app/db.server", () => ({ default: prismaMock }));
@@ -45,6 +50,11 @@ vi.mock("../app/services/messenger-agent-tools.server", () => ({
 vi.mock("../app/services/messenger-orders.server", () => ({
   confirmMessengerOrder: confirmMock,
   buildOrderSummaryText: summaryMock,
+  claimOrderFollowUp: claimFollowUpMock,
+}));
+// Fully mocked: walang totoong Cloud Tasks calls sa tests.
+vi.mock("../app/services/messenger-queue.server", () => ({
+  enqueueMessengerFollowUpTask: enqueueFollowUpMock,
 }));
 vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
   const original = await importOriginal<typeof import("../app/services/messenger-send.server")>();
@@ -58,8 +68,10 @@ vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
 
 import { MESSENGER_LLM_NOT_CONFIGURED_MESSAGE } from "../app/services/messenger-llm.server";
 import {
+  messengerFollowUpHours,
   messengerHandbackHours,
   processAgentTurnByMid,
+  processOrderFollowUp,
 } from "../app/services/messenger-agent.server";
 
 const PSID = "24681357900001";
@@ -115,6 +127,9 @@ beforeEach(() => {
     alreadyCreated: false,
   });
   summaryMock.mockReturnValue("🧾 ORDER SUMMARY (deterministic)");
+  claimFollowUpMock.mockResolvedValue({ ok: false, reason: "not_awaiting" });
+  enqueueFollowUpMock.mockResolvedValue({ ok: true, taskName: "task-1" });
+  prismaMock.messengerMessage.findFirst.mockResolvedValue(customerRow());
 });
 
 afterEach(() => {
@@ -973,5 +988,229 @@ describe("phase-6 ordering env gate", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Add-on upsell + abandoned-order follow-up (2026-08-03)
+// ---------------------------------------------------------------------------
+
+describe("processAgentTurnByMid — add-on upsell quick replies", () => {
+  it("attaches the add-on category quick replies when missing[0] is add_on", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "t1", name: "update_order", input: { phone: "0917" } }],
+      })
+      .mockResolvedValueOnce(textTurn("Gusto niyo po bang samahan ng add-on? 🧸"));
+    executeToolMock.mockResolvedValue({
+      ok: true,
+      state: { status: "collecting" },
+      missing: ["add_on"],
+      readyToConfirm: false,
+      errors: [],
+      note: "offer the add-on",
+    });
+
+    await processAgentTurnByMid(MID);
+    expect(sendMock.mock.calls[0][0].quickReplies).toEqual([
+      { title: "🧸 Bear", payload: "ADDON_BEAR" },
+      { title: "🍫 Chocolates", payload: "ADDON_CHOCOLATES" },
+      { title: "🎈 Balloon", payload: "ADDON_BALLOON" },
+      { title: "Hindi na po", payload: "ADDON_NONE" },
+    ]);
+  });
+
+  it("does NOT attach add-on quick replies when a different field is next", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "t1", name: "update_order", input: {} }],
+      })
+      .mockResolvedValueOnce(textTurn("Ano pong address?"));
+    executeToolMock.mockResolvedValue({
+      ok: true,
+      state: { status: "collecting" },
+      missing: ["address", "phone", "add_on"],
+      readyToConfirm: false,
+      errors: [],
+      note: "",
+    });
+
+    await processAgentTurnByMid(MID);
+    expect(sendMock.mock.calls[0][0].quickReplies).toBeUndefined();
+  });
+
+  it("system prompt carries the ADDON tap rules when ordering is enabled", async () => {
+    vi.stubEnv("MESSENGER_ORDERS_ENABLED", "true");
+    await processAgentTurnByMid(MID);
+    const { system } = llmMock.mock.calls[0][0];
+    expect(system).toContain("ADDON_BEAR");
+    expect(system).toContain("ADDON_NONE");
+    expect(system).toContain("add_on_variant_id");
+    vi.unstubAllEnvs();
+  });
+});
+
+describe("processAgentTurnByMid — abandoned-order follow-up scheduling", () => {
+  function readyUpdateResult(orderKey: string) {
+    return {
+      ok: true,
+      state: { status: "awaiting_confirm", productTitle: "Sweet Heart", pricePhp: 799 },
+      missing: [],
+      readyToConfirm: true,
+      orderKey,
+      errors: [],
+      note: "ready",
+    };
+  }
+
+  it("schedules ONE delayed follow-up task after the summary is sent", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "t1", name: "update_order", input: {} }],
+      })
+      .mockResolvedValueOnce(textTurn("Paki-check po ang summary 👇"));
+    executeToolMock.mockResolvedValue(readyUpdateResult("key-fu-1"));
+
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+    expect(enqueueFollowUpMock).toHaveBeenCalledTimes(1);
+    expect(enqueueFollowUpMock).toHaveBeenCalledWith({
+      psid: PSID,
+      orderKey: "key-fu-1",
+      delaySeconds: 3 * 3600,
+    });
+  });
+
+  it("does NOT schedule a follow-up on a non-summary turn", async () => {
+    await processAgentTurnByMid(MID);
+    expect(enqueueFollowUpMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed enqueue never fails the turn", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "t1", name: "update_order", input: {} }],
+      })
+      .mockResolvedValueOnce(textTurn("Summary 👇"));
+    executeToolMock.mockResolvedValue(readyUpdateResult("key-fu-2"));
+    enqueueFollowUpMock.mockRejectedValue(new Error("tasks down"));
+
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+  });
+
+  it("messengerFollowUpHours: default 3, env override, 0 disables, garbage falls back", () => {
+    expect(messengerFollowUpHours()).toBe(3);
+    vi.stubEnv("MESSENGER_FOLLOWUP_HOURS", "6");
+    expect(messengerFollowUpHours()).toBe(6);
+    vi.stubEnv("MESSENGER_FOLLOWUP_HOURS", "0");
+    expect(messengerFollowUpHours()).toBe(0);
+    vi.stubEnv("MESSENGER_FOLLOWUP_HOURS", "abc");
+    expect(messengerFollowUpHours()).toBe(3);
+    vi.unstubAllEnvs();
+  });
+});
+
+describe("processOrderFollowUp — delayed reminder guards (mark-before-send)", () => {
+  const FU_KEY = "key-followup-1";
+  const FU_NOW = new Date("2026-08-03T10:00:00Z");
+
+  function claimedState() {
+    return {
+      ok: true as const,
+      state: {
+        status: "awaiting_confirm" as const,
+        productTitle: "Sweet Heart",
+        pricePhp: 799,
+        deliveryDate: "2026-08-05",
+        timeSlot: "9AM-12PM",
+        orderKey: FU_KEY,
+        followUpSentAt: FU_NOW.toISOString(),
+      },
+    };
+  }
+
+  it("sends the deterministic reminder with Confirm quick replies when the claim succeeds", async () => {
+    // Huling customer message: 3h ago — lampas sa active-chat window, loob ng 20h.
+    prismaMock.messengerMessage.findFirst.mockResolvedValue(
+      customerRow({ createdAt: new Date(FU_NOW.getTime() - 3 * 3600 * 1000) }),
+    );
+    claimFollowUpMock.mockResolvedValue(claimedState());
+
+    const result = await processOrderFollowUp(PSID, FU_KEY, FU_NOW);
+    expect(result.status).toBe("sent");
+    expect(claimFollowUpMock).toHaveBeenCalledWith(PSID, FU_KEY);
+
+    const sendArgs = sendMock.mock.calls[0][0];
+    expect(sendArgs.psid).toBe(PSID);
+    expect(sendArgs.text).toContain("Naka-reserve pa po");
+    expect(sendArgs.text).toContain("Sweet Heart");
+    expect(sendArgs.quickReplies).toEqual([
+      { title: "Confirm ✅", payload: `CONFIRM_ORDER_${FU_KEY}` },
+      { title: "Baguhin", payload: "EDIT_ORDER" },
+    ]);
+
+    // Bot row recorded para buo ang history.
+    const botCreate = prismaMock.messengerMessage.create.mock.calls.find(
+      ([args]) => args.data.role === "bot",
+    );
+    expect(botCreate).toBeTruthy();
+  });
+
+  it("skips while humanControl is on (never claims)", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(threadRow({ humanControl: true }));
+    const result = await processOrderFollowUp(PSID, FU_KEY, FU_NOW);
+    expect(result.status).toBe("skipped");
+    expect(claimFollowUpMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("skips when the conversation is still active (last customer message < 45 min)", async () => {
+    prismaMock.messengerMessage.findFirst.mockResolvedValue(
+      customerRow({ createdAt: new Date(FU_NOW.getTime() - 10 * 60 * 1000) }),
+    );
+    const result = await processOrderFollowUp(PSID, FU_KEY, FU_NOW);
+    expect(result.status).toBe("skipped");
+    expect(claimFollowUpMock).not.toHaveBeenCalled();
+  });
+
+  it("skips outside the Meta messaging window (last customer message > 20h)", async () => {
+    prismaMock.messengerMessage.findFirst.mockResolvedValue(
+      customerRow({ createdAt: new Date(FU_NOW.getTime() - 22 * 3600 * 1000) }),
+    );
+    const result = await processOrderFollowUp(PSID, FU_KEY, FU_NOW);
+    expect(result.status).toBe("skipped");
+    expect(claimFollowUpMock).not.toHaveBeenCalled();
+  });
+
+  it("skips when the claim says already_sent / not_awaiting / stale_key", async () => {
+    prismaMock.messengerMessage.findFirst.mockResolvedValue(
+      customerRow({ createdAt: new Date(FU_NOW.getTime() - 3 * 3600 * 1000) }),
+    );
+    for (const reason of ["already_sent", "not_awaiting", "stale_key"] as const) {
+      claimFollowUpMock.mockResolvedValue({ ok: false, reason });
+      const result = await processOrderFollowUp(PSID, FU_KEY, FU_NOW);
+      expect(result.status).toBe("skipped");
+    }
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("a send failure AFTER the claim gives up (zero-duplicate over guaranteed delivery)", async () => {
+    prismaMock.messengerMessage.findFirst.mockResolvedValue(
+      customerRow({ createdAt: new Date(FU_NOW.getTime() - 3 * 3600 * 1000) }),
+    );
+    claimFollowUpMock.mockResolvedValue(claimedState());
+    sendMock.mockResolvedValue({ ok: false, error: "Graph API 500" });
+
+    const result = await processOrderFollowUp(PSID, FU_KEY, FU_NOW);
+    expect(result.status).toBe("skipped");
   });
 });

@@ -2,12 +2,14 @@ import crypto from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { processMock } = vi.hoisted(() => ({
+const { processMock, followUpMock } = vi.hoisted(() => ({
   processMock: vi.fn(),
+  followUpMock: vi.fn(),
 }));
 
 vi.mock("../app/services/messenger-agent.server", () => ({
   processAgentTurnByMid: processMock,
+  processOrderFollowUp: followUpMock,
 }));
 
 import { action } from "../app/routes/webhooks.messenger_.worker";
@@ -119,5 +121,49 @@ describe("webhooks.messenger_.worker action", () => {
     processMock.mockRejectedValue(new Error("unexpected"));
     const res = await callAction(makeTaskRequest({ mid: "mid.abc" }));
     expect(res.status).toBe(503);
+  });
+});
+
+
+describe("webhooks.messenger_.worker action — follow-up tasks (2026-08-03)", () => {
+  beforeEach(() => {
+    vi.stubEnv("MESSENGER_WORKER_SECRET", WORKER_SECRET);
+    followUpMock.mockResolvedValue({ status: "sent", replyMid: "mid.bot.fu" });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("dispatches a followUp payload to processOrderFollowUp and answers 200 on sent", async () => {
+    const res = await callAction(
+      makeTaskRequest({ followUp: { psid: "psid-1", orderKey: "key-1" } }),
+    );
+    expect(res.status).toBe(200);
+    expect(followUpMock).toHaveBeenCalledWith("psid-1", "key-1");
+    expect(processMock).not.toHaveBeenCalled();
+  });
+
+  it("answers 200 on skipped (guards decided not to send — retry cannot help)", async () => {
+    followUpMock.mockResolvedValue({ status: "skipped" });
+    const res = await callAction(
+      makeTaskRequest({ followUp: { psid: "psid-1", orderKey: "key-1" } }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("answers 503 on a transient follow-up failure so Cloud Tasks retries", async () => {
+    followUpMock.mockResolvedValue({ status: "retryable_failure", error: "db down" });
+    const res = await callAction(
+      makeTaskRequest({ followUp: { psid: "psid-1", orderKey: "key-1" } }),
+    );
+    expect(res.status).toBe(503);
+  });
+
+  it("a malformed followUp payload (missing orderKey) falls through to the no-mid 200", async () => {
+    const res = await callAction(makeTaskRequest({ followUp: { psid: "psid-1" } }));
+    expect(res.status).toBe(200);
+    expect(followUpMock).not.toHaveBeenCalled();
   });
 });

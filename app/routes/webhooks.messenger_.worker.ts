@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 
 import { verifyMetaWebhookSignature } from "../lib/verify-meta-signature.server";
-import { processAgentTurnByMid } from "../services/messenger-agent.server";
+import { processAgentTurnByMid, processOrderFollowUp } from "../services/messenger-agent.server";
 import { MESSENGER_WORKER_SIGNATURE_HEADER } from "../services/messenger-queue.server";
 
 // Cloud Tasks worker for the FlowerCart Messenger agent (phase 3).
@@ -39,12 +39,41 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   let mid: string | undefined;
+  let followUp: { psid?: unknown; orderKey?: unknown } | undefined;
   try {
-    mid = (JSON.parse(rawBody) as { mid?: unknown }).mid as string | undefined;
+    const payload = JSON.parse(rawBody) as {
+      mid?: unknown;
+      followUp?: { psid?: unknown; orderKey?: unknown };
+    };
+    mid = payload.mid as string | undefined;
+    followUp = payload.followUp;
   } catch {
     console.error("[messenger-worker] malformed JSON payload on a validly signed task");
     return new Response(null, { status: 200 });
   }
+
+  // Abandoned-order follow-up task (2026-08-03): delayed reminder — ang
+  // processOrderFollowUp guards ang nagpapasya kung sesend pa (mark-before-send,
+  // kaya ang retry pagkatapos ng claim ay laging skipped).
+  if (followUp && typeof followUp.psid === "string" && typeof followUp.orderKey === "string") {
+    try {
+      const result = await processOrderFollowUp(followUp.psid, followUp.orderKey);
+      if (result.status === "retryable_failure") {
+        console.warn(`[messenger-worker] follow-up transient psid=${followUp.psid}: ${result.error}`);
+        return new Response(null, { status: 503 });
+      }
+      console.log(`[messenger-worker] follow-up psid=${followUp.psid} status=${result.status}`);
+      return new Response(null, { status: 200 });
+    } catch (error) {
+      console.warn(
+        `[messenger-worker] follow-up threw psid=${followUp.psid}: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+      return new Response(null, { status: 503 });
+    }
+  }
+
   if (typeof mid !== "string" || !mid) {
     console.error("[messenger-worker] task payload has no mid");
     return new Response(null, { status: 200 });

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   enqueueMessengerEchoTask,
+  enqueueMessengerFollowUpTask,
   MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE,
 } from "../app/services/messenger-queue.server";
 
@@ -162,5 +163,64 @@ describe("enqueueMessengerEchoTask", () => {
     expect(requestBody.task.httpRequest.headers["X-Messenger-Worker-Signature"]).toBe(
       expectedSignature,
     );
+  });
+});
+
+
+describe("enqueueMessengerFollowUpTask (delayed abandoned-order reminder)", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    fetchMock.mockReset();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("creates a task with a followUp payload and a future scheduleTime", async () => {
+    stubConfiguredEnv();
+    fetchMock.mockImplementation(async (url: string | URL) => {
+      if (String(url) === METADATA_TOKEN_URL) {
+        return jsonResponse({ access_token: "oauth-token" });
+      }
+      return jsonResponse({ name: `${QUEUE_PATH}/tasks/fu-1` });
+    });
+
+    const before = Date.now();
+    const result = await enqueueMessengerFollowUpTask({
+      psid: "psid-9",
+      orderKey: "key-9",
+      delaySeconds: 3 * 3600,
+    });
+    expect(result.ok).toBe(true);
+
+    const [, tasksInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const requestBody = JSON.parse(String(tasksInit.body)) as {
+      task: { httpRequest: { body: string }; scheduleTime?: string };
+    };
+    const decoded = JSON.parse(
+      Buffer.from(requestBody.task.httpRequest.body, "base64").toString("utf8"),
+    );
+    expect(decoded).toEqual({ followUp: { psid: "psid-9", orderKey: "key-9" } });
+
+    const scheduled = new Date(requestBody.task.scheduleTime ?? 0).getTime();
+    expect(scheduled).toBeGreaterThanOrEqual(before + 3 * 3600 * 1000 - 5000);
+    expect(scheduled).toBeLessThanOrEqual(Date.now() + 3 * 3600 * 1000 + 5000);
+  });
+
+  it("returns notConfigured without any network call when env vars are missing", async () => {
+    const result = await enqueueMessengerFollowUpTask({
+      psid: "p",
+      orderKey: "k",
+      delaySeconds: 60,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.notConfigured).toBe(true);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

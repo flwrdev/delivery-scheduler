@@ -456,3 +456,39 @@ Dalawang merchant-reported live defects (may screenshots) ang saklaw:
 1. May ~24 products na WALANG BLOOMS section sa description — sasagot ang bot ng
    "wala pong nakalagay" + product link; gusto ba ng merchant na dagdagan ang mga
    descriptions sa Shopify admin?
+
+## Phase 10 — Add-on upsell + abandoned-order follow-up (2026-08-03)
+
+**Gate:** add-on lumalabas bilang pangalawang line item sa draft order; ISANG
+follow-up reminder pagkalipas ng ~3h sa unconfirmed na summary, kailanman
+walang pangalawa.
+
+- **Add-on upsell** (`messenger-orders.server.ts`): bagong `add_on` required step
+  pagkatapos ng phone — one-time offer (addOnDecided gate). Pumili = validated
+  live via parehong getVariant (out-of-stock rejected); tumanggi = add_on:"none".
+  Quick replies auto-attached ng code (🧸 Bear / 🍫 Chocolates / 🎈 Balloon /
+  Hindi na po → ADDON_* payloads; prompt rules ang nagmamapa sa search_products
+  per category). Summary may "Add-on:" line; draft order may PANGALAWANG line
+  item. Grandfather clause: mga in-flight na awaiting_confirm/created state bago
+  ang deploy ay itinuturing nang desidido (hindi masisira ang lumang Confirm taps).
+- **Abandoned follow-up**: pag-send ng summary → delayed Cloud Tasks task
+  (`scheduleTime`, walang bagong infra; `MESSENGER_FOLLOWUP_HOURS` default 3,
+  0 = off). Worker route dispatch sa `processOrderFollowUp`: guards — humanControl
+  off; huling customer message > 45 min (hindi sasabad sa aktibong usapan) at
+  < 20h (Meta 24h window na may margin); `claimOrderFollowUp` = **mark-BEFORE-send**
+  (followUpSentAt sa Neon bago ang Graph call) kaya zero-duplicate kahit mag-retry
+  ang Cloud Tasks; send failure pagkatapos ng claim = give up, hindi inuulit.
+  Deterministic ang reminder text + Confirm ✅ / Baguhin quick replies (ang tap ay
+  dumadaan sa existing deterministic confirm path).
+- Tests: 531/531 (+32: 13 orders add-on/claim, 13 agent, 2 queue scheduleTime,
+  4 worker dispatch). Typecheck/lint/build clean. Walang migration (state fields
+  nasa orderStateJson), walang bagong scope, walang bagong dependency.
+
+### Deviations (phase 10)
+
+1. Ang add-on ay REQUIRED step sa state machine (hindi optional flag) — ito ang
+   pinakasimpleng paraan para ma-garantiya ng code ang one-time offer nang hindi
+   umaasa sa LLM memory; ang "decline" ay first-class na desisyon.
+2. Follow-up: mas pinili ang zero-duplicate kaysa guaranteed delivery — kapag
+   pumalya ang send PAGKATAPOS ng claim, hindi na inuulit (isang nudge lang ito,
+   hindi transactional message).
