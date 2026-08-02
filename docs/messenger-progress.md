@@ -340,8 +340,15 @@ primary discriminator.
 
 ## Phase 8 — Orders listing + typing indicator + Messenger profile (2026-08-03)
 
-**Gate:** PENDING (main-agent review + live checks: orders table sa embedded app,
-typing bubble sa chat, ice breakers/menu visible pagkatapos ng setup tap).
+**Gate:** orders table sa embedded app, typing bubble sa chat, ice breakers/menu
+visible pagkatapos ng setup tap.
+**Gate result:** ✅ PASSED (2026-08-03, rev 00199-j2l) — merchant live test:
+"nakita ko lahat" — orders table, profile setup, typing indicator, persistent
+menu, at ice breakers lahat verified. Merchant follow-up (bagong backlog item):
+kailangan pang matutunan ng bot ang laman ng bawat bouquet (flower types per
+product) — plano: isama ang product description/metafields sa product tools
+para Shopify data ang pagmulan (merchant-maintained, laging current), hindi
+prompt hardcoding.
 
 - `/app/messenger-orders` — bagong Shopify orders section (READ-ONLY): Admin GraphQL
   `orders(query: "tag:messenger", first: 25, CREATED_AT desc)` sa existing
