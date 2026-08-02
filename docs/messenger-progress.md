@@ -404,6 +404,19 @@ prompt hardcoding.
 ## Phase 9 — Product descriptions + typo-tolerant search (2026-08-03)
 
 **Gate:** inclusion question answered from BLOOMS; typo resolves to the right product.
+**Gate result:** ✅ PASSED (2026-08-03, rev 00201-mmv) — merchant live test pasado.
+Merchant clarification: ang ~24 products na walang BLOOMS ay add-ons (bears,
+chocolates, Ferrero, balloons) at draft products — TAMA na walang inclusions,
+walang backfill na kailangan.
+
+### TOKEN ROTATION — CLOSED (2026-08-03) ✅
+
+Ang Phase 2 deviation #6 obligation ay TAPOS NA: merchant nag-generate ng
+bagong page token sa Meta dashboard at siya mismo ang nag-upload sa Secret
+Manager (`messenger-page-token` v4 — hindi dumaan sa Claude session, hindi
+kailanman na-print). Na-verify valid via live `messenger_profile` GET; bagong
+revision 00200-x76 ang kumuha ng bagong version; versions 1-3 disabled na ng
+merchant. **Wala nang natitirang pre-production obligation sa token.**
 **Gate result:** ⏳ PENDING — merchant live test: (1) tanungin ang bot ng "ano inclusion
 ng flowers" para sa Pastel Dreams → sagot mula sa BLOOMS section ng Shopify description
 (hindi imbento, hindi "no access"); (2) i-type ang "pastil dream" → bot nagko-confirm ng
