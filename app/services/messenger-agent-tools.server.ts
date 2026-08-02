@@ -23,7 +23,7 @@ import { checkDeliveryCoverage } from "./messenger-coverage.server";
 import type { CheckDeliveryCoverageInput } from "./messenger-coverage.server";
 import { getVariantLive, searchShopProducts } from "./messenger-products.server";
 import type { SearchShopProductsInput } from "./messenger-products.server";
-import { updateMessengerOrderState } from "./messenger-orders.server";
+import { lookupOrdersByEmail, updateMessengerOrderState } from "./messenger-orders.server";
 import type { UpdateOrderStateInput } from "./messenger-orders.server";
 import type { LlmToolDefinition } from "./messenger-llm.server";
 import { unauthenticated } from "../shopify.server";
@@ -405,9 +405,10 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
       "customer provides or changes an order detail — the tool validates and PERSISTS it; anything " +
       "not saved here is lost. Required details are collected in this order: product (variant_id) → " +
       "delivery_date (ISO, from resolve_date) → time_slot (an OPEN slot value for that date) → " +
-      "recipient_name → address (with address_area or address_zip for the coverage check) → phone → " +
       "add-on decision (add_on_variant_id to pick a bear/chocolates/balloon add-on, or add_on: 'none' " +
-      "to decline — the offer is made exactly once). card_message and special_instructions are optional. To change a detail ('baguhin ang petsa'), " +
+      "to decline — the offer is made exactly once). recipient_name/address/phone are OPTIONAL — the " +
+      "checkout collects shipping; save them only if the customer volunteers them (address still needs " +
+      "address_area or address_zip for the coverage check). card_message and special_instructions are optional. To change a detail ('baguhin ang petsa'), " +
       "pass clear=[\"delivery_date\"] plus the new value if given — never restart the order. " +
       "The result lists what is still missing; when readyToConfirm=true a formatted summary with a " +
       "Confirm button is sent to the customer automatically after your reply.",
@@ -458,6 +459,25 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
       required: [],
     },
   },
+  {
+    name: "lookup_order",
+    description:
+      "Look up a customer's EXISTING Shopify orders by the email they used at checkout (works for " +
+      "website orders too, not just Messenger orders). Ask for their email first; the email itself is " +
+      "the verification. Returns up to 3 most recent orders: order number, payment status, fulfillment " +
+      "status, and the delivery date/time. NEVER reveal addresses, phone numbers, or payment details " +
+      "from an order — status and delivery schedule only.",
+    input_schema: {
+      type: "object",
+      properties: {
+        email: {
+          type: "string",
+          description: "The email address the customer says they used at checkout.",
+        },
+      },
+      required: ["email"],
+    },
+  },
 ];
 
 export interface AgentToolContext {
@@ -497,6 +517,10 @@ export async function executeAgentTool(
     if (name === "get_product_details") {
       const raw = (input ?? {}) as { variant_id?: string };
       return await getVariantLive(raw.variant_id ?? "");
+    }
+    if (name === "lookup_order") {
+      const raw = (input ?? {}) as { email?: string };
+      return await lookupOrdersByEmail(raw.email ?? "");
     }
     if (name === "update_order") {
       if (!context.psid) {

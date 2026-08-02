@@ -492,3 +492,29 @@ walang pangalawa.
 2. Follow-up: mas pinili ang zero-duplicate kaysa guaranteed delivery — kapag
    pumalya ang send PAGKATAPOS ng claim, hindi na inuulit (isang nudge lang ito,
    hindi transactional message).
+
+## Phase 11 — Streamlined checkout flow + email order lookup + lost-message fix (2026-08-03)
+
+**Gate:** order flow = bouquet→date→slot→add-on lang (walang tanungan ng
+shipping); lookup ng order status via checkout email; walang nawawalang
+message sa DB hiccup.
+
+- **Streamline (merchant feedback):** tinanggal sa REQUIRED_FIELDS ang
+  recipient_name/address/phone — "expected ni customer na magbabayad na lang
+  siya". Ang Shopify checkout na ang kokolekta ng shipping. Kusang-bigay na
+  details ay sine-save pa rin (checkout prefill + coverage check). Summary:
+  shipping lines lumalabas lang kapag ibinigay; may "doon niyo na ilalagay ang
+  delivery address" na note. Draft order: shippingAddress isinasama lang kapag
+  may address.
+- **lookup_order tool (bagong tool #7):** order status by checkout EMAIL —
+  gumagana pati sa WEBSITE orders. Merchant decision: email lang ang
+  verification (hindi na kailangan ng order number). Limitadong fields lang
+  ang ibinabalik/ibinubunyag: order number, payment/fulfillment status,
+  delivery date/time — KAILANMAN walang address/phone/payment details; zero
+  matches = hindi kinukumpirma kung existing ang email. READ-ONLY query.
+- **Lost-message fix (live incident):** sa 00203 deploy overlap, nag-timeout
+  ang Neon connection pool → record failed → 200 pa rin ang sagot kay Meta →
+  tuluyang nawala ang 2 messages (walang redelivery sa 200). Ngayon: record
+  failure → **503** → nagre-redeliver si Meta; ligtas dahil mid-unique dedupe.
+- Tests: 538/538 (+7 lookup/streamline; 3 in-place updates). Typecheck/lint/
+  build clean. Walang migration, walang bagong scope/env/dependency.

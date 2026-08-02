@@ -119,6 +119,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response(null, { status: 200 });
   }
 
+  // 2026-08-03: kapag ang RECORD sa Neon ang pumalya (hal. transient
+  // connection-pool timeout — live incident sa 00203 deploy overlap), ang 200
+  // ay nagpapawalang-bisa sa Meta redelivery at tuluyang nawawala ang message.
+  // Ang 503 ang nagpapa-redeliver; ligtas ito dahil ang mid-unique dedupe ang
+  // sasala sa mga event na na-record na sa parehong POST.
+  let hadRecordError = false;
+
   // entry[].standby (subscribed but log-only in v1) is deliberately ignored.
   for (const entry of body.entry ?? []) {
     for (const event of entry.messaging ?? []) {
@@ -223,8 +230,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           continue;
         }
         if (recorded.status === "error") {
-          // Not recorded — leave it to Meta's redelivery.
+          // Not recorded — answer 503 sa dulo para MAG-REDELIVER si Meta
+          // (ang 200 dito noon ay nagpapalaho ng messages nang tuluyan).
           console.warn(`[messenger] record failed for mid=${mid}: ${recorded.error}`);
+          hadRecordError = true;
           continue;
         }
 
@@ -249,5 +258,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (hadRecordError) {
+    return new Response(null, { status: 503 });
+  }
   return new Response(null, { status: 200 });
 };

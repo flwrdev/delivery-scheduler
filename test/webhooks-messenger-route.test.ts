@@ -226,10 +226,10 @@ describe("webhooks.messenger action (POST events)", () => {
     expect(processMock).not.toHaveBeenCalled();
   });
 
-  it("skips enqueue when recording fails (Meta will redeliver)", async () => {
+  it("answers 503 when recording fails so Meta redelivers (2026-08-03: 200 dito ay nawawalang message)", async () => {
     recordMock.mockResolvedValue({ status: "error", error: "db down" });
     const res = await runAction(makeSignedPostRequest(pageBody(textMessageEvent("111", "hi"))));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     expect(enqueueMock).not.toHaveBeenCalled();
   });
 

@@ -26,6 +26,7 @@ import {
   buildOrderSummaryText,
   claimOrderFollowUp,
   confirmMessengerOrder,
+  lookupOrdersByEmail,
   missingOrderFields,
   orderKeyTag,
   parseOrderState,
@@ -149,7 +150,7 @@ describe("updateMessengerOrderState (slot-filling state machine — code advance
     expect(result).toMatchObject({
       ok: true,
       readyToConfirm: false,
-      missing: ["product", "delivery_date", "time_slot", "recipient_name", "address", "phone", "add_on"],
+      missing: ["product", "delivery_date", "time_slot", "add_on"],
     });
   });
 
@@ -161,7 +162,7 @@ describe("updateMessengerOrderState (slot-filling state machine — code advance
     expect(result).toMatchObject({
       ok: true,
       state: { productTitle: "Sweet Heart", pricePhp: 799 },
-      missing: ["delivery_date", "time_slot", "recipient_name", "address", "phone", "add_on"],
+      missing: ["delivery_date", "time_slot", "add_on"],
     });
   });
 
@@ -404,7 +405,7 @@ describe("updateMessengerOrderState (slot-filling state machine — code advance
     const result = await updateMessengerOrderState(PSID, { clear: ["all"] }, makeDeps(), NOW);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.missing).toHaveLength(7);
+      expect(result.missing).toHaveLength(4);
     }
     const updateArgs = prismaMock.messengerThread.update.mock.calls[0][0];
     expect(updateArgs.data.conversationOrderKey).toBeNull();
@@ -654,9 +655,6 @@ describe("parseOrderState / missingOrderFields", () => {
     expect(missingOrderFields({ status: "collecting", deliveryDate: "2026-08-05" })).toEqual([
       "product",
       "time_slot",
-      "recipient_name",
-      "address",
-      "phone",
       "add_on",
     ]);
   });
@@ -861,5 +859,129 @@ describe("claimOrderFollowUp", () => {
     prismaMock.messengerThread.findUnique.mockResolvedValue(threadRow(completeState()));
     const result = await claimOrderFollowUp(PSID, "some-other-key");
     expect(result).toMatchObject({ ok: false, reason: "stale_key" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Streamlined flow (2026-08-03): shipping sa checkout na, hindi sa chat
+// ---------------------------------------------------------------------------
+
+describe("streamlined ordering — shipping details are checkout's job", () => {
+  it("the summary omits shipping lines when none were volunteered and points to checkout", () => {
+    const text = buildOrderSummaryText({
+      productTitle: "Pastel Dreams",
+      pricePhp: 2499,
+      deliveryDate: "2026-08-05",
+      timeSlot: "9AM-12PM",
+    });
+    expect(text).not.toContain("Recipient:");
+    expect(text).not.toContain("Address:");
+    expect(text).not.toContain("Phone:");
+    expect(text).toContain("doon niyo na ilalagay ang delivery address");
+  });
+
+  it("the draft order has NO shippingAddress when the address was not volunteered", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow(
+        completeState({
+          recipientName: undefined,
+          address: undefined,
+          addressCity: undefined,
+          phone: undefined,
+        }),
+      ),
+    );
+    graphqlMock
+      .mockResolvedValueOnce(jsonResponse({ data: { draftOrders: { nodes: [] } } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ data: { draftOrderCreate: { draftOrder: DRAFT_NODE, userErrors: [] } } }),
+      );
+    const result = await confirmMessengerOrder(PSID, KEY, NOW);
+    expect(result.ok).toBe(true);
+    const createCall = graphqlMock.mock.calls.find(isCreateCall);
+    const input = (createCall?.[1] as { variables: { input: Record<string, unknown> } }).variables
+      .input;
+    expect(input.shippingAddress).toBeUndefined();
+  });
+
+  it("volunteered shipping details still ride the draft as a prefill", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(threadRow(completeState()));
+    graphqlMock
+      .mockResolvedValueOnce(jsonResponse({ data: { draftOrders: { nodes: [] } } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ data: { draftOrderCreate: { draftOrder: DRAFT_NODE, userErrors: [] } } }),
+      );
+    const result = await confirmMessengerOrder(PSID, KEY, NOW);
+    expect(result.ok).toBe(true);
+    const createCall = graphqlMock.mock.calls.find(isCreateCall);
+    const input = (createCall?.[1] as { variables: { input: { shippingAddress?: { address1?: string } } } })
+      .variables.input;
+    expect(input.shippingAddress?.address1).toBe("12 Sampaguita St, Brgy. Malanday");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// lookup_order — order status by email (2026-08-03)
+// ---------------------------------------------------------------------------
+
+describe("lookupOrdersByEmail", () => {
+  it("rejects an invalid email without any Shopify call", async () => {
+    const result = await lookupOrdersByEmail("hindi-email");
+    expect(result.ok).toBe(false);
+    expect(adminMock).not.toHaveBeenCalled();
+  });
+
+  it("returns LIMITED fields only (status + delivery schedule; walang address kailanman)", async () => {
+    graphqlMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: {
+          orders: {
+            nodes: [
+              {
+                name: "#3979",
+                createdAt: "2026-08-02T16:00:00Z",
+                displayFinancialStatus: "PENDING",
+                displayFulfillmentStatus: "UNFULFILLED",
+                customAttributes: [
+                  { key: "Delivery Date", value: "2026-08-03" },
+                  { key: "Delivery Time", value: "3PM-6PM" },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const result = await lookupOrdersByEmail("  Customer@Example.COM ");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.orders).toEqual([
+      {
+        name: "#3979",
+        createdAt: "2026-08-02T16:00:00Z",
+        financialStatus: "PENDING",
+        fulfillmentStatus: "UNFULFILLED",
+        deliveryDate: "2026-08-03",
+        deliveryTime: "3PM-6PM",
+      },
+    ]);
+    // Normalized (lowercased/trimmed) at quoted ang email sa search query.
+    const vars = (graphqlMock.mock.calls[0][1] as { variables: { query: string } }).variables;
+    expect(vars.query).toBe('email:"customer@example.com"');
+  });
+
+  it("zero matches: the note forbids confirming whether the email exists", async () => {
+    graphqlMock.mockResolvedValueOnce(jsonResponse({ data: { orders: { nodes: [] } } }));
+    const result = await lookupOrdersByEmail("ghost@example.com");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.orders).toEqual([]);
+    expect(result.note).toContain("Do not confirm or deny");
+  });
+
+  it("GraphQL errors surface as designed failures, never throws", async () => {
+    graphqlMock.mockRejectedValueOnce(new Error("boom"));
+    const result = await lookupOrdersByEmail("x@y.com");
+    expect(result.ok).toBe(false);
   });
 });
