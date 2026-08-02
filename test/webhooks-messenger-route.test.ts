@@ -2,16 +2,21 @@ import crypto from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { recordMock, deleteMock, processMock, enqueueMock } = vi.hoisted(() => ({
-  recordMock: vi.fn(),
-  deleteMock: vi.fn(),
-  processMock: vi.fn(),
-  enqueueMock: vi.fn(),
-}));
+const { recordMock, deleteMock, processMock, enqueueMock, knownMidMock, operatorRecordMock } =
+  vi.hoisted(() => ({
+    recordMock: vi.fn(),
+    deleteMock: vi.fn(),
+    processMock: vi.fn(),
+    enqueueMock: vi.fn(),
+    knownMidMock: vi.fn(),
+    operatorRecordMock: vi.fn(),
+  }));
 
 vi.mock("../app/services/messenger-events.server", () => ({
   recordInboundTextMessage: recordMock,
   deleteRecordedMessage: deleteMock,
+  isKnownMessageMid: knownMidMock,
+  recordOperatorEchoMessage: operatorRecordMock,
 }));
 
 vi.mock("../app/services/messenger-agent.server", () => ({
@@ -137,10 +142,14 @@ describe("webhooks.messenger action (POST events)", () => {
     deleteMock.mockReset();
     processMock.mockReset();
     enqueueMock.mockReset();
+    knownMidMock.mockReset();
+    operatorRecordMock.mockReset();
     recordMock.mockResolvedValue({ status: "new" });
     deleteMock.mockResolvedValue(undefined);
     processMock.mockResolvedValue({ status: "sent", replyMid: "mid.reply" });
     enqueueMock.mockResolvedValue({ ok: true, taskName: "projects/p/locations/l/queues/q/tasks/t" });
+    knownMidMock.mockResolvedValue(false);
+    operatorRecordMock.mockResolvedValue({ status: "new" });
   });
 
   afterEach(() => {
@@ -247,12 +256,15 @@ describe("webhooks.messenger action (POST events)", () => {
     expect(processMock).not.toHaveBeenCalled();
   });
 
-  it("never records an echo event (loop prevention — message_echoes is subscribed)", async () => {
+  it("never records a BOT echo as a customer message (loop prevention — message_echoes is subscribed)", async () => {
     const res = await runAction(
-      makeSignedPostRequest(pageBody(textMessageEvent("111", "Echo: hi", { is_echo: true }))),
+      makeSignedPostRequest(
+        pageBody(textMessageEvent("111", "Echo: hi", { is_echo: true, app_id: 1065300189364788 })),
+      ),
     );
     expect(res.status).toBe(200);
     expect(recordMock).not.toHaveBeenCalled();
+    expect(operatorRecordMock).not.toHaveBeenCalled();
     expect(enqueueMock).not.toHaveBeenCalled();
   });
 
@@ -482,5 +494,112 @@ describe("webhooks.messenger action — quick-reply taps (phase 6 Confirm path)"
     } as never)) as Response;
     expect(res.status).toBe(200);
     expect(recordMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("webhooks.messenger action — message_echoes (phase 7 human takeover)", () => {
+  const PAGE_ID = "105284684761365";
+  const CUSTOMER_PSID = "24680";
+
+  // Echo events flip the roles: sender = the PAGE, recipient = the customer.
+  function echoEvent(message: Record<string, unknown>) {
+    return pageBody({
+      sender: { id: PAGE_ID },
+      recipient: { id: CUSTOMER_PSID },
+      timestamp: 1753600003000,
+      message: { is_echo: true, ...message },
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("MESSENGER_APP_SECRET", APP_SECRET);
+    recordMock.mockResolvedValue({ status: "new" });
+    enqueueMock.mockResolvedValue({ ok: true });
+    knownMidMock.mockResolvedValue(false);
+    operatorRecordMock.mockResolvedValue({ status: "new" });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.clearAllMocks();
+  });
+
+  async function runAction(body: unknown): Promise<Response> {
+    return (await action({
+      request: makeSignedPostRequest(body),
+      params: {},
+      context: {},
+    } as never)) as Response;
+  }
+
+  it("ignores a bot echo by app_id alone — PRIMARY discriminator, no mid lookup needed", async () => {
+    const res = await runAction(
+      echoEvent({ mid: "m.echo.bot.1", text: "Sige po!", app_id: 1065300189364788 }),
+    );
+    expect(res.status).toBe(200);
+    expect(knownMidMock).not.toHaveBeenCalled();
+    expect(operatorRecordMock).not.toHaveBeenCalled();
+    expect(recordMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores an echo without app_id whose mid the bot already recorded (FALLBACK)", async () => {
+    knownMidMock.mockResolvedValue(true);
+    const res = await runAction(echoEvent({ mid: "m.echo.bot.2", text: "Sige po!" }));
+    expect(res.status).toBe(200);
+    expect(knownMidMock).toHaveBeenCalledWith("m.echo.bot.2");
+    expect(operatorRecordMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
+
+  it("treats an unknown echo without app_id as the OPERATOR: humanControl set, operator row recorded, NOTHING enqueued", async () => {
+    const res = await runAction(echoEvent({ mid: "m.echo.human.1", text: "Ako na bahala dito" }));
+    expect(res.status).toBe(200);
+    expect(operatorRecordMock).toHaveBeenCalledTimes(1);
+    expect(operatorRecordMock).toHaveBeenCalledWith({
+      psid: CUSTOMER_PSID, // from recipient.id — NEVER sender.id (that is the page)
+      mid: "m.echo.human.1",
+      text: "Ako na bahala dito",
+    });
+    expect(recordMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
+    expect(processMock).not.toHaveBeenCalled();
+  });
+
+  it("records an attachment-only operator echo with a placeholder text (still takes over)", async () => {
+    const res = await runAction(
+      echoEvent({ mid: "m.echo.human.att", attachments: [{ type: "image" }] }),
+    );
+    expect(res.status).toBe(200);
+    expect(operatorRecordMock).toHaveBeenCalledWith({
+      psid: CUSTOMER_PSID,
+      mid: "m.echo.human.att",
+      text: "[attachment]",
+    });
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
+
+  it("skips an echo without recipient.id (no thread psid to attach it to)", async () => {
+    const body = pageBody({
+      sender: { id: PAGE_ID },
+      timestamp: 1753600003001,
+      message: { is_echo: true, mid: "m.echo.norcpt", text: "hi" },
+    });
+    const res = await runAction(body);
+    expect(res.status).toBe(200);
+    expect(operatorRecordMock).not.toHaveBeenCalled();
+  });
+
+  it("skips an echo without a mid (cannot dedupe it)", async () => {
+    const res = await runAction(echoEvent({ text: "hi" }));
+    expect(res.status).toBe(200);
+    expect(operatorRecordMock).not.toHaveBeenCalled();
+  });
+
+  it("still returns 200 when the mid lookup throws (no spurious takeover on a DB blip)", async () => {
+    knownMidMock.mockRejectedValue(new Error("db down"));
+    const res = await runAction(echoEvent({ mid: "m.echo.err", text: "hi" }));
+    expect(res.status).toBe(200);
+    expect(operatorRecordMock).not.toHaveBeenCalled();
   });
 });

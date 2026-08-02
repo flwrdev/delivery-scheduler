@@ -47,7 +47,10 @@ vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
 });
 
 import { MESSENGER_LLM_NOT_CONFIGURED_MESSAGE } from "../app/services/messenger-llm.server";
-import { processAgentTurnByMid } from "../app/services/messenger-agent.server";
+import {
+  messengerHandbackHours,
+  processAgentTurnByMid,
+} from "../app/services/messenger-agent.server";
 
 const PSID = "24681357900001";
 const MID = "mid.customer.1";
@@ -591,6 +594,163 @@ describe("sanitizeMessengerText (Messenger renders plain text only)", () => {
     const sendArgs = sendMock.mock.calls[0][0];
     expect(sendArgs.text).toContain("Autumn Morning po ay available at P799");
     expect(sendArgs.text).not.toContain("**");
+  });
+});
+
+describe("processAgentTurnByMid — human takeover mute + auto-handback (phase 7)", () => {
+  const HOUR_MS = 60 * 60 * 1000;
+
+  it("skips the turn WITHOUT calling the LLM or sending while humanControl is fresh", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow({ humanControl: true, humanControlAt: new Date(Date.now() - 1 * HOUR_MS) }),
+    );
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("skipped");
+    expect(llmMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+    // Zero-duplicate contract untouched: a skipped turn never sets repliedAt.
+    expect(prismaMock.messengerMessage.update).not.toHaveBeenCalled();
+  });
+
+  it("stays muted when humanControl is set but humanControlAt is missing (manual Resume is the recovery)", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow({ humanControl: true, humanControlAt: null }),
+    );
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("skipped");
+    expect(llmMock).not.toHaveBeenCalled();
+  });
+
+  it("mutes the deterministic CONFIRM path too (the human owns the thread)", async () => {
+    prismaMock.messengerMessage.findUnique.mockResolvedValue(
+      customerRow({ bodyJson: JSON.stringify({ text: "[TAP] CONFIRM_ORDER_key-9" }) }),
+    );
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow({ humanControl: true, humanControlAt: new Date() }),
+    );
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("skipped");
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("hands back automatically after the window: clears the flag and RE-DISCLOSES (Meta policy)", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow({
+        humanControl: true,
+        humanControlAt: new Date(Date.now() - 7 * HOUR_MS),
+        disclosedBot: true, // was disclosed before the takeover — must re-disclose anyway
+      }),
+    );
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+
+    // Handback write: flag cleared + disclosedBot reset before processing.
+    expect(prismaMock.messengerThread.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { psid: PSID },
+        data: { humanControl: false, humanControlAt: null, disclosedBot: false },
+      }),
+    );
+    // The reply carries the disclosure line again.
+    expect(sendMock.mock.calls[0][0].text).toContain("automated");
+    // And the send marks the thread disclosed again.
+    expect(prismaMock.messengerThread.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { disclosedBot: true } }),
+    );
+  });
+
+  it("honors MESSENGER_HANDBACK_HOURS override", async () => {
+    vi.stubEnv("MESSENGER_HANDBACK_HOURS", "1");
+    try {
+      prismaMock.messengerThread.findUnique.mockResolvedValue(
+        threadRow({ humanControl: true, humanControlAt: new Date(Date.now() - 2 * HOUR_MS) }),
+      );
+      const result = await processAgentTurnByMid(MID);
+      expect(result.status).toBe("sent");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("falls back to 6 hours on a garbage MESSENGER_HANDBACK_HOURS", async () => {
+    vi.stubEnv("MESSENGER_HANDBACK_HOURS", "mamaya na");
+    try {
+      prismaMock.messengerThread.findUnique.mockResolvedValue(
+        threadRow({ humanControl: true, humanControlAt: new Date(Date.now() - 2 * HOUR_MS) }),
+      );
+      const result = await processAgentTurnByMid(MID);
+      expect(result.status).toBe("skipped");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("still replies (fail-open) when the handback update itself fails", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow({ humanControl: true, humanControlAt: new Date(Date.now() - 7 * HOUR_MS) }),
+    );
+    prismaMock.messengerThread.update.mockRejectedValueOnce(new Error("db hiccup"));
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+  });
+
+  it("never processes an operator row itself (role guard)", async () => {
+    prismaMock.messengerMessage.findUnique.mockResolvedValue(customerRow({ role: "operator" }));
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("skipped");
+    expect(llmMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("operator rows in LLM history (phase 7 — the bot must not contradict the human)", () => {
+  it("maps role=operator to an assistant message prefixed [HUMAN AGENT]", async () => {
+    prismaMock.messengerMessage.findMany.mockResolvedValue([
+      customerRow(), // current customer message (newest first)
+      customerRow({
+        mid: "m.op.1",
+        role: "operator",
+        bodyJson: JSON.stringify({ text: "Sige po, ipa-follow-up ko ang order ninyo." }),
+        createdAt: new Date(2),
+      }),
+      customerRow({ mid: "m1", bodyJson: JSON.stringify({ text: "May tao ba dito?" }), createdAt: new Date(1) }),
+    ]);
+    await processAgentTurnByMid(MID);
+
+    const { system, messages } = llmMock.mock.calls[0][0];
+    expect(messages[1].role).toBe("assistant");
+    expect(messages[1].content[0].text).toBe(
+      "[HUMAN AGENT] Sige po, ipa-follow-up ko ang order ninyo.",
+    );
+    // Bot rows keep their plain text (no prefix), customer rows stay user.
+    expect(messages[0].role).toBe("user");
+    // The system prompt explains what [HUMAN AGENT] means.
+    expect(system).toContain("[HUMAN AGENT]");
+    expect(system).toContain("real person");
+  });
+});
+
+describe("messengerHandbackHours", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("defaults to 6 when unset or blank", () => {
+    expect(messengerHandbackHours()).toBe(6);
+    vi.stubEnv("MESSENGER_HANDBACK_HOURS", "   ");
+    expect(messengerHandbackHours()).toBe(6);
+  });
+
+  it("parses a trimmed numeric override", () => {
+    vi.stubEnv("MESSENGER_HANDBACK_HOURS", " 12 ");
+    expect(messengerHandbackHours()).toBe(12);
+  });
+
+  it("falls back to 6 on garbage, zero, and negatives", () => {
+    for (const value of ["abc", "0", "-3", "NaN"]) {
+      vi.stubEnv("MESSENGER_HANDBACK_HOURS", value);
+      expect(messengerHandbackHours()).toBe(6);
+    }
   });
 });
 

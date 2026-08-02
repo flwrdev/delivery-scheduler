@@ -304,3 +304,30 @@ Live fixes sa gate run: (1) mo-key tag pinaikli sa 39 chars (Shopify 40-char tag
 limit); (2) scope activation ay nangangailangan ng app open sa admin para sa token
 exchange — ang .env ay walang epekto sa prod session. MESSENGER_ORDERS_ENABLED=true
 na sa Cloud Run (rev 00196+).
+
+## Phase 7 — Human takeover + disclosure (2026-08-02, PENDING live gate)
+
+**Gate:** reply from the phone -> bot mutes; toggle -> bot resumes.
+
+- Webhook echo branch (dating blanket skip): echo na HINDI galing sa bot = operator
+  typing sa Business Suite -> humanControl=true + humanControlAt=now + operator row
+  recorded (role "operator"; psid mula sa recipient.id — baliktad ang roles sa echoes).
+  Walang task na ine-enqueue para sa echo, kailanman.
+- Discriminator: message.app_id PRIMARY (present = app-sent = sarili nating bot, panalo
+  din sa bookkeeping race), bot-mid Neon lookup ang FALLBACK. ⚠️ Live-gate check: kung
+  ang Business Suite replies ay MAY app_id pala, hindi magti-trigger ang takeover —
+  i-verify sa totoong phone reply.
+- Mute: processAgentTurnByMid -> skipped bago pa ang LLM at bago ang CONFIRM path
+  (kasama ang Confirm taps sa mute — deviation, deliberate). Bot KEEPS LISTENING:
+  recorded pa rin lahat. repliedAt untouched (zero-duplicate contract).
+- Auto-handback: 6h default (MESSENGER_HANDBACK_HOURS env) na walang operator message
+  (bawat operator echo nagre-refresh ng humanControlAt) -> clear flag + disclosedBot=false
+  = sapilitang re-disclosure (Meta policy). humanControl na walang timestamp = muted
+  indefinitely (manual Resume ang recovery).
+- NEW app/routes/app.messenger-orders.tsx (embedded, authenticate.admin, ADR-11 ok:false):
+  thread list + per-thread Pause/Resume. Resume = humanControl off + re-disclosure.
+  Neon-only; ang Shopify orders listing ay Phase 8. NavMenu "Messenger" link sa app.jsx.
+- History: operator rows -> assistant turns na may "[HUMAN AGENT] " prefix + system-prompt
+  rule na huwag kontrahin ang sinabi ng tao.
+- Tests 450/450; typecheck + lint clean. Walang migration (humanControl/humanControlAt
+  ay nasa schema na since phase 3).
