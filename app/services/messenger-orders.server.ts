@@ -82,6 +82,16 @@ export interface MessengerOrderState {
   phone?: string;
   cardMessage?: string;
   specialInstructions?: string;
+  // Add-on upsell (2026-08-03): one-time offer pagkatapos makumpleto ang
+  // phone — bear/chocolates/balloon bilang pangalawang line item. addOnDecided
+  // ang gate: totoo kapag pumili O tumanggi ang customer (isang alok lang).
+  addOnDecided?: boolean;
+  addOnVariantId?: string;
+  addOnTitle?: string;
+  addOnPricePhp?: number;
+  // Abandoned-order follow-up: ISO timestamp kapag naipadala na ang isang
+  // (at nag-iisang) reminder para sa kasalukuyang orderKey.
+  followUpSentAt?: string;
   orderKey?: string;
   draftOrderId?: string;
   draftOrderName?: string;
@@ -95,6 +105,7 @@ const REQUIRED_FIELDS = [
   "recipient_name",
   "address",
   "phone",
+  "add_on",
 ] as const;
 
 type RequiredField = (typeof REQUIRED_FIELDS)[number];
@@ -113,6 +124,8 @@ function hasField(state: MessengerOrderState, field: RequiredField): boolean {
       return Boolean(state.address);
     case "phone":
       return Boolean(state.phone);
+    case "add_on":
+      return Boolean(state.addOnDecided);
   }
 }
 
@@ -126,6 +139,13 @@ export function parseOrderState(orderStateJson: string | null | undefined): Mess
     try {
       const parsed = JSON.parse(orderStateJson) as MessengerOrderState;
       if (parsed && typeof parsed === "object" && typeof parsed.status === "string") {
+        // Grandfather clause (2026-08-03): ang mga in-flight na state na
+        // ginawa BAGO idagdag ang add-on step ay itinuturing nang desidido —
+        // kung hindi, ang Confirm tap ng naka-awaiting_confirm na customer ay
+        // biglang magiging "incomplete".
+        if (parsed.status !== "collecting" && parsed.addOnDecided === undefined) {
+          parsed.addOnDecided = true;
+        }
         return parsed;
       }
     } catch {
@@ -160,6 +180,10 @@ export interface UpdateOrderStateInput {
   phone?: string;
   card_message?: string;
   special_instructions?: string;
+  /** Add-on pick: variant id ng bear/chocolates/balloon (validated live). */
+  add_on_variant_id?: string;
+  /** Add-on decline: "none" (o wala/hindi/no/skip) = tinanggihan ang alok. */
+  add_on?: string;
   /** Fields to clear ("baguhin ang petsa" clears only that field). "all" resets. */
   clear?: string[];
 }
@@ -210,6 +234,8 @@ export type UpdateOrderStateResult =
         phone?: string;
         cardMessage?: string;
         specialInstructions?: string;
+        addOnTitle?: string;
+        addOnPricePhp?: number;
       };
       missing: RequiredField[];
       readyToConfirm: boolean;
@@ -253,6 +279,13 @@ const CLEARABLE: Record<string, (state: MessengerOrderState) => void> = {
   special_instructions: (s) => {
     delete s.specialInstructions;
   },
+  add_on: (s) => {
+    delete s.addOnDecided;
+    delete s.addOnVariantId;
+    delete s.addOnTitle;
+    delete s.addOnPricePhp;
+  },
+  addon: (s) => CLEARABLE.add_on(s),
 };
 
 function publicState(state: MessengerOrderState): Extract<UpdateOrderStateResult, { ok: true }>["state"] {
@@ -269,6 +302,8 @@ function publicState(state: MessengerOrderState): Extract<UpdateOrderStateResult
     ...(state.phone ? { phone: state.phone } : {}),
     ...(state.cardMessage ? { cardMessage: state.cardMessage } : {}),
     ...(state.specialInstructions ? { specialInstructions: state.specialInstructions } : {}),
+    ...(state.addOnTitle ? { addOnTitle: state.addOnTitle } : {}),
+    ...(typeof state.addOnPricePhp === "number" ? { addOnPricePhp: state.addOnPricePhp } : {}),
   };
 }
 
@@ -463,6 +498,38 @@ export async function updateMessengerOrderState(
     }
   }
 
+  // Add-on upsell: pumili (validated live, parehong getVariant ng bouquet) o
+  // tumanggi ("none") — pareho itong nagma-mark ng addOnDecided para ISANG
+  // beses lang ang alok.
+  if (typeof input.add_on_variant_id === "string" && input.add_on_variant_id.trim()) {
+    const result = await deps.getVariant(input.add_on_variant_id.trim());
+    if (!result.ok) {
+      errors.push({ field: "add_on", error: result.error });
+    } else if (!result.product.available) {
+      errors.push({ field: "add_on", error: "That add-on is currently out of stock." });
+    } else {
+      state.addOnDecided = true;
+      state.addOnVariantId = result.product.variantId;
+      state.addOnTitle = result.product.variantTitle
+        ? `${result.product.productTitle} (${result.product.variantTitle})`
+        : result.product.productTitle;
+      state.addOnPricePhp = result.product.pricePhp;
+    }
+  } else if (typeof input.add_on === "string" && input.add_on.trim()) {
+    const decision = input.add_on.trim().toLowerCase();
+    if (["none", "wala", "hindi", "no", "skip"].includes(decision)) {
+      state.addOnDecided = true;
+      delete state.addOnVariantId;
+      delete state.addOnTitle;
+      delete state.addOnPricePhp;
+    } else {
+      errors.push({
+        field: "add_on",
+        error: "Pass add_on_variant_id (a validated variant id) to pick an add-on, or add_on: \"none\" to decline.",
+      });
+    }
+  }
+
   if (typeof input.card_message === "string") {
     const cardMessage = input.card_message.trim();
     if (cardMessage) {
@@ -511,7 +578,9 @@ export async function updateMessengerOrderState(
       note ||
       (readyToConfirm
         ? "All details collected. A formatted order summary with a Confirm button is sent to the customer AUTOMATICALLY after your reply — keep your text to one short line and do NOT repeat the details."
-        : `Next detail to ask for: ${missing[0]}.`),
+        : missing[0] === "add_on"
+          ? "All main details are in. Offer the add-on ONCE now (bear, chocolates, or balloon — quick reply buttons are attached automatically): one short friendly line, never pushy. If they decline, call update_order with add_on: \"none\"."
+          : `Next detail to ask for: ${missing[0]}.`),
   };
 }
 
@@ -529,6 +598,8 @@ export function buildOrderSummaryText(state: {
   phone?: string;
   cardMessage?: string;
   specialInstructions?: string;
+  addOnTitle?: string;
+  addOnPricePhp?: number;
 }): string {
   const price =
     typeof state.pricePhp === "number" ? ` — ₱${state.pricePhp.toLocaleString("en-PH")}` : "";
@@ -538,6 +609,15 @@ export function buildOrderSummaryText(state: {
   const lines = [
     "🧾 ORDER SUMMARY",
     `Bouquet: ${state.productTitle ?? "—"}${price}`,
+    ...(state.addOnTitle
+      ? [
+          `Add-on: ${state.addOnTitle}${
+            typeof state.addOnPricePhp === "number"
+              ? ` — ₱${state.addOnPricePhp.toLocaleString("en-PH")}`
+              : ""
+          }`,
+        ]
+      : []),
     `Delivery: ${dateLabel} • ${state.timeSlot ?? "—"}`,
     `Recipient: ${state.recipientName ?? "—"}`,
     `Address: ${state.address ?? "—"}`,
@@ -549,6 +629,67 @@ export function buildOrderSummaryText(state: {
   }
   lines.push("", "Kung tama po lahat, i-tap ang Confirm para makuha ang secure na payment link. 💐");
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Abandoned-order follow-up claim (2026-08-03)
+// ---------------------------------------------------------------------------
+//
+// Mark-BEFORE-send: ang followUpSentAt ay isinusulat BAGO ang Messenger send,
+// kaya kahit mag-retry ang Cloud Tasks o ma-deliver nang doble ang task, ISANG
+// reminder lang kailanman ang maipapadala per orderKey. Kapag pumalya ang send
+// pagkatapos ng claim, hindi na inuulit — mas pipiliin ang zero-duplicate
+// kaysa guaranteed delivery para sa isang nudge.
+
+export type ClaimOrderFollowUpResult =
+  | { ok: true; state: MessengerOrderState }
+  | {
+      ok: false;
+      reason: "not_found" | "not_awaiting" | "stale_key" | "already_sent" | "error";
+      error?: string;
+    };
+
+export async function claimOrderFollowUp(
+  psid: string,
+  orderKey: string,
+): Promise<ClaimOrderFollowUpResult> {
+  let thread;
+  try {
+    thread = await prisma.messengerThread.findUnique({ where: { psid } });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "error",
+      error: error instanceof Error ? error.message : "Could not load the thread.",
+    };
+  }
+  if (!thread) {
+    return { ok: false, reason: "not_found" };
+  }
+
+  const state = parseOrderState(thread.orderStateJson);
+  if (state.status !== "awaiting_confirm") {
+    // Na-confirm na, na-reset, o hindi kailanman umabot — walang ipapaalala.
+    return { ok: false, reason: "not_awaiting" };
+  }
+  if (!state.orderKey || state.orderKey !== orderKey.trim()) {
+    return { ok: false, reason: "stale_key" };
+  }
+  if (state.followUpSentAt) {
+    return { ok: false, reason: "already_sent" };
+  }
+
+  state.followUpSentAt = new Date().toISOString();
+  try {
+    await saveOrderState(psid, state);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "error",
+      error: error instanceof Error ? error.message : "Could not save the follow-up claim.",
+    };
+  }
+  return { ok: true, state };
 }
 
 // ---------------------------------------------------------------------------
@@ -664,7 +805,12 @@ function buildDraftOrderInput(psid: string, state: MessengerOrderState, now: Dat
     noteParts.push(`Special instructions: ${state.specialInstructions}`);
   }
   return {
-    lineItems: [{ variantId: state.variantId, quantity: 1 }],
+    lineItems: [
+      { variantId: state.variantId, quantity: 1 },
+      // Add-on upsell (2026-08-03): pangalawang line item kapag pumili ang
+      // customer (bear/chocolates/balloon) — validated live bago naka-save.
+      ...(state.addOnVariantId ? [{ variantId: state.addOnVariantId, quantity: 1 }] : []),
+    ],
     customAttributes: [
       // EXACT checkout shape — the orders/create sync reads these keys.
       { key: DELIVERY_DATE_ATTRIBUTE_KEY, value: state.deliveryDate },

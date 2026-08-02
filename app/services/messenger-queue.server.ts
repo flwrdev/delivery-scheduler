@@ -50,9 +50,12 @@ async function fetchAccessToken(): Promise<string | null> {
   return payload.access_token ?? null;
 }
 
-export async function enqueueMessengerEchoTask({
-  mid,
-}: EnqueueMessengerEchoTaskInput): Promise<EnqueueMessengerEchoTaskResult> {
+// Shared Cloud Tasks POST core — ang echo task at ang delayed follow-up task
+// (2026-08-03) ay parehong dumadaan dito; ang scheduleTime lang ang pinagkaiba.
+async function postMessengerTask(
+  rawPayload: string,
+  scheduleTime?: string,
+): Promise<EnqueueMessengerEchoTaskResult> {
   const queuePath = process.env.MESSENGER_TASKS_QUEUE_PATH?.trim();
   const workerUrl = process.env.MESSENGER_WORKER_URL?.trim();
   const workerSecret = process.env.MESSENGER_WORKER_SECRET?.trim();
@@ -66,7 +69,6 @@ export async function enqueueMessengerEchoTask({
       return { ok: false, error: "Could not obtain a Cloud Tasks access token." };
     }
 
-    const rawPayload = JSON.stringify({ mid });
     const response = await fetch(`https://cloudtasks.googleapis.com/v2/${queuePath}/tasks`, {
       method: "POST",
       headers: {
@@ -90,6 +92,7 @@ export async function enqueueMessengerEchoTask({
           // attempt was still mid-LLM, and both attempts sent before repliedAt
           // was written. Keep this comfortably above the worst-case turn.
           dispatchDeadline: "180s",
+          ...(scheduleTime ? { scheduleTime } : {}),
         },
       }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -114,4 +117,28 @@ export async function enqueueMessengerEchoTask({
       error: error instanceof Error ? error.message : "Failed to enqueue Messenger task.",
     };
   }
+}
+
+export async function enqueueMessengerEchoTask({
+  mid,
+}: EnqueueMessengerEchoTaskInput): Promise<EnqueueMessengerEchoTaskResult> {
+  return postMessengerTask(JSON.stringify({ mid }));
+}
+
+// Abandoned-order follow-up (2026-08-03): delayed task na fina-fire pagkalipas
+// ng delaySeconds. Ang worker route ang magpapasya kung ipapadala pa ba ang
+// reminder (state guards) — dito basta naka-schedule lang.
+export interface EnqueueMessengerFollowUpTaskInput {
+  psid: string;
+  orderKey: string;
+  delaySeconds: number;
+}
+
+export async function enqueueMessengerFollowUpTask({
+  psid,
+  orderKey,
+  delaySeconds,
+}: EnqueueMessengerFollowUpTaskInput): Promise<EnqueueMessengerEchoTaskResult> {
+  const scheduleTime = new Date(Date.now() + delaySeconds * 1000).toISOString();
+  return postMessengerTask(JSON.stringify({ followUp: { psid, orderKey } }), scheduleTime);
 }

@@ -405,8 +405,9 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
       "customer provides or changes an order detail — the tool validates and PERSISTS it; anything " +
       "not saved here is lost. Required details are collected in this order: product (variant_id) → " +
       "delivery_date (ISO, from resolve_date) → time_slot (an OPEN slot value for that date) → " +
-      "recipient_name → address (with address_area or address_zip for the coverage check) → phone. " +
-      "card_message and special_instructions are optional. To change a detail ('baguhin ang petsa'), " +
+      "recipient_name → address (with address_area or address_zip for the coverage check) → phone → " +
+      "add-on decision (add_on_variant_id to pick a bear/chocolates/balloon add-on, or add_on: 'none' " +
+      "to decline — the offer is made exactly once). card_message and special_instructions are optional. To change a detail ('baguhin ang petsa'), " +
       "pass clear=[\"delivery_date\"] plus the new value if given — never restart the order. " +
       "The result lists what is still missing; when readyToConfirm=true a formatted summary with a " +
       "Confirm button is sent to the customer automatically after your reply.",
@@ -438,11 +439,20 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
           type: "string",
           description: "Optional rider/delivery instructions (e.g. surprise delivery, 'do not call recipient').",
         },
+        add_on_variant_id: {
+          type: "string",
+          description:
+            "gid://shopify/ProductVariant/... of the chosen ADD-ON (bear/chocolates/balloon) from search_products / get_product_details.",
+        },
+        add_on: {
+          type: "string",
+          description: "Pass \"none\" when the customer declines the add-on offer.",
+        },
         clear: {
           type: "array",
           items: { type: "string" },
           description:
-            "Fields to clear before applying new values: product, delivery_date, time_slot, recipient_name, address, phone, card_message, special_instructions — or \"all\" to start a new order.",
+            "Fields to clear before applying new values: product, delivery_date, time_slot, recipient_name, address, phone, card_message, special_instructions, add_on — or \"all\" to start a new order.",
         },
       },
       required: [],

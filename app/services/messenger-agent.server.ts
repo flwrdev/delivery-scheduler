@@ -20,8 +20,13 @@ import {
 } from "./messenger-llm.server";
 import type { LlmContentBlock, LlmMessage } from "./messenger-llm.server";
 import type { MessengerProduct, SearchShopProductsResult } from "./messenger-products.server";
-import { buildOrderSummaryText, confirmMessengerOrder } from "./messenger-orders.server";
+import {
+  buildOrderSummaryText,
+  claimOrderFollowUp,
+  confirmMessengerOrder,
+} from "./messenger-orders.server";
 import type { UpdateOrderStateResult } from "./messenger-orders.server";
+import { enqueueMessengerFollowUpTask } from "./messenger-queue.server";
 import {
   MESSENGER_NOT_CONFIGURED_MESSAGE,
   sendMessengerGenericTemplate,
@@ -71,6 +76,23 @@ export function messengerHandbackHours(): number {
   return Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_HANDBACK_HOURS;
 }
 
+// Abandoned-order follow-up (2026-08-03): ilang oras pagkatapos ng summary
+// bago ang isang beses na reminder. 0 = naka-off. Default 3h — komportableng
+// nasa loob ng Meta 24-hour messaging window.
+const DEFAULT_FOLLOWUP_HOURS = 3;
+
+export function messengerFollowUpHours(): number {
+  const raw = process.env.MESSENGER_FOLLOWUP_HOURS?.trim();
+  if (!raw) {
+    return DEFAULT_FOLLOWUP_HOURS;
+  }
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours < 0) {
+    return DEFAULT_FOLLOWUP_HOURS;
+  }
+  return hours;
+}
+
 function buildSystemPrompt(now: Date, ordersEnabled: boolean): string {
   return [
     "You are FlowerBot, the customer service and sales assistant of The Flowercart, a flower shop in the Philippines that delivers within Metro Manila.",
@@ -101,7 +123,8 @@ function buildSystemPrompt(now: Date, ordersEnabled: boolean): string {
     ...(ordersEnabled
       ? [
           "ORDERING (you CAN take orders — collected step by step, saved by update_order):",
-          "- Details are collected in this exact order: bouquet → delivery date → time slot → recipient name → delivery address → recipient phone; card message and special instructions are optional. Ask ONLY for the next missing detail (the update_order result's 'missing' list is the source of truth for what has been collected — never rely on your own memory of the conversation).",
+          "- Details are collected in this exact order: bouquet → delivery date → time slot → recipient name → delivery address → recipient phone → add-on offer; card message and special instructions are optional. Ask ONLY for the next missing detail (the update_order result's 'missing' list is the source of truth for what has been collected — never rely on your own memory of the conversation).",
+          "- ADD-ON OFFER (when missing[0] is add_on): offer ONCE, one short friendly line (e.g. 'Gusto niyo po bang samahan ng add-on? 🧸🍫🎈') — quick reply buttons are attached automatically, never be pushy. [TAP] ADDON_BEAR / ADDON_CHOCOLATES / ADDON_BALLOON = call search_products with that keyword (bear / chocolates / balloon) so the carousel shows the options; when they pick one, get_product_details then update_order with add_on_variant_id. [TAP] ADDON_NONE or any decline = update_order with add_on: 'none' and move on graciously.",
           "- Call update_order EVERY time the customer gives or changes an order detail. The code validates and SAVES each field; a detail you did not pass to update_order does not exist.",
           "- Product: pass the variant_id from search_products / get_product_details (or a [TAP] PRODUCT_ payload). Date: resolve_date first, then pass the ISO date. Slot: pass the exact slot value (a [TAP] SLOT_ payload carries it after 'SLOT_').",
           "- Address: also pass address_area (barangay/city) or address_zip so coverage is checked. If the address is rejected as outside coverage, apologize and point to https://flowercart.store/pages/delivery-coverage.",
@@ -478,6 +501,7 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   let lastOpenSlots: Extract<GetAvailableDeliverySlotsResult, { available: true }> | null = null;
   let lastProducts: MessengerProduct[] | null = null;
   let lastOrderReady: { orderKey: string; summaryText: string } | null = null;
+  let awaitingAddOnChoice = false;
 
   for (let iteration = 0; iteration < MAX_LLM_ITERATIONS; iteration += 1) {
     const turn = await runLlmTurn({ system, messages, tools });
@@ -527,6 +551,12 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
           result.readyToConfirm && result.orderKey
             ? { orderKey: result.orderKey, summaryText: buildOrderSummaryText(result.state) }
             : null;
+        // Add-on upsell (2026-08-03): kapag ang susunod na kulang ay ang
+        // add-on decision, ang code ang magkakabit ng category quick replies.
+        awaitingAddOnChoice =
+          !result.readyToConfirm &&
+          Array.isArray(result.missing) &&
+          result.missing[0] === "add_on";
       }
       results.push({
         type: "tool_result",
@@ -552,6 +582,15 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
       { title: "Confirm ✅", payload: `CONFIRM_ORDER_${lastOrderReady.orderKey}` },
       { title: "Baguhin", payload: EDIT_ORDER_PAYLOAD },
     ];
+  } else if (awaitingAddOnChoice && !lastProducts) {
+    // Add-on category buttons — ang [TAP] ADDON_* payloads ay hina-handle ng
+    // LLM sa susunod na turn (search per category o decline).
+    quickReplies = [
+      { title: "🧸 Bear", payload: "ADDON_BEAR" },
+      { title: "🍫 Chocolates", payload: "ADDON_CHOCOLATES" },
+      { title: "🎈 Balloon", payload: "ADDON_BALLOON" },
+      { title: "Hindi na po", payload: "ADDON_NONE" },
+    ];
   } else if (lastOpenSlots && !lastProducts) {
     // A carousel message right after would dismiss quick replies in the UI —
     // a product turn keeps the carousel and drops the slot buttons.
@@ -561,7 +600,7 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
     }));
   }
 
-  return deliverReplyAndBookkeep({
+  const delivered = await deliverReplyAndBookkeep({
     psid: message.psid,
     mid,
     replyText,
@@ -570,4 +609,167 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
     // A carousel after the summary would dismiss the Confirm quick replies.
     products: lastOrderReady ? null : lastProducts,
   });
+
+  // Abandoned-order follow-up (2026-08-03): kapag lumabas ang summary + Confirm,
+  // mag-schedule ng isang delayed reminder task. Best-effort — hindi kailanman
+  // pinapalya nito ang turn; ang worker guards ang magpapasya kung sesend pa.
+  if (delivered.status === "sent" && lastOrderReady) {
+    const hours = messengerFollowUpHours();
+    if (hours > 0) {
+      try {
+        const enqueued = await enqueueMessengerFollowUpTask({
+          psid: message.psid,
+          orderKey: lastOrderReady.orderKey,
+          delaySeconds: Math.round(hours * 3600),
+        });
+        if (enqueued.ok) {
+          console.log(
+            `[messenger-agent] follow-up scheduled key=${lastOrderReady.orderKey} in ${hours}h`,
+          );
+        } else if (!enqueued.notConfigured) {
+          console.warn(`[messenger-agent] follow-up enqueue failed: ${enqueued.error}`);
+        }
+      } catch (error) {
+        console.warn(
+          `[messenger-agent] follow-up enqueue threw: ${
+            error instanceof Error ? error.message : "unknown"
+          }`,
+        );
+      }
+    }
+  }
+
+  return delivered;
+}
+
+// ---------------------------------------------------------------------------
+// Abandoned-order follow-up (2026-08-03) — Cloud Tasks delayed reminder
+// ---------------------------------------------------------------------------
+//
+// Tumatakbo pagkalipas ng MESSENGER_FOLLOWUP_HOURS mula nang lumabas ang order
+// summary. Deterministic ang teksto (walang LLM). Guards bago mag-send:
+//   1. humanControl OFF (walang nudge habang hawak ng tao ang thread),
+//   2. may inbound customer message sa nakaraang 20h (Meta 24h window, may
+//      margin) at WALA sa nakaraang 45 min (huwag sumabad sa aktibong usapan),
+//   3. state ay awaiting_confirm pa rin sa PAREHONG orderKey at hindi pa
+//      nasusundan (claimOrderFollowUp = mark-BEFORE-send, zero duplicates).
+
+const FOLLOWUP_ACTIVE_CHAT_MS = 45 * 60 * 1000;
+const FOLLOWUP_WINDOW_MS = 20 * 60 * 60 * 1000;
+
+export async function processOrderFollowUp(
+  psid: string,
+  orderKey: string,
+  now = new Date(),
+): Promise<ProcessAgentTurnResult> {
+  let thread;
+  try {
+    thread = await prisma.messengerThread.findUnique({ where: { psid } });
+  } catch (error) {
+    return {
+      status: "retryable_failure",
+      error: error instanceof Error ? error.message : "Could not load the thread.",
+    };
+  }
+  if (!thread) {
+    return { status: "not_found" };
+  }
+  if (thread.humanControl) {
+    console.log(`[messenger-agent] follow-up skipped psid=${psid} — humanControl`);
+    return { status: "skipped" };
+  }
+
+  let lastCustomer;
+  try {
+    lastCustomer = await prisma.messengerMessage.findFirst({
+      where: { psid, role: "customer" },
+      orderBy: { createdAt: "desc" },
+    });
+  } catch (error) {
+    return {
+      status: "retryable_failure",
+      error: error instanceof Error ? error.message : "Could not load the thread history.",
+    };
+  }
+  if (!lastCustomer) {
+    return { status: "skipped" };
+  }
+  const sinceLastCustomerMs = now.getTime() - lastCustomer.createdAt.getTime();
+  if (sinceLastCustomerMs > FOLLOWUP_WINDOW_MS) {
+    console.log(`[messenger-agent] follow-up skipped psid=${psid} — outside the messaging window`);
+    return { status: "skipped" };
+  }
+  if (sinceLastCustomerMs < FOLLOWUP_ACTIVE_CHAT_MS) {
+    console.log(`[messenger-agent] follow-up skipped psid=${psid} — conversation is active`);
+    return { status: "skipped" };
+  }
+
+  const claim = await claimOrderFollowUp(psid, orderKey);
+  if (!claim.ok) {
+    if (claim.reason === "error") {
+      return { status: "retryable_failure", error: claim.error ?? "Follow-up claim failed." };
+    }
+    console.log(`[messenger-agent] follow-up skipped psid=${psid} — ${claim.reason}`);
+    return { status: "skipped" };
+  }
+
+  const state = claim.state;
+  const price =
+    typeof state.pricePhp === "number" ? ` (₱${state.pricePhp.toLocaleString("en-PH")})` : "";
+  const lines = [
+    "Hi po! 👋 Naka-reserve pa po ang order niyo:",
+    `💐 ${state.productTitle ?? "ang napili niyong bouquet"}${price}`,
+    ...(state.deliveryDate && state.timeSlot
+      ? [`📅 ${state.deliveryDate} • ${state.timeSlot}`]
+      : []),
+    "",
+    "Ituloy ko na po ba? I-tap lang ang Confirm kung go na. 🌸",
+  ];
+  const text = sanitizeMessengerText(lines.join("\n")).slice(0, MESSENGER_TEXT_LIMIT);
+
+  let sendResult;
+  try {
+    sendResult = await sendMessengerTextMessage({
+      psid,
+      text,
+      quickReplies: [
+        { title: "Confirm ✅", payload: `CONFIRM_ORDER_${orderKey}` },
+        { title: "Baguhin", payload: EDIT_ORDER_PAYLOAD },
+      ],
+    });
+  } catch (error) {
+    // Claimed na — sadyang HINDI nire-retry para walang duplicate nudge.
+    console.warn(
+      `[messenger-agent] follow-up send threw psid=${psid}: ${
+        error instanceof Error ? error.message : "unknown"
+      }`,
+    );
+    return { status: "skipped" };
+  }
+  if (!sendResult.ok) {
+    console.warn(`[messenger-agent] follow-up send failed psid=${psid}: ${sendResult.error}`);
+    return sendResult.error === MESSENGER_NOT_CONFIGURED_MESSAGE
+      ? { status: "not_configured" }
+      : { status: "skipped" };
+  }
+
+  try {
+    await prisma.messengerMessage.create({
+      data: {
+        psid,
+        role: "bot",
+        bodyJson: JSON.stringify({ text }),
+        mid: sendResult.messageId,
+      },
+    });
+  } catch (error) {
+    console.warn(
+      `[messenger-agent] follow-up bookkeeping failed psid=${psid}: ${
+        error instanceof Error ? error.message : "unknown"
+      }`,
+    );
+  }
+
+  console.log(`[messenger-agent] follow-up sent psid=${psid} key=${orderKey}`);
+  return { status: "sent", replyMid: sendResult.messageId };
 }

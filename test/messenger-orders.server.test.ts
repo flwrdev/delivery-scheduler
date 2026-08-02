@@ -24,6 +24,7 @@ vi.mock("../app/shopify.server", () => ({
 
 import {
   buildOrderSummaryText,
+  claimOrderFollowUp,
   confirmMessengerOrder,
   missingOrderFields,
   orderKeyTag,
@@ -75,6 +76,7 @@ function completeState(overrides: Partial<MessengerOrderState> = {}): MessengerO
     addressCity: "Marikina",
     phone: "09171234567",
     cardMessage: "Happy birthday!",
+    addOnDecided: true,
     orderKey: KEY,
     ...overrides,
   };
@@ -147,7 +149,7 @@ describe("updateMessengerOrderState (slot-filling state machine — code advance
     expect(result).toMatchObject({
       ok: true,
       readyToConfirm: false,
-      missing: ["product", "delivery_date", "time_slot", "recipient_name", "address", "phone"],
+      missing: ["product", "delivery_date", "time_slot", "recipient_name", "address", "phone", "add_on"],
     });
   });
 
@@ -159,7 +161,7 @@ describe("updateMessengerOrderState (slot-filling state machine — code advance
     expect(result).toMatchObject({
       ok: true,
       state: { productTitle: "Sweet Heart", pricePhp: 799 },
-      missing: ["delivery_date", "time_slot", "recipient_name", "address", "phone"],
+      missing: ["delivery_date", "time_slot", "recipient_name", "address", "phone", "add_on"],
     });
   });
 
@@ -402,7 +404,7 @@ describe("updateMessengerOrderState (slot-filling state machine — code advance
     const result = await updateMessengerOrderState(PSID, { clear: ["all"] }, makeDeps(), NOW);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.missing).toHaveLength(6);
+      expect(result.missing).toHaveLength(7);
     }
     const updateArgs = prismaMock.messengerThread.update.mock.calls[0][0];
     expect(updateArgs.data.conversationOrderKey).toBeNull();
@@ -655,6 +657,7 @@ describe("parseOrderState / missingOrderFields", () => {
       "recipient_name",
       "address",
       "phone",
+      "add_on",
     ]);
   });
 });
@@ -664,5 +667,199 @@ describe("orderKeyTag (Shopify 40-char tag limit)", () => {
     const tag = orderKeyTag("453b023a-9baf-4640-bac2-b9f770914627");
     expect(tag.length).toBeLessThanOrEqual(40);
     expect(tag).toBe("mo-key-453b023a9baf4640bac2b9f770914627");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Add-on upsell (2026-08-03)
+// ---------------------------------------------------------------------------
+
+describe("updateMessengerOrderState — add-on upsell step", () => {
+  it("asks for the add-on decision after phone, with the offer note", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow(completeState({ status: "collecting", addOnDecided: undefined, orderKey: undefined })),
+    );
+    const result = await updateMessengerOrderState(PSID, {}, makeDeps(), NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.readyToConfirm).toBe(false);
+    expect(result.missing).toEqual(["add_on"]);
+    expect(result.note).toContain("add-on");
+  });
+
+  it("declining with add_on: 'none' completes the order and mints the key", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow(completeState({ status: "collecting", addOnDecided: undefined, orderKey: undefined })),
+    );
+    const result = await updateMessengerOrderState(PSID, { add_on: "none" }, makeDeps(), NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.readyToConfirm).toBe(true);
+    const saved = JSON.parse(
+      prismaMock.messengerThread.update.mock.calls[0][0].data.orderStateJson as string,
+    );
+    expect(saved.addOnDecided).toBe(true);
+    expect(saved.addOnVariantId).toBeUndefined();
+  });
+
+  it("picking an add-on validates the variant live and saves title/price", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow(completeState({ status: "collecting", addOnDecided: undefined, orderKey: undefined })),
+    );
+    const deps = makeDeps({
+      getVariant: vi.fn().mockResolvedValue({
+        ok: true,
+        product: {
+          productTitle: "3ft pink plush bear",
+          variantId: "gid://shopify/ProductVariant/222",
+          pricePhp: 1499,
+          available: true,
+        },
+      }),
+    });
+    const result = await updateMessengerOrderState(
+      PSID,
+      { add_on_variant_id: "gid://shopify/ProductVariant/222" },
+      deps,
+      NOW,
+    );
+    expect(deps.getVariant).toHaveBeenCalledWith("gid://shopify/ProductVariant/222");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.readyToConfirm).toBe(true);
+    expect(result.state.addOnTitle).toBe("3ft pink plush bear");
+    expect(result.state.addOnPricePhp).toBe(1499);
+  });
+
+  it("rejects an out-of-stock add-on without deciding", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow(completeState({ status: "collecting", addOnDecided: undefined, orderKey: undefined })),
+    );
+    const deps = makeDeps({
+      getVariant: vi.fn().mockResolvedValue({
+        ok: true,
+        product: { productTitle: "Bear", variantId: "gid://x/2", pricePhp: 1, available: false },
+      }),
+    });
+    const result = await updateMessengerOrderState(
+      PSID,
+      { add_on_variant_id: "gid://x/2" },
+      deps,
+      NOW,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.errors[0]).toMatchObject({ field: "add_on" });
+    expect(result.missing).toContain("add_on");
+  });
+
+  it("an unrecognized add_on string errors instead of silently deciding", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow(completeState({ status: "collecting", addOnDecided: undefined, orderKey: undefined })),
+    );
+    const result = await updateMessengerOrderState(PSID, { add_on: "bear" }, makeDeps(), NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.errors[0]).toMatchObject({ field: "add_on" });
+    expect(result.missing).toContain("add_on");
+  });
+
+  it("clear: ['add_on'] re-opens the add-on decision", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow(
+        completeState({
+          addOnDecided: true,
+          addOnVariantId: "gid://x/2",
+          addOnTitle: "Bear",
+          addOnPricePhp: 1499,
+        }),
+      ),
+    );
+    const result = await updateMessengerOrderState(PSID, { clear: ["add_on"] }, makeDeps(), NOW);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.missing).toEqual(["add_on"]);
+    expect(result.state.addOnTitle).toBeUndefined();
+  });
+
+  it("GRANDFATHER: an awaiting_confirm state saved BEFORE the add-on step parses as decided", () => {
+    const legacy = JSON.stringify(
+      completeState({ addOnDecided: undefined }),
+    );
+    const parsed = parseOrderState(legacy);
+    expect(parsed.addOnDecided).toBe(true);
+    expect(missingOrderFields(parsed)).toEqual([]);
+  });
+
+  it("the summary shows the Add-on line when one is picked", () => {
+    const text = buildOrderSummaryText({
+      productTitle: "Sweet Heart",
+      pricePhp: 799,
+      deliveryDate: "2026-08-05",
+      timeSlot: "9AM-12PM",
+      addOnTitle: "3ft pink plush bear",
+      addOnPricePhp: 1499,
+    });
+    expect(text).toContain("Add-on: 3ft pink plush bear — ₱1,499");
+  });
+
+  it("the draft order carries the add-on as a SECOND line item", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow(
+        completeState({ addOnVariantId: "gid://shopify/ProductVariant/222" }),
+      ),
+    );
+    graphqlMock
+      .mockResolvedValueOnce(jsonResponse({ data: { draftOrders: { nodes: [] } } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ data: { draftOrderCreate: { draftOrder: DRAFT_NODE, userErrors: [] } } }),
+      );
+    const result = await confirmMessengerOrder(PSID, KEY, NOW);
+    expect(result.ok).toBe(true);
+    const createCall = graphqlMock.mock.calls.find(isCreateCall);
+    const input = (createCall?.[1] as { variables: { input: { lineItems: unknown } } }).variables.input;
+    expect(input.lineItems).toEqual([
+      { variantId: VARIANT_ID, quantity: 1 },
+      { variantId: "gid://shopify/ProductVariant/222", quantity: 1 },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Abandoned-order follow-up claim (2026-08-03) — mark-BEFORE-send
+// ---------------------------------------------------------------------------
+
+describe("claimOrderFollowUp", () => {
+  it("claims once: sets followUpSentAt in Neon BEFORE returning the state", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(threadRow(completeState()));
+    const result = await claimOrderFollowUp(PSID, KEY);
+    expect(result.ok).toBe(true);
+    const saved = JSON.parse(
+      prismaMock.messengerThread.update.mock.calls[0][0].data.orderStateJson as string,
+    );
+    expect(typeof saved.followUpSentAt).toBe("string");
+  });
+
+  it("refuses a second claim (already_sent)", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow(completeState({ followUpSentAt: "2026-08-03T07:00:00Z" })),
+    );
+    const result = await claimOrderFollowUp(PSID, KEY);
+    expect(result).toMatchObject({ ok: false, reason: "already_sent" });
+    expect(prismaMock.messengerThread.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the order is no longer awaiting_confirm (confirmed or reset)", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow(completeState({ status: "created" })),
+    );
+    const result = await claimOrderFollowUp(PSID, KEY);
+    expect(result).toMatchObject({ ok: false, reason: "not_awaiting" });
+  });
+
+  it("refuses a stale orderKey (order was edited/reset since scheduling)", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(threadRow(completeState()));
+    const result = await claimOrderFollowUp(PSID, "some-other-key");
+    expect(result).toMatchObject({ ok: false, reason: "stale_key" });
   });
 });
