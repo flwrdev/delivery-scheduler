@@ -400,3 +400,46 @@ prompt hardcoding.
    existing threads) — i-test sa fresh test user o i-delete muna ang conversation.
 2. `mark_seen` ay supported ng service pero hindi pa fired kahit saan — gamitin ba
    pagkatanggap ng message (bago ang typing_on) sa isang susunod na polish pass?
+
+## Phase 9 — Product descriptions + typo-tolerant search (2026-08-03)
+
+**Gate:** inclusion question answered from BLOOMS; typo resolves to the right product.
+**Gate result:** ⏳ PENDING — merchant live test: (1) tanungin ang bot ng "ano inclusion
+ng flowers" para sa Pastel Dreams → sagot mula sa BLOOMS section ng Shopify description
+(hindi imbento, hindi "no access"); (2) i-type ang "pastil dream" → bot nagko-confirm ng
+"Ito po ba ang ibig niyong sabihin — Pastel Dreams?" at tama ang product.
+
+Dalawang merchant-reported live defects (may screenshots) ang saklaw:
+
+- **Descriptions reach the LLM** — `messenger-products.server.ts`: `descriptionHtml`
+  idinagdag sa search query at sa `getVariantLive` product lookup; bagong pure helper
+  `productDescriptionText()` (strip tags, `<li>` → `-` bullets, unescape entities,
+  collapse whitespace, cap 1200 chars keep-the-start — nasa unahan ang BLOOMS/SIZE/
+  COMES WITH bullets; 65/89 products may BLOOMS section). Ang `description` ay optional
+  field na ng `MessengerProduct`, kaya dumadaloy ito sa tool results ng PAREHONG
+  `search_products` at `get_product_details` (ang orchestrator ay `JSON.stringify` ng
+  buong result) — pero HINDI sa carousel cards (title/price/image lang doon). Bounded:
+  8 results × 1200 chars max.
+- **Typo-tolerant fallback** — `searchShopProducts`: kapag ZERO ang keyword search
+  (at may keyword), isang titles-only query (`first: 100`, `status:active`) ang
+  kinukuha at fuzzy-match IN CODE via bagong exported `fuzzyTitleSimilarity()`
+  (bigram/Sørensen–Dice, walang bagong dependency; normalize = lowercase + strip
+  punctuation). Threshold ≥ 0.55, best-first, cap 3 guesses, tapos isang full refetch
+  na may `title:"..."` OR terms (kasama pa rin ang price bounds ng customer). Result
+  shape unchanged + optional `fuzzyMatched: true` flag; "pastil dream" → "Pastel
+  Dreams" (score ≈ 0.7) unit-proven.
+- **Prompt (append-only, 2 bullets sa PRODUCT DISCOVERY):** INCLUSIONS — sagutin mula
+  sa description sa tool result; kung walang BLOOMS info, aminin at i-offer ang product
+  page link, NEVER invent inclusions. `fuzzyMatched=true` → i-confirm muna ang product
+  name bago i-quote nang final. Walang binago sa existing prompt sections.
+- READ-ONLY pa rin ang product queries (zero writes); walang bagong env var, walang
+  migration, walang dependency. Tests 478 → 498 (20 bago: 4 description helper,
+  4 fuzzy helper, 2 description-sa-result, 6 fallback query shapes/gating, 4 agent
+  prompt + tool-result flow — bilang exact ay nasa test files). Typecheck + lint +
+  build clean.
+
+### Open questions (phase 9)
+
+1. May ~24 products na WALANG BLOOMS section sa description — sasagot ang bot ng
+   "wala pong nakalagay" + product link; gusto ba ng merchant na dagdagan ang mga
+   descriptions sa Shopify admin?
