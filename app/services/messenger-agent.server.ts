@@ -80,7 +80,7 @@ function buildSystemPrompt(now: Date, ordersEnabled: boolean): string {
     "- Use EVERYDAY words; when a Tagalog word is deep or formal, use the common English word instead (say 'estimate', never 'tantiya').",
     "- FORMAT for easy reading, Messenger-style: short paragraphs with a blank line between thoughts — never one dense block of text. Lists (slots, dates) go on their own lines.",
     "- Answer what was asked; skip facts the customer didn't ask about unless it directly blocks their request.",
-    "- PLAIN TEXT ONLY: Messenger does not render markdown. Never write **bold**, *italics*, [links](url), or # headings — asterisks show up literally to the customer. Bare URLs and simple '-' lists are fine.",
+    "- PLAIN TEXT ONLY: Messenger does not render markdown. Never write **bold**, *italics*, [links](url), or # headings — asterisks show up literally to the customer. Bare URLs and simple '-' lists are fine. Never use em dashes (—) or en dashes (–): use a comma or start a new sentence instead.",
     "",
     `Current date and time in Asia/Manila: ${getManilaNowLabel(now)}. All dates are in Asia/Manila.`,
     "",
@@ -118,6 +118,8 @@ function buildSystemPrompt(now: Date, ordersEnabled: boolean): string {
     "- The cards have NO buttons (tap on the picture opens the product page). The customer PICKS a bouquet by typing its name (e.g. 'yung Sweet Heart' or 'kunin ko na yung Autumn Morning'): call search_products with that name as the query AND purpose='lookup' (no carousel is sent for a lookup), and when it clearly matches one product, confirm it with the LIVE price and offer the next step.",
     "- A customer message that starts with [TAP] is a button tap, not typed text. [TAP] PRODUCT_<variantId> means they picked that product from an older card: ALWAYS call get_product_details with that variant id first (the card may be old — never trust its price), then confirm with the LIVE price.",
     "- If get_product_details says the variant is unavailable or not found, apologize briefly and offer to search alternatives.",
+    "- INCLUSIONS: when the customer asks what flowers are included / laman ng bouquet / inclusions, answer from the product's description in the tool result (the BLOOMS / SIZE / PERFECT FOR / COMES WITH sections). If the description has no BLOOMS info, say honestly na wala itong nakalagay at i-offer ang product page link. NEVER invent inclusions.",
+    "- If the search_products result has fuzzyMatched=true, the products are closest-title guesses for a possible typo: confirm the product name with the customer first (e.g. 'Ito po ba ang ibig niyong sabihin — Pastel Dreams?') before quoting its details as final.",
     "- If you cannot help or the customer asks for a human, tell them a person from The Flowercart will follow up in this thread.",
     "",
     "STORE KNOWLEDGE (merchant-provided facts — you may state these):",
@@ -221,13 +223,17 @@ function formatPricePhp(price: number): string {
 
 // Messenger renders plain text only. The prompt already forbids markdown, but
 // the LLM slips (live 2026-08-02 smoke test: customers saw literal asterisks)
-// — so the code strips it deterministically before every send.
+// — so the code strips it deterministically before every send. Em/en dashes
+// din (merchant feedback 2026-08-03): masyadong "AI-sounding" sa chat — ang
+// " — " sa gitna ng pangungusap ay nagiging ", ".
 export function sanitizeMessengerText(text: string): string {
   return text
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1: $2")
     .replace(/\*\*([^*\n]+)\*\*/g, "$1")
     .replace(/__([^_\n]+)__/g, "$1")
-    .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s.,!?):;])/gm, "$1$2");
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s.,!?):;])/gm, "$1$2")
+    .replace(/\s*[—–]\s*/g, ", ")
+    .replace(/([,.!?;:])\s*,\s*/g, "$1 ");
 }
 
 // Merchant decision (2026-08-02): WALANG buttons sa cards — natatakpan ng

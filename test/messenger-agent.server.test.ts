@@ -599,6 +599,21 @@ describe("sanitizeMessengerText (Messenger renders plain text only)", () => {
     expect(sanitizeMessengerText("around P333 po ang estimate")).toBe("around P333 po ang estimate");
   });
 
+  it("replaces em/en dashes with a comma (merchant feedback 2026-08-03)", async () => {
+    const { sanitizeMessengerText } = await import("../app/services/messenger-agent.server");
+    expect(sanitizeMessengerText("Pwede po kayong mag-pickup kung gusto niyo — sabihin lang po ninyo.")).toBe(
+      "Pwede po kayong mag-pickup kung gusto niyo, sabihin lang po ninyo.",
+    );
+    expect(sanitizeMessengerText("papuntang Mandaluyong—wala pong ganito kaming tool")).toBe(
+      "papuntang Mandaluyong, wala pong ganito kaming tool",
+    );
+    expect(sanitizeMessengerText("9AM–12PM slot")).toBe("9AM, 12PM slot");
+    // Hindi nagdodoble ng bantas kapag may comma/period na bago ang dash.
+    expect(sanitizeMessengerText("Sige po, — tuloy lang")).toBe("Sige po, tuloy lang");
+    // Ang hyphen sa slot values ay HINDI ginagalaw.
+    expect(sanitizeMessengerText("- 9AM-12PM\n- 3PM-6PM")).toBe("- 9AM-12PM\n- 3PM-6PM");
+  });
+
   it("is applied to the outgoing reply", async () => {
     llmMock.mockResolvedValue(textTurn("**Autumn Morning** po ay available at **P799**"));
     await processAgentTurnByMid(MID);
@@ -831,6 +846,111 @@ describe("menu & greeting tap rules in the system prompt (phase 8)", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("phase 9 — product descriptions + typo-tolerant search", () => {
+  it("teaches the LLM the INCLUSIONS and fuzzy-confirm rules in the system prompt", async () => {
+    await processAgentTurnByMid(MID);
+    const { system } = llmMock.mock.calls[0][0];
+    expect(system).toContain("INCLUSIONS:");
+    expect(system).toContain("BLOOMS");
+    expect(system).toContain("NEVER invent inclusions");
+    expect(system).toContain("fuzzyMatched=true");
+    expect(system).toContain("confirm the product name");
+  });
+
+  it("passes the product description through the search_products tool result to the LLM", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "t9", name: "search_products", input: { query: "pastel" } }],
+      })
+      .mockResolvedValueOnce(textTurn("May BLOOMS breakdown po ako 🌸"));
+    executeToolMock.mockResolvedValue({
+      ok: true,
+      note: "n",
+      products: [
+        {
+          productTitle: "Pastel Dreams",
+          variantId: "gid://shopify/ProductVariant/9",
+          pricePhp: 1499,
+          available: true,
+          description: "BLOOMS: 10 Pink carnation, 8 Pink rose, 16 White rose",
+        },
+      ],
+    });
+
+    await processAgentTurnByMid(MID);
+    // Ang tool_result na naabot ng LLM ay may kasamang description text.
+    const secondMessages = llmMock.mock.calls[1][0].messages;
+    const toolResult = secondMessages[secondMessages.length - 1].content[0];
+    expect(toolResult.type).toBe("tool_result");
+    expect(toolResult.content).toContain("BLOOMS: 10 Pink carnation");
+  });
+
+  it("passes the description through the get_product_details tool result to the LLM", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [
+          {
+            type: "tool_use",
+            id: "t10",
+            name: "get_product_details",
+            input: { variant_id: "gid://shopify/ProductVariant/9" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce(textTurn("Heto po ang laman 🌸"));
+    executeToolMock.mockResolvedValue({
+      ok: true,
+      product: {
+        productTitle: "Pastel Dreams",
+        variantId: "gid://shopify/ProductVariant/9",
+        pricePhp: 1499,
+        available: true,
+        description: "BLOOMS: Pastel blue hydrangea, Baby's breath",
+      },
+    });
+
+    await processAgentTurnByMid(MID);
+    const secondMessages = llmMock.mock.calls[1][0].messages;
+    const toolResult = secondMessages[secondMessages.length - 1].content[0];
+    expect(toolResult.content).toContain("BLOOMS: Pastel blue hydrangea");
+  });
+
+  it("relays the fuzzyMatched flag to the LLM so it can confirm the guess", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [
+          { type: "tool_use", id: "t11", name: "search_products", input: { query: "pastil dream" } },
+        ],
+      })
+      .mockResolvedValueOnce(textTurn("Ito po ba ang ibig niyong sabihin — Pastel Dreams?"));
+    executeToolMock.mockResolvedValue({
+      ok: true,
+      note: "n",
+      fuzzyMatched: true,
+      products: [
+        {
+          productTitle: "Pastel Dreams",
+          variantId: "gid://shopify/ProductVariant/9",
+          pricePhp: 1499,
+          available: true,
+        },
+      ],
+    });
+
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+    const secondMessages = llmMock.mock.calls[1][0].messages;
+    const toolResult = secondMessages[secondMessages.length - 1].content[0];
+    expect(toolResult.content).toContain('"fuzzyMatched":true');
   });
 });
 
