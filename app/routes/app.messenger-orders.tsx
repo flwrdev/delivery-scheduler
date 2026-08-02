@@ -1,13 +1,17 @@
-// Messenger threads — phase-7 minimal version: per-thread bot Pause/Resume
-// (manual human takeover + handback, master doc "Human takeover and handback").
+// Messenger operations page — phase 7: per-thread bot Pause/Resume (manual
+// human takeover + handback); phase 8: Shopify orders listing (tag:messenger,
+// READ-ONLY) + Messenger profile setup (Get Started / Ice Breakers /
+// Persistent Menu, merchant-triggered).
 //
-// Conversation-only page: reads/writes the Neon MessengerThread flags and
-// NOTHING else — no Shopify order reads or writes (the Shopify-orders listing
-// filtered by the `messenger` tag is phase 8, deliberately not built here).
-// Per ADR-11, the action always answers 200 + { ok, ... }.
+// Write surfaces dito: Neon MessengerThread flags (pause/resume) at ang
+// outbound Messenger Profile API POST (setupProfile) — ZERO Shopify order
+// writes; the orders section is a plain Admin GraphQL read. Per ADR-11, the
+// action always answers 200 + { ok, ... }, and a loader-side Graph failure
+// degrades to an error banner instead of crashing the page.
 //
 // Log hygiene: psids and statuses only — never message text.
 
+import { useEffect } from "react";
 import { useFetcher, useLoaderData } from "react-router";
 import {
   Badge,
@@ -17,15 +21,22 @@ import {
   Card,
   EmptyState,
   IndexTable,
+  InlineStack,
   Layout,
+  Link,
   Page,
   Text,
 } from "@shopify/polaris";
-import { TitleBar } from "@shopify/app-bridge-react";
+import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import prisma from "../db.server";
+import {
+  getMessengerProfile,
+  setMessengerProfile,
+} from "../services/messenger-profile.server";
 import { authenticate } from "../shopify.server";
 
 const THREAD_LIMIT = 100;
+const ORDER_LIMIT = 25;
 
 interface ThreadRowData {
   psid: string;
@@ -34,8 +45,92 @@ interface ThreadRowData {
   humanControlAt: string | null;
 }
 
+interface MessengerOrderRowData {
+  id: string;
+  name: string;
+  createdAt: string;
+  financialStatus: string;
+  total: string;
+  customerName: string;
+  deliveryDate: string;
+  deliveryTime: string;
+  adminUrl: string;
+}
+
+type ProfileStatus = "set" | "not_set" | "unknown";
+
+// READ-ONLY listing of Shopify orders born sa Messenger ordering flow — the
+// draft order carries the `messenger` tag (phase 6) and the tag survives onto
+// the completed order.
+const MESSENGER_ORDERS_QUERY = `#graphql
+  query MessengerTaggedOrders($first: Int!, $query: String!) {
+    orders(first: $first, query: $query, sortKey: CREATED_AT, reverse: true) {
+      nodes {
+        id
+        name
+        createdAt
+        displayFinancialStatus
+        currentTotalPriceSet {
+          shopMoney {
+            amount
+            currencyCode
+          }
+        }
+        customer {
+          displayName
+        }
+        shippingAddress {
+          name
+        }
+        customAttributes {
+          key
+          value
+        }
+      }
+    }
+  }
+`;
+
+interface OrderNode {
+  id?: string;
+  name?: string;
+  createdAt?: string;
+  displayFinancialStatus?: string | null;
+  currentTotalPriceSet?: {
+    shopMoney?: { amount?: string; currencyCode?: string } | null;
+  } | null;
+  customer?: { displayName?: string | null } | null;
+  shippingAddress?: { name?: string | null } | null;
+  customAttributes?: Array<{ key?: string; value?: string | null }> | null;
+}
+
+function customAttribute(node: OrderNode, key: string): string {
+  return node.customAttributes?.find((attr) => attr.key === key)?.value ?? "";
+}
+
+function toOrderRow(node: OrderNode): MessengerOrderRowData | null {
+  if (!node.id || !node.name) {
+    return null;
+  }
+  const numericId = node.id.split("/").pop() || node.id;
+  const money = node.currentTotalPriceSet?.shopMoney;
+  return {
+    id: node.id,
+    name: node.name,
+    createdAt: node.createdAt ?? "",
+    financialStatus: node.displayFinancialStatus ?? "",
+    total: money?.amount ? `${money.currencyCode === "PHP" ? "₱" : `${money.currencyCode ?? ""} `}${money.amount}` : "",
+    customerName: node.customer?.displayName ?? node.shippingAddress?.name ?? "",
+    deliveryDate: customAttribute(node, "Delivery Date"),
+    deliveryTime: customAttribute(node, "Delivery Time"),
+    // Same idiom as OrderDetailsPanel: shopify://admin deep link resolved by
+    // App Bridge inside the embedded iframe.
+    adminUrl: `shopify://admin/orders/${numericId}`,
+  };
+}
+
 export const loader = async ({ request }: { request: Request }) => {
-  await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
 
   const threads = await prisma.messengerThread.findMany({
     orderBy: { updatedAt: "desc" },
@@ -55,6 +150,51 @@ export const loader = async ({ request }: { request: Request }) => {
     humanControlAt: Date | null;
   }
 
+  // Shopify orders listing (phase 8) — READ-ONLY, degrade to a banner on any
+  // upstream failure (walang crash; the thread section must keep working).
+  let orders: MessengerOrderRowData[] = [];
+  let ordersError: string | null = null;
+  try {
+    const response = await admin.graphql(MESSENGER_ORDERS_QUERY, {
+      variables: { first: ORDER_LIMIT, query: "tag:messenger" },
+    });
+    const body = (await response.json()) as {
+      data?: { orders?: { nodes?: OrderNode[] } };
+      errors?: Array<{ message?: string }>;
+    };
+    if (body.errors?.length) {
+      ordersError = "Hindi na-load ang Messenger orders mula sa Shopify. Subukan i-refresh.";
+      console.warn(
+        `[messenger-threads] orders query returned errors: ${body.errors
+          .map((e) => e.message ?? "unknown")
+          .join("; ")}`,
+      );
+    } else {
+      orders = (body.data?.orders?.nodes ?? [])
+        .map(toOrderRow)
+        .filter((row): row is MessengerOrderRowData => row !== null);
+    }
+  } catch (error) {
+    ordersError = "Hindi na-load ang Messenger orders mula sa Shopify. Subukan i-refresh.";
+    console.warn(
+      `[messenger-threads] orders query failed: ${
+        error instanceof Error ? error.message : "unknown"
+      }`,
+    );
+  }
+
+  // Messenger profile status (phase 8) — best-effort; failure = "unknown".
+  let profileStatus: ProfileStatus = "unknown";
+  const profile = await getMessengerProfile();
+  if (profile.ok) {
+    profileStatus =
+      profile.profile.hasGetStarted &&
+      profile.profile.hasIceBreakers &&
+      profile.profile.hasPersistentMenu
+        ? "set"
+        : "not_set";
+  }
+
   return {
     threads: (threads as ThreadRecord[]).map(
       (thread): ThreadRowData => ({
@@ -64,6 +204,9 @@ export const loader = async ({ request }: { request: Request }) => {
         humanControlAt: thread.humanControlAt?.toISOString() ?? null,
       }),
     ),
+    orders,
+    ordersError,
+    profileStatus,
   };
 };
 
@@ -72,6 +215,19 @@ export const action = async ({ request }: { request: Request }) => {
 
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
+
+  // Phase 8: merchant-triggered Messenger profile setup. Outbound Graph call
+  // only — never throws; ADR-11 pa rin ang response contract.
+  if (intent === "setupProfile") {
+    const result = await setMessengerProfile();
+    if (result.ok) {
+      console.log("[messenger-threads] messenger profile set");
+      return { ok: true as const, intent };
+    }
+    console.warn(`[messenger-threads] profile setup failed: ${result.error}`);
+    return { ok: false as const, errors: [result.error] };
+  }
+
   const psid = String(form.get("psid") ?? "");
 
   if (!psid) {
@@ -164,8 +320,86 @@ function ThreadRow({ thread, index }: { thread: ThreadRowData; index: number }) 
   );
 }
 
+function ProfileSetupCard({ profileStatus }: { profileStatus: ProfileStatus }) {
+  const shopify = useAppBridge();
+  const fetcher = useFetcher<typeof action>();
+  const busy = fetcher.state !== "idle";
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) {
+      return;
+    }
+    if (fetcher.data.ok) {
+      shopify.toast.show("Na-setup na ang Messenger profile.");
+    } else {
+      shopify.toast.show(
+        (fetcher.data as { errors?: string[] }).errors?.[0] ??
+          "Hindi na-setup ang Messenger profile. Subukan ulit.",
+        { isError: true },
+      );
+    }
+  }, [fetcher.state, fetcher.data, shopify]);
+
+  const statusBadge =
+    profileStatus === "set" ? (
+      <Badge tone="success">Naka-setup</Badge>
+    ) : profileStatus === "not_set" ? (
+      <Badge tone="attention">Hindi pa naka-setup</Badge>
+    ) : (
+      <Badge>Hindi ma-check</Badge>
+    );
+
+  return (
+    <Card>
+      <BlockStack gap="200">
+        <InlineStack gap="200" blockAlign="center">
+          <Text as="h2" variant="headingMd">
+            Messenger profile
+          </Text>
+          {statusBadge}
+        </InlineStack>
+        <Text as="p" variant="bodyMd" tone="subdued">
+          Ise-set nito ang Get Started button, ang apat na greeting questions
+          (ice breakers), at ang persistent menu ng page — isang beses lang
+          kailangan (pwedeng ulitin para i-update).
+        </Text>
+        <InlineStack>
+          <Button
+            loading={busy}
+            onClick={() => fetcher.submit({ intent: "setupProfile" }, { method: "post" })}
+          >
+            I-setup ang Messenger profile
+          </Button>
+        </InlineStack>
+      </BlockStack>
+    </Card>
+  );
+}
+
+function OrderRow({ order, index }: { order: MessengerOrderRowData; index: number }) {
+  return (
+    <IndexTable.Row id={order.id} position={index}>
+      <IndexTable.Cell>
+        <Link url={order.adminUrl} removeUnderline>
+          <Text as="span" variant="bodyMd" fontWeight="semibold">
+            {order.name}
+          </Text>
+        </Link>
+      </IndexTable.Cell>
+      <IndexTable.Cell>{formatManila(order.createdAt || null)}</IndexTable.Cell>
+      <IndexTable.Cell>{order.customerName || "—"}</IndexTable.Cell>
+      <IndexTable.Cell>{order.deliveryDate || "—"}</IndexTable.Cell>
+      <IndexTable.Cell>{order.deliveryTime || "—"}</IndexTable.Cell>
+      <IndexTable.Cell>
+        {order.financialStatus ? <Badge>{order.financialStatus}</Badge> : "—"}
+      </IndexTable.Cell>
+      <IndexTable.Cell>{order.total || "—"}</IndexTable.Cell>
+    </IndexTable.Row>
+  );
+}
+
 export default function MessengerThreadsPage() {
-  const { threads } = useLoaderData<typeof loader>();
+  const { threads, orders, ordersError, profileStatus } = useLoaderData<typeof loader>();
 
   return (
     <Page>
@@ -209,6 +443,42 @@ export default function MessengerThreadsPage() {
                 </IndexTable>
               )}
             </Card>
+            {ordersError ? (
+              <Banner tone="critical" title="Messenger orders">
+                {ordersError}
+              </Banner>
+            ) : null}
+            <Card padding="0">
+              {orders.length === 0 ? (
+                <EmptyState heading="Wala pang orders galing sa Messenger" image="">
+                  <p>
+                    Lalabas dito ang mga Shopify order na may tag na
+                    &quot;messenger&quot; — ang mga order na ginawa ng bot sa
+                    chat.
+                  </p>
+                </EmptyState>
+              ) : (
+                <IndexTable
+                  resourceName={{ singular: "order", plural: "orders" }}
+                  itemCount={orders.length}
+                  selectable={false}
+                  headings={[
+                    { title: "Order" },
+                    { title: "Created" },
+                    { title: "Customer" },
+                    { title: "Delivery Date" },
+                    { title: "Delivery Time" },
+                    { title: "Payment" },
+                    { title: "Total" },
+                  ]}
+                >
+                  {orders.map((order: MessengerOrderRowData, index: number) => (
+                    <OrderRow key={order.id} order={order} index={index} />
+                  ))}
+                </IndexTable>
+              )}
+            </Card>
+            <ProfileSetupCard profileStatus={profileStatus} />
           </BlockStack>
         </Layout.Section>
       </Layout>

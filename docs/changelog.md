@@ -145,3 +145,17 @@ Human-readable, newest-first narrative of the architecture history. Each line is
 - Auto-handback 6h (MESSENGER_HANDBACK_HOURS) + sapilitang re-disclosure; manual
   Pause/Resume sa bagong /app/messenger-orders page (NavMenu "Messenger").
 - [HUMAN AGENT] prefix sa history para hindi kontrahin ng bot ang operator.
+
+## 2026-08-03 — Messenger phase 8: orders listing, typing indicator, profile setup
+
+- `/app/messenger-orders`: bagong READ-ONLY listing ng Shopify orders na may tag na
+  `messenger` (order name → admin deep link, Delivery Date/Time mula sa
+  customAttributes, payment, total); Graph failure → banner lang, hindi crash.
+- Typing indicator: `sendMessengerSenderAction` (sender_action body, walang `message`
+  field) — `typing_on` fire-and-forget bago ang LLM turn, hindi fired sa muted thread
+  o sa deterministic confirm tap.
+- NEW `messenger-profile.server.ts`: Get Started + 4 Taglish ice breakers + persistent
+  menu sa isang `/me/messenger_profile` POST; merchant-triggered `setupProfile` op sa
+  page (ADR-11) + set/not-set status sa loader. Ang mga tap ay `[TAP] <payload>` sa
+  existing webhook path; system prompt may bagong append-only "MENU & GREETING TAPS"
+  section.

@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { prismaMock, llmMock, executeToolMock, sendMock, carouselMock, confirmMock, summaryMock } =
-  vi.hoisted(() => ({
+const {
+  prismaMock,
+  llmMock,
+  executeToolMock,
+  sendMock,
+  carouselMock,
+  senderActionMock,
+  confirmMock,
+  summaryMock,
+} = vi.hoisted(() => ({
   prismaMock: {
     messengerThread: { findUnique: vi.fn(), update: vi.fn() },
     messengerMessage: {
@@ -15,6 +23,7 @@ const { prismaMock, llmMock, executeToolMock, sendMock, carouselMock, confirmMoc
     executeToolMock: vi.fn(),
     sendMock: vi.fn(),
     carouselMock: vi.fn(),
+    senderActionMock: vi.fn(),
     confirmMock: vi.fn(),
     summaryMock: vi.fn(),
   }));
@@ -43,6 +52,7 @@ vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
     ...original,
     sendMessengerTextMessage: sendMock,
     sendMessengerGenericTemplate: carouselMock,
+    sendMessengerSenderAction: senderActionMock,
   };
 });
 
@@ -96,6 +106,7 @@ beforeEach(() => {
   llmMock.mockResolvedValue(textTurn("Sige po!"));
   sendMock.mockResolvedValue({ ok: true, messageId: "mid.bot.new" });
   carouselMock.mockResolvedValue({ ok: true, messageId: "mid.bot.carousel" });
+  senderActionMock.mockResolvedValue({ ok: true, messageId: "" });
   executeToolMock.mockResolvedValue({ ok: true });
   confirmMock.mockResolvedValue({
     ok: true,
@@ -750,6 +761,75 @@ describe("messengerHandbackHours", () => {
     for (const value of ["abc", "0", "-3", "NaN"]) {
       vi.stubEnv("MESSENGER_HANDBACK_HOURS", value);
       expect(messengerHandbackHours()).toBe(6);
+    }
+  });
+});
+
+describe("typing indicator (phase 8 — sender action before the LLM turn)", () => {
+  it("fires typing_on BEFORE the LLM turn on a normal customer message", async () => {
+    await processAgentTurnByMid(MID);
+    expect(senderActionMock).toHaveBeenCalledTimes(1);
+    expect(senderActionMock).toHaveBeenCalledWith({ psid: PSID, action: "typing_on" });
+    // Before the LLM, hindi pagkatapos.
+    expect(senderActionMock.mock.invocationCallOrder[0]).toBeLessThan(
+      llmMock.mock.invocationCallOrder[0],
+    );
+    // Walang typing_off — Messenger clears it when the reply arrives.
+    expect(senderActionMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: "typing_off" }),
+    );
+  });
+
+  it("does NOT fire while the thread is muted (humanControl)", async () => {
+    prismaMock.messengerThread.findUnique.mockResolvedValue(
+      threadRow({ humanControl: true, humanControlAt: new Date() }),
+    );
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("skipped");
+    expect(senderActionMock).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire on the deterministic confirm-tap path (fast, walang LLM)", async () => {
+    prismaMock.messengerMessage.findUnique.mockResolvedValue(
+      customerRow({ bodyJson: JSON.stringify({ text: "[TAP] CONFIRM_ORDER_key-1" }) }),
+    );
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+    expect(senderActionMock).not.toHaveBeenCalled();
+  });
+
+  it("is best-effort: a failed typing_on never blocks the reply", async () => {
+    senderActionMock.mockResolvedValue({ ok: false, error: "Graph API 400" });
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+  });
+});
+
+describe("menu & greeting tap rules in the system prompt (phase 8)", () => {
+  it("explains GET_STARTED, the ICEBREAKER_* payloads, and MENU_ORDER", async () => {
+    await processAgentTurnByMid(MID);
+    const { system } = llmMock.mock.calls[0][0];
+    expect(system).toContain("[TAP] GET_STARTED");
+    expect(system).toContain("[TAP] ICEBREAKER_PRODUCTS");
+    expect(system).toContain("[TAP] ICEBREAKER_FEE");
+    expect(system).toContain("[TAP] ICEBREAKER_SAMEDAY");
+    expect(system).toContain("[TAP] ICEBREAKER_ORDER");
+    expect(system).toContain("MENU_ORDER");
+  });
+
+  it("routes order taps to the website while ordering is env-gated OFF, at sa ordering flow kapag ON", async () => {
+    await processAgentTurnByMid(MID);
+    let { system } = llmMock.mock.calls[0][0];
+    expect(system).toContain("ordering in this chat is not available yet");
+
+    vi.stubEnv("MESSENGER_ORDERS_ENABLED", "true");
+    try {
+      await processAgentTurnByMid(MID);
+      ({ system } = llmMock.mock.calls[1][0]);
+      expect(system).toContain("start the ordering flow");
+      expect(system).not.toContain("ordering in this chat is not available yet");
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 });

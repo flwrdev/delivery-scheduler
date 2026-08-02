@@ -25,6 +25,7 @@ import type { UpdateOrderStateResult } from "./messenger-orders.server";
 import {
   MESSENGER_NOT_CONFIGURED_MESSAGE,
   sendMessengerGenericTemplate,
+  sendMessengerSenderAction,
   sendMessengerTextMessage,
 } from "./messenger-send.server";
 import type { MessengerQuickReply } from "./messenger-send.server";
@@ -139,6 +140,17 @@ function buildSystemPrompt(now: Date, ordersEnabled: boolean): string {
     "- If the customer gave wrong delivery details: the shop is not liable for the failed attempt; re-delivery on the next available slot has a re-delivery fee. Corrections should be sent within 24 hours.",
     "- Flowers available: roses, sunflowers, daisies, gerberas, carnations, tulips, and more. Fresh flowers last around 3-7 days with care (tulips 1-2 days). Slightly droopy on arrival is normal — trim the stems and give them water overnight. Care guide: https://flowercart.store/pages/flower-care",
     "- When the customer mentions a place or zip code (asking if you deliver there or how much delivery costs), call check_delivery_coverage — coverage and fee-estimate answers come ONLY from that tool, never from your own geography knowledge.",
+    "",
+    "MENU & GREETING TAPS (page profile buttons — [TAP] payloads that are not products or slots):",
+    "- [TAP] GET_STARTED = a new customer tapped Get Started: warm greeting + one short line on what you can help with (bouquets, delivery dates, delivery fees).",
+    "- [TAP] ICEBREAKER_PRODUCTS = call search_products (no filters).",
+    "- [TAP] ICEBREAKER_FEE = ask for their barangay/city or zip, then quote via check_delivery_coverage.",
+    "- [TAP] ICEBREAKER_SAMEDAY = yes, may same-day delivery — mention the order cutoff and offer to check today's slots via resolve_date + get_available_slots.",
+    `- [TAP] ICEBREAKER_ORDER and [TAP] MENU_ORDER = the customer wants to order: ${
+      ordersEnabled
+        ? "start the ordering flow (ask which bouquet, or call search_products to show options)."
+        : "ordering in this chat is not available yet — point them to https://flowercart.store and offer to check delivery dates."
+    }`,
   ].join("\n");
 }
 
@@ -427,6 +439,14 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   if (confirmMatch) {
     return processConfirmTap(message.psid, mid, confirmMatch[1].trim(), needsDisclosure);
   }
+
+  // Phase 8 typing indicator: fire-and-forget bago ang LLM turn. Placement is
+  // deliberate — AFTER the humanControl mute gate (walang typing sa muted
+  // thread) and AFTER the deterministic confirm path (fast enough na hindi na
+  // kailangan). Never awaited, result ignored (the send never throws by
+  // design); Messenger clears the indicator automatically when the reply
+  // arrives, kaya walang typing_off.
+  void sendMessengerSenderAction({ psid: message.psid, action: "typing_on" });
 
   // Most-recent window, then chronological for the LLM. History is cut at the
   // current mid so rapid follow-ups are answered by their own tasks in order.

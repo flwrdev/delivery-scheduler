@@ -4,6 +4,7 @@ import {
   MESSENGER_GRAPH_API_VERSION,
   MESSENGER_NOT_CONFIGURED_MESSAGE,
   sendMessengerGenericTemplate,
+  sendMessengerSenderAction,
   sendMessengerTextMessage,
 } from "../app/services/messenger-send.server";
 
@@ -148,6 +149,66 @@ describe("sendMessengerTextMessage", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.toLowerCase()).toContain("timed out");
+  });
+});
+
+describe("sendMessengerSenderAction (phase 8 typing indicator)", () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    vi.stubEnv("MESSENGER_PAGE_ACCESS_TOKEN", TOKEN);
+    vi.stubEnv("MESSENGER_PAGE_ID", PAGE_ID);
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs { recipient, sender_action } with NO message field and the token in the header only", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ recipient_id: "123" }));
+
+    const result = await sendMessengerSenderAction({ psid: "123", action: "typing_on" });
+
+    expect(result.ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `https://graph.facebook.com/${MESSENGER_GRAPH_API_VERSION}/${PAGE_ID}/messages`,
+    );
+    expect(url).not.toContain(TOKEN);
+    expect(init.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+    // Exact body: walang message at walang messaging_type sa sender actions.
+    expect(JSON.parse(init.body)).toEqual({
+      recipient: { id: "123" },
+      sender_action: "typing_on",
+    });
+  });
+
+  it("returns a designed failure without calling fetch when not configured", async () => {
+    vi.stubEnv("MESSENGER_PAGE_ACCESS_TOKEN", "");
+    const result = await sendMessengerSenderAction({ psid: "123", action: "typing_on" });
+    expect(result).toEqual({ ok: false, error: MESSENGER_NOT_CONFIGURED_MESSAGE });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns ok:false with the Graph error (never the token) on an error response", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ error: { message: "Invalid OAuth access token.", code: 190 } }, 400),
+    );
+    const result = await sendMessengerSenderAction({ psid: "123", action: "mark_seen" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("Invalid OAuth access token.");
+      expect(result.error).not.toContain(TOKEN);
+    }
+  });
+
+  it("returns ok:false without throwing when fetch rejects", async () => {
+    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+    const result = await sendMessengerSenderAction({ psid: "123", action: "typing_on" });
+    expect(result.ok).toBe(false);
   });
 });
 
