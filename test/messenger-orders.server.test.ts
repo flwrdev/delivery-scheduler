@@ -658,3 +658,11 @@ describe("parseOrderState / missingOrderFields", () => {
     ]);
   });
 });
+
+describe("orderKeyTag (Shopify 40-char tag limit)", () => {
+  it("stays within 40 chars for a full UUID key (live 2026-08-02 failure)", () => {
+    const tag = orderKeyTag("453b023a-9baf-4640-bac2-b9f770914627");
+    expect(tag.length).toBeLessThanOrEqual(40);
+    expect(tag).toBe("mo-key-453b023a9baf4640bac2b9f770914627");
+  });
+});
