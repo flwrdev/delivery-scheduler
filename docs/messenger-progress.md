@@ -290,3 +290,17 @@ hanggang ma-approve ng merchant ang bagong scopes.)
   sa pagpili ng pangalan), Cloud Tasks dispatchDeadline 30s→180s (live duplicate-reply fix).
 - Tests: 418/418. New migration 20260802000000 (orderStateJson + conversationOrderKey sa
   MessengerThread) — auto-applied sa prod via docker-start; sa local: npm run setup.
+
+### Phase 6 GATE PASSED (2026-08-02)
+
+Live evidence: draft #D37 -> Order #3979 (Rosa Bouquet P899, delivery 2026-08-03
+3PM-6PM). EKSAKTONG ISANG draft/order para sa key 453b023a... sa kabila ng: 5x
+Cloud Tasks retry noong walang scopes ang token (lahat transient, walang create),
+1x failed create (tag > 40 chars), at final na successful confirm tap. Metafields
+auto-synced ng existing orders/create webhook (delivery.date, time_slot,
+sync_status=ok) — zero Messenger-specific sync code, gaya ng dinisenyo.
+
+Live fixes sa gate run: (1) mo-key tag pinaikli sa 39 chars (Shopify 40-char tag
+limit); (2) scope activation ay nangangailangan ng app open sa admin para sa token
+exchange — ang .env ay walang epekto sa prod session. MESSENGER_ORDERS_ENABLED=true
+na sa Cloud Run (rev 00196+).
