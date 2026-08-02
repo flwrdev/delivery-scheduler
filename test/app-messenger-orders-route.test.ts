@@ -4,20 +4,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // suite runs in plain node, no jsdom) and shopify.server is fully mocked (its
 // Prisma session storage cannot initialize inside vitest).
 
-const { prismaMock, adminMock, componentStub } = vi.hoisted(() => ({
-  prismaMock: {
-    messengerThread: {
-      findMany: vi.fn(),
-      update: vi.fn(),
+const { prismaMock, adminMock, graphqlMock, componentStub, getProfileMock, setProfileMock } =
+  vi.hoisted(() => ({
+    prismaMock: {
+      messengerThread: {
+        findMany: vi.fn(),
+        update: vi.fn(),
+      },
     },
-  },
-  adminMock: vi.fn(),
-  componentStub: () => null,
-}));
+    adminMock: vi.fn(),
+    graphqlMock: vi.fn(),
+    componentStub: () => null,
+    getProfileMock: vi.fn(),
+    setProfileMock: vi.fn(),
+  }));
 
 vi.mock("../app/db.server", () => ({ default: prismaMock }));
 vi.mock("../app/shopify.server", () => ({
   authenticate: { admin: adminMock },
+}));
+// Fully mocked: the real module does outbound Graph fetches (phase 8).
+vi.mock("../app/services/messenger-profile.server", () => ({
+  getMessengerProfile: getProfileMock,
+  setMessengerProfile: setProfileMock,
 }));
 
 vi.mock("@shopify/polaris", () => ({
@@ -28,11 +37,16 @@ vi.mock("@shopify/polaris", () => ({
   Card: componentStub,
   EmptyState: componentStub,
   IndexTable: Object.assign(componentStub, { Row: componentStub, Cell: componentStub }),
+  InlineStack: componentStub,
   Layout: Object.assign(componentStub, { Section: componentStub }),
+  Link: componentStub,
   Page: componentStub,
   Text: componentStub,
 }));
-vi.mock("@shopify/app-bridge-react", () => ({ TitleBar: componentStub }));
+vi.mock("@shopify/app-bridge-react", () => ({
+  TitleBar: componentStub,
+  useAppBridge: () => ({ toast: { show: vi.fn() } }),
+}));
 
 import { action, loader } from "../app/routes/app.messenger-orders";
 
@@ -45,8 +59,24 @@ function makeActionRequest(fields: Record<string, string>): Request {
   });
 }
 
+function graphqlJson(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 beforeEach(() => {
-  adminMock.mockResolvedValue({ session: { shop: "flowercart.myshopify.com" } });
+  adminMock.mockResolvedValue({
+    session: { shop: "flowercart.myshopify.com" },
+    admin: { graphql: graphqlMock },
+  });
+  graphqlMock.mockResolvedValue(graphqlJson({ data: { orders: { nodes: [] } } }));
+  getProfileMock.mockResolvedValue({
+    ok: true,
+    profile: { hasGetStarted: true, hasIceBreakers: true, hasPersistentMenu: true },
+  });
+  setProfileMock.mockResolvedValue({ ok: true });
   prismaMock.messengerThread.findMany.mockResolvedValue([]);
   prismaMock.messengerThread.update.mockResolvedValue({});
 });
@@ -150,5 +180,138 @@ describe("app.messenger-orders action", () => {
     } as never);
     expect(result.ok).toBe(false);
     expect(Array.isArray((result as { errors?: string[] }).errors)).toBe(true);
+  });
+});
+
+describe("app.messenger-orders loader — Shopify orders listing (phase 8, READ-ONLY)", () => {
+  it("queries tag:messenger orders and maps rows with Delivery Date/Time customAttributes + admin deep link", async () => {
+    graphqlMock.mockResolvedValue(
+      graphqlJson({
+        data: {
+          orders: {
+            nodes: [
+              {
+                id: "gid://shopify/Order/3979001",
+                name: "#3979",
+                createdAt: "2026-08-02T10:00:00Z",
+                displayFinancialStatus: "PAID",
+                currentTotalPriceSet: {
+                  shopMoney: { amount: "899.00", currencyCode: "PHP" },
+                },
+                customer: { displayName: "Juan Dela Cruz" },
+                shippingAddress: { name: "Maria Clara" },
+                customAttributes: [
+                  { key: "Delivery Date", value: "2026-08-03" },
+                  { key: "Delivery Time", value: "3PM-6PM" },
+                ],
+              },
+              {
+                id: "gid://shopify/Order/3980002",
+                name: "#3980",
+                createdAt: "2026-08-01T09:00:00Z",
+                displayFinancialStatus: "PENDING",
+                currentTotalPriceSet: null,
+                customer: null,
+                shippingAddress: { name: "Recipient Lang" },
+                customAttributes: [],
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const result = await loader({ request: new Request(ROUTE_URL) } as never);
+
+    // Read-only query: first 25, tag:messenger, newest first.
+    const [query, options] = graphqlMock.mock.calls[0];
+    expect(query).toContain("orders(");
+    expect(query).toContain("sortKey: CREATED_AT");
+    expect(query).toContain("reverse: true");
+    expect(options.variables).toEqual({ first: 25, query: "tag:messenger" });
+    expect(query).not.toContain("mutation");
+
+    expect(result.ordersError).toBeNull();
+    expect(result.orders).toEqual([
+      {
+        id: "gid://shopify/Order/3979001",
+        name: "#3979",
+        createdAt: "2026-08-02T10:00:00Z",
+        financialStatus: "PAID",
+        total: "₱899.00",
+        customerName: "Juan Dela Cruz",
+        deliveryDate: "2026-08-03",
+        deliveryTime: "3PM-6PM",
+        adminUrl: "shopify://admin/orders/3979001",
+      },
+      {
+        id: "gid://shopify/Order/3980002",
+        name: "#3980",
+        createdAt: "2026-08-01T09:00:00Z",
+        financialStatus: "PENDING",
+        total: "",
+        customerName: "Recipient Lang",
+        deliveryDate: "",
+        deliveryTime: "",
+        adminUrl: "shopify://admin/orders/3980002",
+      },
+    ]);
+  });
+
+  it("degrades to ordersError (threads intact, no crash) when the GraphQL call throws", async () => {
+    graphqlMock.mockRejectedValue(new Error("upstream 502"));
+    prismaMock.messengerThread.findMany.mockResolvedValue([
+      { psid: "24680", lastCustomerAt: null, humanControl: false, humanControlAt: null },
+    ]);
+
+    const result = await loader({ request: new Request(ROUTE_URL) } as never);
+
+    expect(result.orders).toEqual([]);
+    expect(typeof result.ordersError).toBe("string");
+    expect(result.threads).toHaveLength(1);
+  });
+
+  it("degrades to ordersError when the GraphQL body carries errors", async () => {
+    graphqlMock.mockResolvedValue(graphqlJson({ errors: [{ message: "Throttled" }] }));
+    const result = await loader({ request: new Request(ROUTE_URL) } as never);
+    expect(result.orders).toEqual([]);
+    expect(result.ordersError).not.toBeNull();
+  });
+
+  it("reports the Messenger profile status from the loader (set / not_set / unknown)", async () => {
+    let result = await loader({ request: new Request(ROUTE_URL) } as never);
+    expect(result.profileStatus).toBe("set");
+
+    getProfileMock.mockResolvedValue({
+      ok: true,
+      profile: { hasGetStarted: true, hasIceBreakers: false, hasPersistentMenu: true },
+    });
+    result = await loader({ request: new Request(ROUTE_URL) } as never);
+    expect(result.profileStatus).toBe("not_set");
+
+    // Best-effort: a profile read failure is "unknown", never a crash.
+    getProfileMock.mockResolvedValue({ ok: false, error: "Graph API 400: nope" });
+    result = await loader({ request: new Request(ROUTE_URL) } as never);
+    expect(result.profileStatus).toBe("unknown");
+  });
+});
+
+describe("app.messenger-orders action — setupProfile (phase 8)", () => {
+  it("sets the Messenger profile and answers ok:true", async () => {
+    const result = await action({
+      request: makeActionRequest({ intent: "setupProfile" }),
+    } as never);
+    expect(result).toMatchObject({ ok: true, intent: "setupProfile" });
+    expect(setProfileMock).toHaveBeenCalledTimes(1);
+    expect(prismaMock.messengerThread.update).not.toHaveBeenCalled();
+  });
+
+  it("answers ok:false + errors (ADR-11, 200 body) when the profile POST fails upstream", async () => {
+    setProfileMock.mockResolvedValue({ ok: false, error: "Graph API 400: bad token" });
+    const result = await action({
+      request: makeActionRequest({ intent: "setupProfile" }),
+    } as never);
+    expect(result.ok).toBe(false);
+    expect((result as { errors?: string[] }).errors).toEqual(["Graph API 400: bad token"]);
   });
 });

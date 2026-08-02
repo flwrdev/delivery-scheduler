@@ -337,3 +337,59 @@ primary discriminator.
   rule na huwag kontrahin ang sinabi ng tao.
 - Tests 450/450; typecheck + lint clean. Walang migration (humanControl/humanControlAt
   ay nasa schema na since phase 3).
+
+## Phase 8 — Orders listing + typing indicator + Messenger profile (2026-08-03)
+
+**Gate:** PENDING (main-agent review + live checks: orders table sa embedded app,
+typing bubble sa chat, ice breakers/menu visible pagkatapos ng setup tap).
+
+- `/app/messenger-orders` — bagong Shopify orders section (READ-ONLY): Admin GraphQL
+  `orders(query: "tag:messenger", first: 25, CREATED_AT desc)` sa existing
+  `authenticate.admin` loader; columns: order name (`shopify://admin/orders/<id>` deep
+  link, same idiom ng OrderDetailsPanel), created, customer/recipient display name,
+  Delivery Date/Time (mula sa customAttributes), payment status, total. Upstream Graph
+  failure → error Banner lang, buo pa rin ang threads section (walang crash). ZERO order
+  writes — hindi nagbago ang §2 write-paths table ng api.md.
+- `messenger-send.server.ts` — `sendMessengerSenderAction` (typing_on / typing_off /
+  mark_seen): sariling body-builder (`{ recipient, sender_action }`, WALANG `message`
+  field) sa ibabaw ng shared `postMessengerSendApi` core (parehong token/URL/timeout/
+  error handling); never throws. Orchestrator: `typing_on` fire-and-forget bago ang LLM
+  turn — pagkatapos ng humanControl mute gate (walang typing sa muted thread) at
+  pagkatapos ng deterministic confirm-tap check; walang typing_off (kusa itong
+  naki-clear pagdating ng reply).
+- NEW `app/services/messenger-profile.server.ts` — `setMessengerProfile()` (isang POST
+  sa `/me/messenger_profile`: Get Started `GET_STARTED`, 4 Taglish ice breakers
+  `ICEBREAKER_PRODUCTS/FEE/SAMEDAY/ORDER`, persistent menu: 2 web_url + postback
+  `MENU_ORDER`) at `getMessengerProfile()` (fields read para sa set/not-set display).
+  Same conventions ng messenger-send: pinned Graph version, token sa Authorization
+  header lang, designed failures. Merchant-triggered button "I-setup ang Messenger
+  profile" sa page (route op `setupProfile`, ADR-11: 200 + ok:false + error toast);
+  profile status sa loader ay best-effort ("unknown" sa failure).
+- Postbacks ng profile buttons ay dumadaan sa EXISTING webhook postback path bilang
+  `[TAP] <payload>` — zero webhook changes. System prompt: bagong maikling
+  "MENU & GREETING TAPS" section (append-only; walang binago sa existing sections),
+  kasama ang env-gated na sagot sa ICEBREAKER_ORDER/MENU_ORDER (ordering flow kapag
+  MESSENGER_ORDERS_ENABLED, else website).
+- Tests: 478/478 (28 bago: 4 sender action, 13 profile service, 7 route
+  orders/profile, 6 agent typing + prompt taps — bilang sa describe-level ay tingnan
+  sa test files). Typecheck + lint clean. Walang migration, walang bagong env var,
+  walang bagong dependency.
+
+### Deviations (phase 8)
+
+1. **Success/failure feedback ng profile setup ay App Bridge toast**
+   (`useAppBridge().toast.show`, same idiom ng scheduler op-plumbing) — ang brief ay
+   nagsabi ng "toast", ito ang pinakamalapit na existing pattern sa repo.
+2. **Ice breakers sa locale-wrapped shape** (`[{ locale: "default", call_to_actions:
+   [...] }]`) — ito ang kasalukuyang Graph API format (ang flat `[{question,payload}]`
+   ay lumang v7 shape).
+3. **Typing indicator ay `void` fire-and-forget** (hindi awaited): ang send ay
+   never-throws by design at ang worker request ay buhay pa habang tumatakbo ang LLM
+   turn, kaya hindi ito napuputol ng Cloud Run CPU throttling.
+
+### Open questions (phase 8)
+
+1. Live verify: ice breakers ay lumalabas lang sa BAGONG conversations (Meta caches
+   existing threads) — i-test sa fresh test user o i-delete muna ang conversation.
+2. `mark_seen` ay supported ng service pero hindi pa fired kahit saan — gamitin ba
+   pagkatanggap ng message (bago ang typing_on) sa isang susunod na polish pass?

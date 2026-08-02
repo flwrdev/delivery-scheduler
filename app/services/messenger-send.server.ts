@@ -44,9 +44,11 @@ export interface MessengerCarouselElement {
   >;
 }
 
-async function postMessengerMessage(
-  psid: string,
-  message: unknown,
+// Shared Send API POST core: env check, token in the Authorization header
+// only, timeout, designed { ok:false } failures. Sender actions (phase 8) have
+// no `message` field, kaya ang buong request body ang tinatanggap dito.
+async function postMessengerSendApi(
+  body: Record<string, unknown>,
 ): Promise<SendMessengerTextMessageResult> {
   const accessToken = process.env.MESSENGER_PAGE_ACCESS_TOKEN?.trim();
   const pageId = process.env.MESSENGER_PAGE_ID?.trim();
@@ -63,11 +65,7 @@ async function postMessengerMessage(
           "Content-Type": "application/json",
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({
-          recipient: { id: psid },
-          messaging_type: "RESPONSE",
-          message,
-        }),
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       },
     );
@@ -94,6 +92,35 @@ async function postMessengerMessage(
       error: error instanceof Error ? error.message : "Failed to send Messenger message.",
     };
   }
+}
+
+async function postMessengerMessage(
+  psid: string,
+  message: unknown,
+): Promise<SendMessengerTextMessageResult> {
+  return postMessengerSendApi({
+    recipient: { id: psid },
+    messaging_type: "RESPONSE",
+    message,
+  });
+}
+
+/** Sender Actions (phase 8 typing indicator). No `message` field sa body —
+ * `{ recipient, sender_action }` lang. typing_off is normally unnecessary:
+ * Messenger clears the indicator automatically when the reply arrives. */
+export interface SendMessengerSenderActionInput {
+  psid: string;
+  action: "typing_on" | "typing_off" | "mark_seen";
+}
+
+export async function sendMessengerSenderAction({
+  psid,
+  action,
+}: SendMessengerSenderActionInput): Promise<SendMessengerTextMessageResult> {
+  return postMessengerSendApi({
+    recipient: { id: psid },
+    sender_action: action,
+  });
 }
 
 export async function sendMessengerTextMessage({
