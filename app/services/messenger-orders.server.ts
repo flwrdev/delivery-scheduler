@@ -617,7 +617,9 @@ async function getAdminClient(): Promise<
 }
 
 export function orderKeyTag(orderKey: string): string {
-  return `${ORDER_KEY_TAG_PREFIX}${orderKey}`;
+  // Shopify tags max out at 40 chars: "mo-key-" (7) + full UUID (36) = 43 ay
+  // tinanggihan ng draftOrderCreate (live 2026-08-02). Dashes stripped = 39.
+  return `${ORDER_KEY_TAG_PREFIX}${orderKey.replace(/-/g, "")}`;
 }
 
 /** Look up an existing draft order by its idempotency-key tag. Never throws. */
