@@ -305,9 +305,15 @@ limit); (2) scope activation ay nangangailangan ng app open sa admin para sa tok
 exchange — ang .env ay walang epekto sa prod session. MESSENGER_ORDERS_ENABLED=true
 na sa Cloud Run (rev 00196+).
 
-## Phase 7 — Human takeover + disclosure (2026-08-02, PENDING live gate)
+## Phase 7 — Human takeover + disclosure (2026-08-02)
 
 **Gate:** reply from the phone -> bot mutes; toggle -> bot resumes.
+**Gate result:** ✅ PASSED (2026-08-03, rev 00198-6z2) — merchant live test, lahat
+ng 4 na hakbang pasado: (1) Business Suite reply -> bot muted (humanControl on);
+(2) customer message habang muted -> walang bot reply; (3) admin app "Messenger"
+tab -> Resume; (4) customer message -> bot reply na MAY FlowerBot re-disclosure.
+Kumpirmado rin: ang Business Suite human replies ay WALANG app_id — tama ang
+primary discriminator.
 
 - Webhook echo branch (dating blanket skip): echo na HINDI galing sa bot = operator
   typing sa Business Suite -> humanControl=true + humanControlAt=now + operator row
