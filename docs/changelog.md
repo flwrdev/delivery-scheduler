@@ -136,3 +136,11 @@ Human-readable, newest-first narrative of the architecture history. Each line is
   purpose=lookup (walang carousel sa name-pick), Cloud Tasks dispatchDeadline 180s
   (duplicate-reply root cause), button-less carousel cards (default_action sa picture).
 - Prisma migration 20260802000000: MessengerThread.orderStateJson + conversationOrderKey.
+
+## 2026-08-02 — Messenger phase 7: human takeover + disclosure
+
+- Operator echo (Business Suite reply) -> auto-mute (humanControl), operator row
+  recorded, bot keeps listening; app_id primary / bot-mid fallback discriminator.
+- Auto-handback 6h (MESSENGER_HANDBACK_HOURS) + sapilitang re-disclosure; manual
+  Pause/Resume sa bagong /app/messenger-orders page (NavMenu "Messenger").
+- [HUMAN AGENT] prefix sa history para hindi kontrahin ng bot ang operator.

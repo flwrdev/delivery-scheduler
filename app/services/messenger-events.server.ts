@@ -54,6 +54,57 @@ export async function recordInboundTextMessage({
   }
 }
 
+// Phase 7 (human takeover) — echo discriminator FALLBACK: the bot records the
+// mid of every message it sends (deliverReplyAndBookkeep), so an echo whose
+// mid is already in Neon was sent by us. Throws on DB failure — the webhook
+// catches and skips the event (never set humanControl on a blind guess).
+export async function isKnownMessageMid(mid: string): Promise<boolean> {
+  const row = await prisma.messengerMessage.findUnique({
+    where: { mid },
+    select: { mid: true },
+  });
+  return row !== null;
+}
+
+// Phase 7 (human takeover): an echo the bot did NOT originate = the operator
+// typing from Business Suite. Mute the bot (humanControl) and KEEP the
+// operator's words in the transcript — while paused the bot still listens, so
+// it is not blind to what the human discussed when it resumes.
+// The thread upsert runs before the message create on purpose: a Meta
+// redelivery of the same echo mid still refreshes humanControlAt (the
+// auto-handback window is "N hours with no operator message").
+export async function recordOperatorEchoMessage({
+  psid,
+  mid,
+  text,
+}: RecordInboundTextMessageInput): Promise<RecordInboundTextMessageResult> {
+  const now = new Date();
+  try {
+    await prisma.messengerThread.upsert({
+      where: { psid },
+      create: { psid, humanControl: true, humanControlAt: now },
+      update: { humanControl: true, humanControlAt: now },
+    });
+    await prisma.messengerMessage.create({
+      data: {
+        psid,
+        role: "operator",
+        bodyJson: JSON.stringify({ text }),
+        mid,
+      },
+    });
+    return { status: "new" };
+  } catch (error) {
+    if ((error as { code?: string }).code === "P2002") {
+      return { status: "duplicate" };
+    }
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Failed to record operator echo.",
+    };
+  }
+}
+
 // Undo a webhook-side record when its task could not be enqueued, so the Meta
 // redelivery of the same mid is not swallowed by the dedupe with no task ever
 // queued for it.

@@ -56,6 +56,20 @@ export function messengerOrdersEnabled(): boolean {
   return process.env.MESSENGER_ORDERS_ENABLED?.trim() === "true";
 }
 
+// Phase 7 auto-handback window: after N hours with NO operator message on the
+// thread (every operator echo refreshes humanControlAt), the bot resumes on
+// the next customer message. Garbage/absent env falls back to the default.
+const DEFAULT_HANDBACK_HOURS = 6;
+
+export function messengerHandbackHours(): number {
+  const raw = process.env.MESSENGER_HANDBACK_HOURS?.trim();
+  if (!raw) {
+    return DEFAULT_HANDBACK_HOURS;
+  }
+  const hours = Number(raw);
+  return Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_HANDBACK_HOURS;
+}
+
 function buildSystemPrompt(now: Date, ordersEnabled: boolean): string {
   return [
     "You are FlowerBot, the customer service and sales assistant of The Flowercart, a flower shop in the Philippines that delivers within Metro Manila.",
@@ -75,6 +89,7 @@ function buildSystemPrompt(now: Date, ordersEnabled: boolean): string {
     "- After resolving a date, always echo it back WITH the weekday (e.g. \"Huwebes, Dec 24\") so the customer can catch a wrong parse.",
     "- Delivery time slots come ONLY from get_available_slots, and only for a resolved date. Never invent or offer a slot that is not in the tool result.",
     "- If the requested date is closed or full, offer the nearest available dates from the tool result.",
+    "- Messages prefixed [HUMAN AGENT] were written by a real person from The Flowercart (not by you) — stay consistent with what they told the customer and never contradict them.",
     "",
     ...(ordersEnabled
       ? []
@@ -145,9 +160,12 @@ function historyToLlmMessages(rows: StoredMessageRow[], currentMid: string): Llm
     if (!text) {
       continue;
     }
+    // Operator rows (phase 7 human takeover) reach the LLM as assistant turns
+    // tagged [HUMAN AGENT] so the bot never contradicts what the human said.
+    const isAssistant = row.role === "bot" || row.role === "operator";
     messages.push({
-      role: row.role === "bot" ? "assistant" : "user",
-      content: [{ type: "text", text }],
+      role: isAssistant ? "assistant" : "user",
+      content: [{ type: "text", text: row.role === "operator" ? `[HUMAN AGENT] ${text}` : text }],
     });
     if (row.mid === currentMid) {
       break;
@@ -361,7 +379,42 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   }
 
   const thread = await prisma.messengerThread.findUnique({ where: { psid: message.psid } });
-  const needsDisclosure = thread ? !thread.disclosedBot : true;
+  let needsDisclosure = thread ? !thread.disclosedBot : true;
+
+  const now = new Date();
+
+  // Phase 7 — human takeover mute. While the operator has the thread the bot
+  // KEEPS LISTENING (the row is already recorded) but never calls the LLM and
+  // never sends. Skipped turns must NOT set repliedAt (zero-duplicate
+  // contract untouched; the worker answers 200 for skipped).
+  if (thread?.humanControl) {
+    const takenOverAt = thread.humanControlAt?.getTime();
+    const handbackMs = messengerHandbackHours() * 60 * 60 * 1000;
+    const expired = takenOverAt !== undefined && now.getTime() - takenOverAt >= handbackMs;
+    if (!expired) {
+      // No timestamp (manual DB edit) also stays muted — the merchant's
+      // manual Resume toggle is the recovery path.
+      console.log(`[messenger-agent] humanControl active psid=${message.psid} — skipped mid=${mid}`);
+      return { status: "skipped" };
+    }
+    // Auto-handback: N hours with no operator message. Clear the flag and
+    // force re-disclosure — Meta policy requires the bot to re-disclose after
+    // a human handoff.
+    try {
+      await prisma.messengerThread.update({
+        where: { psid: message.psid },
+        data: { humanControl: false, humanControlAt: null, disclosedBot: false },
+      });
+      console.log(`[messenger-agent] auto-handback psid=${message.psid} — bot resumed mid=${mid}`);
+    } catch (error) {
+      console.warn(
+        `[messenger-agent] auto-handback update failed for psid=${message.psid}: ${
+          error instanceof Error ? error.message : "unknown"
+        }`,
+      );
+    }
+    needsDisclosure = true;
+  }
 
   // Deterministic CONFIRM path — never routed through the LLM.
   let inboundText = "";
@@ -384,7 +437,6 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   });
   const historyRows = [...recentRows].reverse();
 
-  const now = new Date();
   const ordersEnabled = messengerOrdersEnabled();
   const system = buildSystemPrompt(now, ordersEnabled);
   const tools = ordersEnabled

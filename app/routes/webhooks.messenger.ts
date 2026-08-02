@@ -4,7 +4,9 @@ import { verifyMetaWebhookSignature } from "../lib/verify-meta-signature.server"
 import { processAgentTurnByMid } from "../services/messenger-agent.server";
 import {
   deleteRecordedMessage,
+  isKnownMessageMid,
   recordInboundTextMessage,
+  recordOperatorEchoMessage,
 } from "../services/messenger-events.server";
 import { enqueueMessengerEchoTask } from "../services/messenger-queue.server";
 
@@ -29,11 +31,18 @@ import { enqueueMessengerEchoTask } from "../services/messenger-queue.server";
 
 interface MessengerWebhookEvent {
   sender?: { id?: string };
+  // Phase 7: on message_echoes events the roles flip — sender.id is the PAGE
+  // id and recipient.id is the customer psid the echo was sent to.
+  recipient?: { id?: string };
   timestamp?: number;
   message?: {
     mid?: string;
     text?: unknown;
     is_echo?: boolean;
+    // Phase 7 echo discriminator: Meta sets app_id on echoes of API-sent
+    // messages. Present (any app) = sent via an app (our bot); absent = typed
+    // by a human in the Business Suite inbox.
+    app_id?: unknown;
     // Phase 6: quick-reply taps (slot buttons, order Confirm) arrive as a
     // normal message whose text is the button TITLE; the machine-readable
     // payload rides in quick_reply.payload.
@@ -119,6 +128,58 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         continue;
       }
 
+      // Phase 7 — human takeover via message_echoes. An echo the bot did NOT
+      // originate is the operator typing from Business Suite: mute the bot
+      // (humanControl) and record the operator row. NEVER enqueue a task for
+      // an echo — the bot must not reply to an echo, ever.
+      if (event.message?.is_echo) {
+        const echoMessage = event.message;
+        // Echo events flip the roles: recipient.id is the customer psid.
+        const echoPsid = event.recipient?.id;
+        if (!echoPsid) {
+          console.warn("[messenger] echo event without recipient.id — skipped");
+          continue;
+        }
+        const echoMid = typeof echoMessage.mid === "string" ? echoMessage.mid : "";
+        if (!echoMid) {
+          console.warn("[messenger] echo event without mid — skipped (cannot dedupe)");
+          continue;
+        }
+        // PRIMARY discriminator: app_id present = sent via an app (our bot,
+        // possibly before its own bookkeeping row landed — the race the mid
+        // lookup alone would lose). Absent = a human typed it in the inbox.
+        if (echoMessage.app_id !== undefined && echoMessage.app_id !== null) {
+          continue;
+        }
+        try {
+          // FALLBACK: a mid the bot already recorded is our own send.
+          if (await isKnownMessageMid(echoMid)) {
+            continue;
+          }
+          // Attachment-only operator echoes carry no text — still take over,
+          // with a placeholder so the transcript notes something was sent.
+          const echoText =
+            typeof echoMessage.text === "string" && echoMessage.text
+              ? echoMessage.text
+              : "[attachment]";
+          const recorded = await recordOperatorEchoMessage({
+            psid: echoPsid,
+            mid: echoMid,
+            text: echoText,
+          });
+          console.log(
+            `[messenger] operator echo mid=${echoMid} psid=${echoPsid} status=${recorded.status} — humanControl on`,
+          );
+        } catch (error) {
+          console.warn(
+            `[messenger] echo handling threw for mid=${echoMid}: ${
+              error instanceof Error ? error.message : "unknown"
+            }`,
+          );
+        }
+        continue;
+      }
+
       let mid: string;
       let text: string;
       const message = event.message;
@@ -149,8 +210,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         mid = event.postback.mid ?? `pb:${psid}:${event.timestamp ?? "0"}`;
         text = `[TAP] ${event.postback.payload}`;
       } else {
-        // is_echo is the loop guard: message_echoes is a subscribed field, so
-        // without this skip the bot would echo its own echoes forever.
+        // Non-text, non-tap events (delivery receipts, reactions, attachments
+        // without payloads). Echoes never reach here — handled above (phase 7:
+        // bot echoes are the loop guard skip, operator echoes set humanControl).
         continue;
       }
 
