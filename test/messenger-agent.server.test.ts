@@ -1182,6 +1182,19 @@ describe("processOrderFollowUp — delayed reminder guards (mark-before-send)", 
     expect(claimFollowUpMock).not.toHaveBeenCalled();
   });
 
+  it("test mode (short MESSENGER_FOLLOWUP_HOURS) scales the active-chat guard to half the delay", async () => {
+    // 0.05h delay → 90s guard: ang 3-min-old customer message ay hindi na "active".
+    vi.stubEnv("MESSENGER_FOLLOWUP_HOURS", "0.05");
+    prismaMock.messengerMessage.findFirst.mockResolvedValue(
+      customerRow({ createdAt: new Date(FU_NOW.getTime() - 3 * 60 * 1000) }),
+    );
+    claimFollowUpMock.mockResolvedValue(claimedState());
+
+    const result = await processOrderFollowUp(PSID, FU_KEY, FU_NOW);
+    expect(result.status).toBe("sent");
+    vi.unstubAllEnvs();
+  });
+
   it("skips outside the Meta messaging window (last customer message > 20h)", async () => {
     prismaMock.messengerMessage.findFirst.mockResolvedValue(
       customerRow({ createdAt: new Date(FU_NOW.getTime() - 22 * 3600 * 1000) }),

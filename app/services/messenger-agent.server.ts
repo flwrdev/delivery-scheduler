@@ -662,6 +662,14 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
 const FOLLOWUP_ACTIVE_CHAT_MS = 45 * 60 * 1000;
 const FOLLOWUP_WINDOW_MS = 20 * 60 * 60 * 1000;
 
+// Kapag pinaikli ang MESSENGER_FOLLOWUP_HOURS (test mode, < 90 min), ang
+// fixed na 45-min guard ay laging lalamon sa maagang fire at hinding-hindi
+// lalabas ang reminder — kaya kalahati ng delay ang guard, capped sa 45 min.
+function followUpActiveChatMs(): number {
+  const delayMs = messengerFollowUpHours() * 60 * 60 * 1000;
+  return Math.min(FOLLOWUP_ACTIVE_CHAT_MS, delayMs / 2);
+}
+
 export async function processOrderFollowUp(
   psid: string,
   orderKey: string,
@@ -704,7 +712,7 @@ export async function processOrderFollowUp(
     console.log(`[messenger-agent] follow-up skipped psid=${psid} — outside the messaging window`);
     return { status: "skipped" };
   }
-  if (sinceLastCustomerMs < FOLLOWUP_ACTIVE_CHAT_MS) {
+  if (sinceLastCustomerMs < followUpActiveChatMs()) {
     console.log(`[messenger-agent] follow-up skipped psid=${psid} — conversation is active`);
     return { status: "skipped" };
   }

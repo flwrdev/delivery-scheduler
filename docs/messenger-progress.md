@@ -518,3 +518,30 @@ message sa DB hiccup.
   failure → **503** → nagre-redeliver si Meta; ligtas dahil mid-unique dedupe.
 - Tests: 538/538 (+7 lookup/streamline; 3 in-place updates). Typecheck/lint/
   build clean. Walang migration, walang bagong scope/env/dependency.
+
+### Phases 10+11 GATE PASSED (2026-08-03, agent-driven E2E via browser)
+
+Live end-to-end sa messenger.com bilang customer (Claude-driven, merchant-requested),
+revs `00204-tjb` → `00205-8dg`:
+
+1. **Streamlined order (P11):** "Gusto ko po umorder ng Pastel Dreams para sa Aug 5,
+   9AM-12PM" → isang turn lang, diretso sa add-on offer (Bear/Chocolates/Balloon/
+   "Hindi na po" quick replies) → "Hindi na po" → ORDER SUMMARY (Pastel Dreams ₱2,499,
+   2026-08-05 • 9AM-12PM) + Confirm ✅/Baguhin — ZERO tanong tungkol sa pangalan/
+   address/phone; ang summary text ay nagtuturo sa checkout para sa address. Walang
+   em-dash sa mga reply (sanitizer verified live).
+2. **Email order lookup (P11):** "may dati po akong order sa website niyo" → hiningi
+   ang checkout email → binigay → 3 orders nilista (#3979 Voided, #3948 Pending/
+   Fulfilled, #3945 Pending) na order number + payment/fulfillment status + delivery
+   schedule LANG — walang address/phone na ibinunyag. Kasama ang website orders. ✅
+3. **Abandoned-order follow-up (P10):** unang subok nabisto ang totoong bug — ang
+   45-min active-chat guard ay TERMINAL skip, kaya sa 3-min test delay ay hinding-
+   hindi lalabas ang reminder (logs: `follow-up skipped … conversation is active`).
+   Fix: `followUpActiveChatMs()` = min(45min, delay/2) — production 3h → 45min pa
+   rin, test 0.05h → 90s. Deployed `00205-8dg`, summary re-triggered → pagkalipas
+   ng 3 min dumating nang kusa ang reminder ("Naka-reserve pa po ang order niyo…")
+   na may Confirm ✅/Baguhin. ✅ +1 test (69/69 sa agent suite, 539 total).
+
+Post-gate: `MESSENGER_FOLLOWUP_HOURS` ibinalik sa `3` (rev `00206-5qm`). Ang test
+thread ay iniwang naka-awaiting_confirm na may followUpSentAt — wala nang susunod
+na nudge (already_sent claim guard).
