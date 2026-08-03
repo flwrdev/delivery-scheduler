@@ -104,6 +104,12 @@ function buildSystemPrompt(now: Date, ordersEnabled: boolean): string {
     "- Answer what was asked; skip facts the customer didn't ask about unless it directly blocks their request.",
     "- PLAIN TEXT ONLY: Messenger does not render markdown. Never write **bold**, *italics*, [links](url), or # headings — asterisks show up literally to the customer. Bare URLs and simple '-' lists are fine. Never use em dashes (—) or en dashes (–): use a comma or start a new sentence instead.",
     "",
+    "PHOTOS (customers usually send a screenshot of an ad instead of a product name):",
+    "- When the message includes a photo, identify the bouquet from the image: note the flower types, colors, wrapping, and any visible text or price, then call search_products with those keywords (e.g. flower type + color) to find the closest matches.",
+    "- CONFIRM FIRST: name the closest 1-3 matches with prices from the tool result and ask the customer to confirm which one, before quoting a final price or starting an order. Never state a price straight from the photo.",
+    "- If no product matches, say so honestly and show the nearest alternatives from search_products.",
+    "- If the photo could not be loaded, say you couldn't open it and ask for the product name or a clearer photo.",
+    "",
     `Current date and time in Asia/Manila: ${getManilaNowLabel(now)}. All dates are in Asia/Manila.`,
     "",
     "HARD RULES:",
@@ -190,7 +196,57 @@ interface StoredMessageRow {
   mid: string;
 }
 
-function historyToLlmMessages(rows: StoredMessageRow[], currentMid: string): LlmMessage[] {
+// Phase 12: image attachments are recorded as "[IMAGE] <url>" lines in the
+// message text. Only the CURRENT message's images are fetched for the LLM
+// (Meta CDN urls expire and refetching history every turn is waste); older
+// rows degrade to a placeholder line so the context still notes a photo.
+const IMAGE_LINE_PATTERN = /^\[IMAGE\] (https:\/\/\S+)$/;
+
+function splitImageLines(text: string): { text: string; imageUrls: string[] } {
+  const imageUrls: string[] = [];
+  const kept: string[] = [];
+  for (const line of text.split("\n")) {
+    const match = IMAGE_LINE_PATTERN.exec(line.trim());
+    if (match) {
+      imageUrls.push(match[1]);
+    } else {
+      kept.push(line);
+    }
+  }
+  return { text: kept.join("\n").trim(), imageUrls };
+}
+
+const IMAGE_FETCH_TIMEOUT_MS = 8_000;
+const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+const IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+async function fetchImageAsLlmBlock(url: string): Promise<LlmContentBlock | null> {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS) });
+    if (!response.ok) {
+      return null;
+    }
+    const mediaType = (response.headers.get("content-type") ?? "").split(";")[0].trim();
+    if (!IMAGE_MEDIA_TYPES.has(mediaType)) {
+      return null;
+    }
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength === 0 || bytes.byteLength > IMAGE_MAX_BYTES) {
+      return null;
+    }
+    return {
+      type: "image",
+      source: { type: "base64", media_type: mediaType, data: Buffer.from(bytes).toString("base64") },
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function historyToLlmMessages(
+  rows: StoredMessageRow[],
+  currentMid: string,
+): Promise<LlmMessage[]> {
   const messages: LlmMessage[] = [];
   for (const row of rows) {
     let text = "";
@@ -205,11 +261,40 @@ function historyToLlmMessages(rows: StoredMessageRow[], currentMid: string): Llm
     // Operator rows (phase 7 human takeover) reach the LLM as assistant turns
     // tagged [HUMAN AGENT] so the bot never contradicts what the human said.
     const isAssistant = row.role === "bot" || row.role === "operator";
-    messages.push({
-      role: isAssistant ? "assistant" : "user",
-      content: [{ type: "text", text: row.role === "operator" ? `[HUMAN AGENT] ${text}` : text }],
-    });
-    if (row.mid === currentMid) {
+    const isCurrent = row.mid === currentMid;
+    const content: LlmContentBlock[] = [];
+    if (!isAssistant && text.includes("[IMAGE] ")) {
+      const { text: caption, imageUrls } = splitImageLines(text);
+      if (isCurrent) {
+        let loaded = 0;
+        for (const url of imageUrls.slice(0, 3)) {
+          const block = await fetchImageAsLlmBlock(url);
+          if (block) {
+            content.push(block);
+            loaded += 1;
+          }
+        }
+        const note =
+          loaded > 0
+            ? "[Nagpadala ang customer ng larawan — nasa itaas.]"
+            : "[Nagpadala ang customer ng larawan pero hindi ito ma-load.]";
+        content.push({ type: "text", text: caption ? `${note}\n${caption}` : note });
+      } else {
+        content.push({
+          type: "text",
+          text: caption
+            ? `[Nagpadala ang customer ng larawan.]\n${caption}`
+            : "[Nagpadala ang customer ng larawan.]",
+        });
+      }
+    } else {
+      content.push({
+        type: "text",
+        text: row.role === "operator" ? `[HUMAN AGENT] ${text}` : text,
+      });
+    }
+    messages.push({ role: isAssistant ? "assistant" : "user", content });
+    if (isCurrent) {
       break;
     }
   }
@@ -496,7 +581,7 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   const tools = ordersEnabled
     ? MESSENGER_AGENT_TOOLS
     : MESSENGER_AGENT_TOOLS.filter((tool) => tool.name !== "update_order");
-  const messages = historyToLlmMessages(historyRows, mid);
+  const messages = await historyToLlmMessages(historyRows, mid);
   if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
     // The conversation must end on the customer's message for the LLM turn.
     return { status: "skipped" };

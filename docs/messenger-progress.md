@@ -545,3 +545,35 @@ revs `00204-tjb` → `00205-8dg`:
 Post-gate: `MESSENGER_FOLLOWUP_HOURS` ibinalik sa `3` (rev `00206-5qm`). Ang test
 thread ay iniwang naka-awaiting_confirm na may followUpSentAt — wala nang susunod
 na nudge (already_sent claim guard).
+
+## Phase 12 — image recognition: screenshot ng ad → product match (2026-08-04)
+
+**Gate:** magpadala ng photo/screenshot ng bouquet nang WALANG product name →
+tutukuyin ni FlowerBot ang pinakamalapit na 1-3 products mula sa catalog at
+iko-confirm muna bago mag-quote ng presyo (parang Meta Business AI behavior;
+merchant insight: "hindi binabanggit ng customer ang product name dahil wala
+silang pakialam dun").
+
+- **Webhook:** ang mga message na may `attachments[type=image]` ay hindi na
+  nilalaktawan — nire-record ang caption + `[IMAGE] <cdn-url>` lines (cap 3,
+  walang migration). Non-image attachments (audio/stickers) ay skip pa rin.
+- **Agent:** ang CURRENT message lang ang fina-fetch ang images (8s timeout,
+  4MB cap, jpeg/png/gif/webp lang) at ipinapasa bilang base64 vision blocks
+  sa LLM; ang mga LUMANG image rows ay nagiging placeholder na lang (expired
+  na ang Meta CDN urls, sayang ang re-fetch). Fetch failure → "hindi ma-load"
+  na note, hindi kailanman crash.
+- **LLM interface:** +`image` content block sa `LlmContentBlock` (base64
+  source) — dumadaan nang direkta sa Anthropic API (vision-capable na ang
+  claude-sonnet-5, walang bagong dependency).
+- **Prompt:** bagong "PHOTOS" section — ilarawan ang bouquet mula sa larawan,
+  i-search via search_products (flower type + color keywords), CONFIRM FIRST
+  ang 1-3 matches na may presyo mula sa tool result bago mag-quote; huwag
+  kailanman kunin ang presyo mula sa photo mismo.
+- Tests: 546/546 (+7: 3 webhook, 4 agent incl. no-fetch-for-old-rows pin).
+  Typecheck clean. Gate: live E2E pagkatapos ng app-secret rotation.
+
+**Kasabay na incident (2026-08-04):** na-reset ng merchant ang Meta App Secret
+(bahagi ng App Review prep) → ang lahat ng webhook ay 401 "invalid signature"
+mula 17:51Z dahil ang Meta ay nagsa-sign na gamit ang bagong secret. Hindi
+nawawala ang messages (nagre-redeliver si Meta sa non-200). Fix: merchant-run
+`gcloud secrets versions add messenger-app-secret` + bagong revision.

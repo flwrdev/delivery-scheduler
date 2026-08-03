@@ -603,3 +603,84 @@ describe("webhooks.messenger action — message_echoes (phase 7 human takeover)"
     expect(operatorRecordMock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 12 — image attachments (screenshot ng ad ang madalas ipadala)
+// ---------------------------------------------------------------------------
+
+describe("webhooks.messenger action — image attachments", () => {
+  beforeEach(() => {
+    vi.stubEnv("MESSENGER_APP_SECRET", APP_SECRET);
+    recordMock.mockResolvedValue({ status: "recorded" });
+    enqueueMock.mockResolvedValue({ ok: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.clearAllMocks();
+  });
+
+  it("records an image-only message as [IMAGE] url lines", async () => {
+    const body = pageBody({
+      sender: { id: "img1" },
+      recipient: { id: "105284684761365" },
+      timestamp: 1,
+      message: {
+        mid: "mid.img1",
+        attachments: [{ type: "image", payload: { url: "https://cdn.fbsbx.com/a.jpg" } }],
+      },
+    });
+    const res = (await action({
+      request: makeSignedPostRequest(body),
+      params: {},
+      context: {},
+    } as never)) as Response;
+    expect(res.status).toBe(200);
+    expect(recordMock).toHaveBeenCalledWith({
+      psid: "img1",
+      mid: "mid.img1",
+      text: "[IMAGE] https://cdn.fbsbx.com/a.jpg",
+    });
+  });
+
+  it("keeps the caption AND appends image lines, capped at 3", async () => {
+    const atts = ["1", "2", "3", "4"].map((n) => ({
+      type: "image",
+      payload: { url: `https://cdn.fbsbx.com/${n}.png` },
+    }));
+    const body = pageBody({
+      sender: { id: "img2" },
+      recipient: { id: "105284684761365" },
+      timestamp: 1,
+      message: { mid: "mid.img2", text: "hm po ito", attachments: atts },
+    });
+    await action({
+      request: makeSignedPostRequest(body),
+      params: {},
+      context: {},
+    } as never);
+    const recorded = recordMock.mock.calls[0][0] as { text: string };
+    expect(recorded.text.startsWith("hm po ito\n")).toBe(true);
+    expect(recorded.text.match(/\[IMAGE\] /g)?.length).toBe(3);
+    expect(recorded.text).not.toContain("4.png");
+  });
+
+  it("still skips non-image attachment-only events (stickers, audio)", async () => {
+    const body = pageBody({
+      sender: { id: "img3" },
+      recipient: { id: "105284684761365" },
+      timestamp: 1,
+      message: {
+        mid: "mid.img3",
+        attachments: [{ type: "audio", payload: { url: "https://cdn.fbsbx.com/a.mp4" } }],
+      },
+    });
+    const res = (await action({
+      request: makeSignedPostRequest(body),
+      params: {},
+      context: {},
+    } as never)) as Response;
+    expect(res.status).toBe(200);
+    expect(recordMock).not.toHaveBeenCalled();
+  });
+});
