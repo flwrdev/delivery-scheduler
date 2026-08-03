@@ -1227,3 +1227,91 @@ describe("processOrderFollowUp — delayed reminder guards (mark-before-send)", 
     expect(result.status).toBe("skipped");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 12 — image attachments reach the LLM as vision blocks
+// ---------------------------------------------------------------------------
+
+describe("image attachments in the LLM turn", () => {
+  const IMG_URL = "https://cdn.fbsbx.com/bouquet.jpg";
+
+  function imageRow(overrides: Record<string, unknown> = {}) {
+    return customerRow({
+      bodyJson: JSON.stringify({ text: `hm po ito\n[IMAGE] ${IMG_URL}` }),
+      ...overrides,
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("fetches the CURRENT message's image and sends an image block + note", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(bytes, { status: 200, headers: { "content-type": "image/jpeg" } }),
+      ),
+    );
+    prismaMock.messengerMessage.findUnique.mockResolvedValue(imageRow());
+    prismaMock.messengerMessage.findMany.mockResolvedValue([imageRow()]);
+
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+
+    const { messages } = llmMock.mock.calls[0][0];
+    const current = messages[messages.length - 1];
+    const types = current.content.map((b: { type: string }) => b.type);
+    expect(types).toContain("image");
+    const imageBlock = current.content.find((b: { type: string }) => b.type === "image");
+    expect(imageBlock.source.media_type).toBe("image/jpeg");
+    const textBlock = current.content.find((b: { type: string }) => b.type === "text");
+    expect(textBlock.text).toContain("Nagpadala ang customer ng larawan");
+    expect(textBlock.text).toContain("hm po ito");
+    // Ang raw [IMAGE] url ay hindi dapat umabot sa LLM text.
+    expect(textBlock.text).not.toContain("[IMAGE]");
+  });
+
+  it("a failed image fetch degrades to the hindi-ma-load note (never throws)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("cdn down")));
+    prismaMock.messengerMessage.findUnique.mockResolvedValue(imageRow());
+    prismaMock.messengerMessage.findMany.mockResolvedValue([imageRow()]);
+
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+
+    const { messages } = llmMock.mock.calls[0][0];
+    const current = messages[messages.length - 1];
+    expect(current.content.some((b: { type: string }) => b.type === "image")).toBe(false);
+    const textBlock = current.content.find((b: { type: string }) => b.type === "text");
+    expect(textBlock.text).toContain("hindi ito ma-load");
+  });
+
+  it("OLDER image rows become a placeholder only — no fetch for expired CDN urls", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const oldImage = imageRow({ mid: "mid.old", createdAt: new Date(1) });
+    const current = customerRow({ createdAt: new Date(2) });
+    prismaMock.messengerMessage.findUnique.mockResolvedValue(current);
+    prismaMock.messengerMessage.findMany.mockResolvedValue([current, oldImage]);
+
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const { messages } = llmMock.mock.calls[0][0];
+    const older = messages[0];
+    const textBlock = older.content.find((b: { type: string }) => b.type === "text");
+    expect(textBlock.text).toContain("Nagpadala ang customer ng larawan");
+    expect(textBlock.text).not.toContain("[IMAGE]");
+  });
+
+  it("the system prompt carries the PHOTOS confirm-first rule", async () => {
+    await processAgentTurnByMid(MID);
+    const { system } = llmMock.mock.calls[0][0];
+    expect(system).toContain("PHOTOS");
+    expect(system).toContain("CONFIRM FIRST");
+  });
+});

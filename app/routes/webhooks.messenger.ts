@@ -49,6 +49,12 @@ interface MessengerWebhookEvent {
     quick_reply?: {
       payload?: unknown;
     };
+    // Phase 12: customers often send a screenshot of an ad instead of a
+    // product name. Image attachments carry a signed CDN url in payload.url.
+    attachments?: Array<{
+      type?: unknown;
+      payload?: { url?: unknown };
+    }>;
   };
   // Phase 5: carousel button taps (messaging_postbacks). Postbacks carry no
   // mid — a synthetic pb:<psid>:<timestamp> key gives them the same dedupe.
@@ -204,13 +210,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
         mid = message.mid;
         text = `[TAP] ${quickReplyPayload}`;
-      } else if (message && !message.is_echo && typeof message.text === "string" && message.text) {
+      } else if (
+        message &&
+        !message.is_echo &&
+        ((typeof message.text === "string" && message.text) ||
+          (Array.isArray(message.attachments) &&
+            message.attachments.some(
+              (att) => att?.type === "image" && typeof att.payload?.url === "string",
+            )))
+      ) {
         if (typeof message.mid !== "string" || !message.mid) {
           console.warn("[messenger] text message event without mid — skipped");
           continue;
         }
         mid = message.mid;
-        text = message.text;
+        // Phase 12: image attachments ride the recorded text as [IMAGE] <url>
+        // lines (no migration). The agent fetches the CURRENT message's images
+        // for the LLM; older rows degrade to a placeholder (CDN urls expire).
+        const imageLines = (message.attachments ?? [])
+          .filter(
+            (att): att is { type: string; payload: { url: string } } =>
+              att?.type === "image" && typeof att.payload?.url === "string",
+          )
+          .slice(0, 3)
+          .map((att) => `[IMAGE] ${att.payload.url}`);
+        const caption = typeof message.text === "string" ? message.text : "";
+        text = [caption, ...imageLines].filter(Boolean).join("\n");
       } else if (event.postback?.payload) {
         // Carousel/button tap. The [TAP] prefix is the agent's cue that this is
         // a button payload, not typed text (e.g. PRODUCT_<variantId>).
