@@ -24,6 +24,14 @@ uid = "ed45e780-b460-a5aa-2dc5-01f1354b538238c1a9ee"
 module = "./src/Checkout.jsx"
 target = "purchase.thank-you.block.render"
 
+# The "COD FEE" row in the item list. Static target — renders straight after
+# the last line item, above Shopify's Subtotal, with no merchant placement (so
+# it adds no second entry to the block picker). Stands in for the real line
+# item until the order edit lands, then removes itself. See src/FeeLine.jsx.
+[[extensions.targeting]]
+module = "./src/FeeLine.jsx"
+target = "purchase.thank-you.cart-line-list.render-after"
+
 # Fallback fee only. The row prefers the amount actually charged (the gap
 # between the line list and the snapshot subtotal); this setting is used when
 # that signal isn't available — no fee line yet, or a discounted order.
