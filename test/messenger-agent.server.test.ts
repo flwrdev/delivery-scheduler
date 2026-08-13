@@ -56,6 +56,13 @@ vi.mock("../app/services/messenger-orders.server", () => ({
 vi.mock("../app/services/messenger-queue.server", () => ({
   enqueueMessengerFollowUpTask: enqueueFollowUpMock,
 }));
+// Only the lookup is stubbed (the constants stay real): the agent turn calls it
+// per message, and the real one would reach for shopify.server.
+vi.mock("../app/services/cod-facts.server", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("../app/services/cod-facts.server")>();
+  return { ...original, loadCodFacts: async () => original.COD_FACTS_FALLBACK };
+});
 vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
   const original = await importOriginal<typeof import("../app/services/messenger-send.server")>();
   return {
@@ -68,6 +75,7 @@ vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
 
 import { MESSENGER_LLM_NOT_CONFIGURED_MESSAGE } from "../app/services/messenger-llm.server";
 import {
+  buildStaticSystemPrompt,
   messengerFollowUpHours,
   messengerHandbackHours,
   processAgentTurnByMid,
@@ -1313,5 +1321,50 @@ describe("image attachments in the LLM turn", () => {
     const { system } = llmMock.mock.calls[0][0];
     expect(system).toContain("PHOTOS");
     expect(system).toContain("CONFIRM FIRST");
+  });
+});
+
+// The COD fee and cap are stated as PROSE in the prompt, so they cannot be
+// derived by the model from a tool result — a stale number here is a wrong
+// number quoted straight to a customer (the fee was raised to ₱85 on
+// 2026-08-14 while this text still said P70).
+describe("buildStaticSystemPrompt COD facts", () => {
+  const codLine = (prompt: string) =>
+    prompt.split("\n").find((line) => line.includes("Payment methods:")) ?? "";
+
+  it("states the fee the merchant last saved", () => {
+    expect(
+      codLine(buildStaticSystemPrompt(false, { feeAmount: 85, maximumAmount: 2500 })),
+    ).toContain("an extra P85 fee");
+  });
+
+  it("groups the thousands in the cap and repeats it consistently", () => {
+    const line = codLine(
+      buildStaticSystemPrompt(false, { feeAmount: 85, maximumAmount: 3000 }),
+    );
+    expect(line).toContain("only for orders up to P3,000");
+    expect(line).toContain("ABOVE P3,000");
+    expect(line).not.toContain("P2,500");
+  });
+
+  // No cap configured: say nothing about a limit rather than inventing one.
+  it("drops the cap sentence entirely when there is no maximum", () => {
+    const line = codLine(
+      buildStaticSystemPrompt(false, { feeAmount: 70, maximumAmount: null }),
+    );
+    expect(line).toContain("an extra P70 fee");
+    expect(line).not.toContain("only for orders up to");
+  });
+
+  it("keeps the decimals on a fractional fee", () => {
+    expect(
+      codLine(buildStaticSystemPrompt(false, { feeAmount: 72.5, maximumAmount: null })),
+    ).toContain("an extra P72.50 fee");
+  });
+
+  // Called with one argument by the eval harness.
+  it("defaults to the fallback numbers", () => {
+    expect(codLine(buildStaticSystemPrompt(false))).toContain("an extra P70 fee");
+    expect(codLine(buildStaticSystemPrompt(false))).toContain("up to P2,500");
   });
 });
