@@ -54,10 +54,12 @@ import { KpiProductsModal } from "../components/orders/KpiProductsModal";
 import { MarkFulfilledModal } from "../components/orders/MarkFulfilledModal";
 import { RescheduleModal } from "../components/orders/RescheduleModal";
 import { SendEmailModal } from "../components/orders/SendEmailModal";
+import { EditDetailsModal } from "../components/orders/EditDetailsModal";
 import { validateMerchantRescheduleSelection } from "../lib/delivery-availability";
 import { slotValuesMatch } from "../lib/slot-value";
 import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
 import { handleSendEmailOp } from "../services/send-customer-email.server";
+import { handleEditDetailsOp } from "../services/update-order-contact.server";
 import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
 import { authenticate } from "../shopify.server";
 import panelStylesHref from "../styles/order-details-panel.css?url";
@@ -158,6 +160,15 @@ const GET_ORDERS_QUERY = `
             zip
             country
             phone
+            # Carry-forward fields for the editDetails op: OrderInput's
+            # shippingAddress OVERWRITES, so a save that omits these nulls the
+            # recipient name / company / region on the address. Read here so
+            # the modal can show what it is about to preserve.
+            firstName
+            lastName
+            company
+            provinceCode
+            countryCodeV2
           }
           billingAddress {
             name
@@ -584,6 +595,15 @@ export const action = async ({
   // nothing to the order (E-5), so /app/orders stays a 4-write-path route.
   if (opRaw === "sendEmail") {
     return handleSendEmailOp(admin, fd);
+  }
+
+  // Edit details: single-order shipping-address rewrite from the panel's
+  // Actions menu. An order write, but NOT a delivery write — it touches no
+  // delivery metafield, tag, or customAttribute, so the §2 contract in
+  // docs/api.md is unchanged. Dispatched before the bulk machinery for the
+  // same reason sendEmail is: it carries one orderId, not a selection.
+  if (opRaw === "editDetails") {
+    return handleEditDetailsOp(admin, fd);
   }
 
   const op = isBulkActionName(opRaw) ? opRaw : "";
@@ -1345,6 +1365,13 @@ function Extension() {
     openModal("sendEmail");
   }, [selectedOrder, openModal]);
 
+  // Edit details — panel-only, same shape as the compose modal above: the
+  // target comes from the open panel order (?order=), never the selection.
+  const openPanelEditDetails = useCallback(() => {
+    if (!selectedOrder) return;
+    openModal("editDetails");
+  }, [selectedOrder, openModal]);
+
   const rescheduleTargets = useMemo<RescheduleTarget[]>(() => {
     if (activeModal !== "reschedule") return [];
     const ids = panelRescheduleIds ?? selectedResources;
@@ -1984,6 +2011,11 @@ function Extension() {
           selectedOrder?.customer?.defaultEmailAddress?.emailAddress ?? null
         }
       />
+      <EditDetailsModal
+        open={activeModal === "editDetails" && selectedOrder !== null}
+        onClose={closeModal}
+        order={selectedOrder}
+      />
       <AddTagsModal
         open={activeModal === "addTags"}
         onClose={closeModal}
@@ -2023,6 +2055,7 @@ function Extension() {
             onClose={handleCloseDrawer}
             onReschedule={openPanelReschedule}
             onSendEmail={openPanelSendEmail}
+            onEditDetails={openPanelEditDetails}
           />
         </Suspense>
       )}

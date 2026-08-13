@@ -38,6 +38,8 @@ export interface OrderDetailsPanelProps {
   onReschedule?: () => void;
   // Customer Email: opens the in-app compose modal for this order.
   onSendEmail?: () => void;
+  // Edit details: opens the shipping-address edit modal for this order.
+  onEditDetails?: () => void;
 }
 
 /**
@@ -52,6 +54,7 @@ export function OrderDetailsPanel({
   notInView = false,
   onReschedule,
   onSendEmail,
+  onEditDetails,
 }: OrderDetailsPanelProps) {
   const tagFetcher = useFetcher<{
     ok: boolean;
@@ -117,6 +120,17 @@ export function OrderDetailsPanel({
       onAction: () => {
         setActionsOpen(false);
         onReschedule?.();
+      },
+    },
+    {
+      content: "Edit details",
+      // Shipping address + receiver phone only. The address is rewritten by
+      // an overwrite mutation, so the server re-reads and carries forward the
+      // fields this form does not expose — see update-order-contact.server.ts.
+      disabled: !onEditDetails,
+      onAction: () => {
+        setActionsOpen(false);
+        onEditDetails?.();
       },
     },
     {
