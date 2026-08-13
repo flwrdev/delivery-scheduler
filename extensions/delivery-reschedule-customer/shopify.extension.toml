@@ -2,7 +2,7 @@ api_version = "2026-04"
 uid = "c2ce32a3-7dc8-07c9-0118-d72ac4958696e4e96986"
 
 [[extensions]]
-name = "Reschedule Delivery"
+name = "Account Reschedule Delivery"
 handle = "delivery-reschedule-customer"
 type = "ui_extension"
 

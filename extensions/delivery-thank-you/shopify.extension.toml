@@ -6,7 +6,7 @@
 api_version = "2026-04"
 
 [[extensions]]
-name = "Delivery Schedule Thank You"
+name = "Thank You Delivery Schedule"
 handle = "delivery-thank-you"
 type = "ui_extension"
 uid = "44f2b914-bc99-5eb8-57fb-7f587681a1863e539d62"
