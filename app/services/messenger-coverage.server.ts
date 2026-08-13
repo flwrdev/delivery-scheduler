@@ -197,7 +197,18 @@ export function checkDeliveryCoverage(
 ): CheckDeliveryCoverageResult {
   const zipDigits = (input.zip ?? "").replace(/\D+/g, "");
   let areaNorm = normalize(input.area ?? "");
-  areaNorm = AREA_ALIASES[areaNorm] ?? areaNorm;
+  if (AREA_ALIASES[areaNorm]) {
+    areaNorm = AREA_ALIASES[areaNorm];
+  } else {
+    // The alias may be embedded ("BGC, Taguig" -> "bgc taguig"): expand on a
+    // whole-word alias hit so "BGC" still resolves to fort bonifacio.
+    for (const [alias, canonical] of Object.entries(AREA_ALIASES)) {
+      if (new RegExp(`\\b${alias}\\b`).test(areaNorm)) {
+        areaNorm = canonical;
+        break;
+      }
+    }
+  }
 
   if (!zipDigits && !areaNorm) {
     return { ok: false, error: "Provide a zip code or a barangay/area/city name." };

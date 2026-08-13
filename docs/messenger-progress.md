@@ -577,3 +577,95 @@ silang pakialam dun").
 mula 17:51Z dahil ang Meta ay nagsa-sign na gamit ang bagong secret. Hindi
 nawawala ang messages (nagre-redeliver si Meta sa non-200). Fix: merchant-run
 `gcloud secrets versions add messenger-app-secret` + bagong revision.
+
+## Phase 13 — product discovery filters, best sellers, prompt caching (2026-08-04)
+
+**Status:** naisulat 2026-08-04, naidokumento 2026-08-13, **HINDI PA NA-DEPLOY**.
+Walang Cloud Run revision, walang live gate. Ang code ay hindi na ginalaw noong
+idinokumento ito (merchant instruction: itala at i-commit ang nandiyan na,
+huwag nang halukayin).
+
+### Ano ang binago
+
+- **`search_products` — apat na bagong param.**
+  - `sort=price_asc|price_desc` para sa "pinakamura/pinakamahal". Walang
+    product-level price sortKey ang Shopify (variant-level ang presyo), kaya
+    bounded pool (`SORT_POOL_LIMIT = 100`) ang kinukuha at **in code** nag-so-sort,
+    tapos `PRODUCT_CAROUSEL_LIMIT` lang ang ibinabalik. Ang prompt rule:
+    pwede LANG magsabi ng superlative kapag galing sa sorted result — bawal
+    tantiyahin mula sa unsorted browse.
+  - `tags` / `exclude_tags` — reliable na color/type/compound matching
+    (pink, red, white…, roses, carnation, lilies…, "red rose", "white rose").
+    "puro white" → `tags=["white"]`; "ayaw ko ng roses" → `exclude_tags=["roses"]`.
+    Kapalit ito ng title-guessing.
+  - `addons` — scope switch. Ang normal na bouquet browse/sort/reco ay laging
+    nagpupush ng `-tag:'Add-ons'`; ang add-on upsell ay opt-in na `tag:'Add-ons'`.
+- **`get_best_sellers` — bagong tool.** Fixed na 7 merchant-curated titles
+  (Autumn Morning, Sweet Heart, California Dreaming, Luxe Noir, Majestic Bouquet,
+  Meadow Fresh, Crimson Whisper) via OR-of-titles query, ibinabalik sa curated
+  order (ang matched-but-unlisted ay idinudugtong defensively). **Hindi** ito
+  Shopify best-selling metric at hindi collection link. Ang result ay
+  sumasakay sa parehong carousel path ng `search_products`, at ipinagbabawal ng
+  prompt na tawaging best seller ang plain search result.
+- **Hidden products skip.** Nilalaktawan na ng `runProductSearch` ang node na
+  walang `onlineStoreUrl` — para hindi sumulpot ang internal na "COD Fee"
+  product sa carousel ng customer.
+- **Prompt caching.** Hinati ang prompt: `buildStaticSystemPrompt(ordersEnabled)`
+  (byte-identical sa bawat conversation — deploy-constant ang `ordersEnabled`)
+  at `buildDynamicContext(now)` (ang petsa lang). Isang `cache_control:
+  {type:"ephemeral"}` breakpoint sa static block; dahil ang render order ay
+  **tools → system → messages**, sakop nito ang buong tools+system prefix, at
+  ang volatile na petsa ay nasa trailing **uncached** block. Ang
+  `buildSystemPrompt()` ay pinanatili bilang concatenation ng dalawa.
+  Bagong log line: `[messenger-llm] input=… cache_write=… cache_read=… output=…`
+  — **counts lang, kailanman walang message text**.
+- **Prompt corrections (merchant-reported).**
+  - "SF" = shipping fee, **hindi** San Francisco. Magtanong muna ng
+    barangay/city/zip bago mag-quote; bawal ipasa ang "SF" sa `check_delivery_coverage`.
+  - Delivery hours = hanggang **11PM** (may 6PM–11PM slot). Ang 5PM ay closing
+    ng **walk-in store**, hindi delivery limit. Bawal sabihing 5PM na ang huli.
+  - 5PM same-day cutoff — pwede nang sabihin nang direkta kapag tinanong.
+  - 7 araw kada linggo, **walang holiday closure**.
+  - Ang pagpapabago/cancel ng **nailagay nang order** ay purong self-service sa
+    flowercart.store/account. Bawat mangako ang bot na siya ang gagawa —
+    iba ito sa order na binubuo pa sa chat (`update_order` bago mag-Confirm).
+  - COD **lampas ₱2,500** = online payment lang; tinanggal ang split-payment
+    arrangement.
+  - `resolve_date` ay required **kahit** "today"/"ngayon"/"bukas".
+  - Add-on taps → `search_products` na may `addons=true` + keyword.
+- **Coverage alias fix.** Kapag miss ang exact `AREA_ALIASES` lookup, may
+  whole-word regex pass na nag-e-expand ng naka-embed na alias:
+  "BGC, Taguig" → fort bonifacio (dati ay exact-match lang).
+
+Walang migration, walang bagong env/secret/dependency, walang binago sa write path.
+
+### Gates
+
+Tests **546 → 547** (+1: trailing uncached `systemContext` block); typecheck at
+lint clean. (Ang 556/556 na nakikita sa buong repo ngayon ay kasama na ang
+hiwalay na Thank-You COD work na hindi pa naka-commit.)
+
+### ⚠️ Hindi pa na-verify sa totoong store
+
+Apat na assumption ang dapat unahin sa deploy — nakadetalye sa
+[verification-log.md](./verification-log.md) row ng 2026-08-04:
+
+1. **`onlineStoreUrl` skip = silent behavior change.** Dati, ang product na
+   walang storefront URL ay ibinabalik pa rin (`url` lang ang wala). Kung ang
+   add-ons (bear/chocolates/balloon) ay **hindi published sa Online Store
+   channel**, magiging **zero** ang `search_products addons=true` at masisira
+   ang Phase 10 add-on upsell.
+2. **Tag spelling.** Ipinapalagay na eksaktong `Add-ons` ang tag. Ibang spelling
+   → mali ang filter sa **bawat** bouquet browse (laging naka-append ang
+   `-tag:'Add-ons'`).
+3. **Best-seller prefix match.** Tokenized ang title search ng Shopify, kaya ang
+   `title:"Sweet Heart"` ay pwedeng tumama rin sa "Sweet Heart Deluxe" —
+   napupunta ito sa `extra` at ipinapakitang best seller.
+4. **Alias override.** Pinapalitan ng buo ang area string sa whole-word hit,
+   kaya ang "Maynila Street, Cavite" ay magiging manila at mawawala ang Cavite.
+   (Constants ang aliases at walang regex metacharacter — walang injection risk.)
+
+Manipis ang test coverage ng batch na ito: ang tool-registry name list at ang
+caching block lang ang naka-pin. Ang sort, tags/exclude_tags, addons scoping,
+best-seller ordering, `onlineStoreUrl` skip at alias expansion ay **walang
+unit test**.

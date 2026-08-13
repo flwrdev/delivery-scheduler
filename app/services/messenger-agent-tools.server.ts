@@ -21,7 +21,7 @@ import type { DeliveryScheduleRules } from "../lib/delivery-availability";
 import { getScheduleRulesWithBookedCounts } from "./schedule-rules.server";
 import { checkDeliveryCoverage } from "./messenger-coverage.server";
 import type { CheckDeliveryCoverageInput } from "./messenger-coverage.server";
-import { getVariantLive, searchShopProducts } from "./messenger-products.server";
+import { getBestSellers, getVariantLive, searchShopProducts } from "./messenger-products.server";
 import type { SearchShopProductsInput } from "./messenger-products.server";
 import { lookupOrdersByEmail, updateMessengerOrderState } from "./messenger-orders.server";
 import type { UpdateOrderStateInput } from "./messenger-orders.server";
@@ -358,9 +358,11 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
     description:
       "Search The Flowercart's LIVE Shopify catalog (bouquets, arrangements, add-ons) with current " +
       "prices. Call this when the customer asks about products, prices, recommendations, or a budget " +
-      "(e.g. 'may below 1000 ba kayo?' -> max_price=1000). A product carousel with photos and buttons " +
-      "is sent to the customer AUTOMATICALLY after your reply — keep your text short and do NOT list " +
-      "the products or prices yourself.",
+      "(e.g. 'may below 1000 ba kayo?' -> max_price=1000). For 'pinakamura / cheapest' pass " +
+      "sort='price_asc'; for 'pinakamahal / most expensive' pass sort='price_desc' — only then may you " +
+      "state a cheapest/most-expensive superlative (never eyeball it from an unsorted result). A product " +
+      "carousel with photos is sent to the customer AUTOMATICALLY after your reply — keep your text " +
+      "short and do NOT list the products or prices yourself.",
     input_schema: {
       type: "object",
       properties: {
@@ -370,6 +372,32 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
         },
         min_price: { type: "number", description: "Optional minimum price in PHP." },
         max_price: { type: "number", description: "Optional maximum price in PHP." },
+        sort: {
+          type: "string",
+          enum: ["price_asc", "price_desc"],
+          description:
+            "price_asc = cheapest first (for 'pinakamura'), price_desc = most expensive first " +
+            "(for 'pinakamahal'). Omit for a normal browse.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Filter to bouquets that have ALL these tags. Colors: pink, red, white, blue, yellow, purple, orange. " +
+            "Types: roses, carnation, lilies, sunflower, daisies, tulips. Compound: 'red rose', 'white rose', " +
+            "'pink carnation', 'blue hydrangea', etc. e.g. 'puro white' -> [\"white\"]; 'red roses' -> [\"red rose\"].",
+        },
+        exclude_tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Exclude bouquets that have any of these tags, e.g. 'ayaw ko ng roses' -> [\"roses\"].",
+        },
+        addons: {
+          type: "boolean",
+          description:
+            "true = search ONLY add-ons (teddy bear, chocolates, balloon) for the add-on upsell. " +
+            "Omit for a normal bouquet search (add-ons are excluded by default).",
+        },
         purpose: {
           type: "string",
           enum: ["browse", "lookup"],
@@ -378,6 +406,20 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
             "lookup = the customer is PICKING a specific bouquet by name — no carousel is sent.",
         },
       },
+      required: [],
+    },
+  },
+  {
+    name: "get_best_sellers",
+    description:
+      "Return The Flowercart's curated BEST SELLERS (a fixed merchant-picked set), with live prices. " +
+      "Call this when the customer asks for best sellers / paborito / popular / 'ano maganda' / " +
+      "'ano madalas bilhin'. A carousel is sent to the customer AUTOMATICALLY after your reply — keep " +
+      "your text to one short line and do NOT list the names or prices. NEVER claim a plain " +
+      "search_products result is a best seller; only this tool's result is.",
+    input_schema: {
+      type: "object",
+      properties: {},
       required: [],
     },
   },
@@ -506,13 +548,32 @@ export async function executeAgentTool(
       );
     }
     if (name === "search_products") {
-      const raw = (input ?? {}) as { query?: string; min_price?: number; max_price?: number };
+      const raw = (input ?? {}) as {
+        query?: string;
+        min_price?: number;
+        max_price?: number;
+        sort?: "price_asc" | "price_desc";
+        tags?: unknown;
+        exclude_tags?: unknown;
+        addons?: unknown;
+      };
+      const toStringArray = (value: unknown): string[] =>
+        Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+      const tags = toStringArray(raw.tags);
+      const excludeTags = toStringArray(raw.exclude_tags);
       const mapped: SearchShopProductsInput = {
         ...(raw.query ? { query: raw.query } : {}),
         ...(typeof raw.min_price === "number" ? { minPricePhp: raw.min_price } : {}),
         ...(typeof raw.max_price === "number" ? { maxPricePhp: raw.max_price } : {}),
+        ...(raw.sort === "price_asc" || raw.sort === "price_desc" ? { sort: raw.sort } : {}),
+        ...(tags.length ? { tags } : {}),
+        ...(excludeTags.length ? { excludeTags } : {}),
+        ...(raw.addons === true ? { addons: true } : {}),
       };
       return await searchShopProducts(mapped);
+    }
+    if (name === "get_best_sellers") {
+      return await getBestSellers();
     }
     if (name === "get_product_details") {
       const raw = (input ?? {}) as { variant_id?: string };

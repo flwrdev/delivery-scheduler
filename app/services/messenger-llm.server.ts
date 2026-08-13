@@ -52,13 +52,17 @@ export type LlmTurnResult =
   | { ok: false; error: string; notConfigured?: boolean };
 
 export interface RunLlmTurnInput {
+  /** Static system prompt — the large, cache-stable prefix (identical across conversations). */
   system: string;
+  /** Volatile per-call context (e.g. the current date) — appended AFTER the cache breakpoint. */
+  systemContext?: string;
   messages: LlmMessage[];
   tools: LlmToolDefinition[];
 }
 
 export async function runLlmTurn({
   system,
+  systemContext,
   messages,
   tools,
 }: RunLlmTurnInput): Promise<LlmTurnResult> {
@@ -69,13 +73,32 @@ export async function runLlmTurn({
 
   try {
     const client = new Anthropic({ apiKey, timeout: REQUEST_TIMEOUT_MS, maxRetries: 1 });
+    // Prompt caching (prefix match; render order is tools -> system -> messages):
+    // ONE cache_control breakpoint on the static system block caches the tools +
+    // static system prefix — byte-identical across every conversation and turn.
+    // The volatile date rides in a trailing, UNCACHED system block after it.
+    const systemBlocks: Anthropic.TextBlockParam[] = [
+      { type: "text", text: system, cache_control: { type: "ephemeral" } },
+    ];
+    if (systemContext) {
+      systemBlocks.push({ type: "text", text: systemContext });
+    }
     const response = await client.messages.create({
       model: MESSENGER_LLM_MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
-      system,
+      system: systemBlocks,
       messages: messages as Anthropic.MessageParam[],
       tools: tools as Anthropic.Tool[],
     });
+
+    // Log token counts ONLY (never message text) so cache hits are verifiable:
+    // cache_read > 0 on the 2nd+ call proves the tools+system prefix is cached.
+    const usage = response.usage;
+    console.log(
+      `[messenger-llm] input=${usage?.input_tokens ?? 0} cache_write=${
+        usage?.cache_creation_input_tokens ?? 0
+      } cache_read=${usage?.cache_read_input_tokens ?? 0} output=${usage?.output_tokens ?? 0}`,
+    );
 
     const blocks: Extract<LlmTurnResult, { ok: true }>["blocks"] = [];
     for (const block of response.content) {
