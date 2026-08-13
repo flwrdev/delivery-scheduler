@@ -12,10 +12,32 @@ type Configuration = {
   minimumAmount?: number;
   /** Optional COD cap — hide COD when the subtotal exceeds this. Null/absent = no cap. */
   maximumAmount?: number;
+  /**
+   * The COD fee /app/cod-settings last saved. Display only — the amount is
+   * actually charged by the orders/create webhook, which reads the COD Fee
+   * variant price. Absent = leave the merchant's method name alone.
+   */
+  feeAmount?: number;
   allowedZipRanges?: [number, number][];
   allowedCities?: string[];
   cityAliases?: Record<string, string>;
 };
+
+// An existing fee suffix on the method name: " +₱70", " + P70.00", " +70".
+// Rebuilt on every run so the merchant never has to retype the number in
+// Settings → Payments after changing it in the app (that name is a static
+// string Shopify has no API for — this rename is the only way to keep it in
+// step, and it applies to the CHECKOUT list only).
+const FEE_SUFFIX = /\s*\+\s*(?:₱|P)?\s*[\d,]+(?:\.\d+)?\s*$/;
+
+// "70" not "70.00" for a whole amount — matches how the merchant wrote it.
+function formatFee(fee: number): string {
+  return Number.isInteger(fee) ? String(fee) : fee.toFixed(2);
+}
+
+export function withFeeSuffix(name: string, fee: number): string {
+  return `${name.replace(FEE_SUFFIX, "")} +₱${formatFee(fee)}`;
+}
 
 // Metro Manila (NCR) ZIP ranges — source: Metro_Manila_ZIP_Masterlist (17 LGUs).
 // Overridable via the $app:cod-eligibility function-configuration metafield.
@@ -121,6 +143,26 @@ export function cartPaymentMethodsTransformRun(
     })),
   };
 
+  // COD stays visible — restate its name with the fee the app currently
+  // charges. Skipped entirely when no fee is configured, or when the name
+  // already reads that way, so a shop that never touched /app/cod-settings
+  // keeps exactly the label its merchant typed.
+  const feeAmount = configuration.feeAmount;
+  const showCod: CartPaymentMethodsTransformRunResult =
+    typeof feeAmount === "number" && feeAmount > 0
+      ? {
+          operations: codMethods
+            .map((method) => ({
+              method,
+              name: withFeeSuffix(method.name, feeAmount),
+            }))
+            .filter(({ method, name }) => name !== method.name)
+            .map(({ method, name }) => ({
+              paymentMethodRename: { paymentMethodId: method.id, name },
+            })),
+        }
+      : NO_CHANGES;
+
   const subtotal = Number(input.cart.cost.subtotalAmount.amount);
   if (!(subtotal >= minimumAmount)) {
     return hideCod;
@@ -138,11 +180,11 @@ export function cartPaymentMethodsTransformRun(
   // Primary signal: ZIP validated against the Metro Manila masterlist.
   const zipMatch = zipInRanges(address.zip ?? "", zipRanges);
   if (zipMatch !== null) {
-    return zipMatch ? NO_CHANGES : hideCod;
+    return zipMatch ? showCod : hideCod;
   }
 
   // Fallback (ZIP missing/malformed): normalized free-text city.
   const normalized = normalizeCity(address.city ?? "");
   const canonical = aliases[normalized] ?? normalized;
-  return cities.includes(canonical) ? NO_CHANGES : hideCod;
+  return cities.includes(canonical) ? showCod : hideCod;
 }
