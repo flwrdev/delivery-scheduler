@@ -1,5 +1,3 @@
 {
-  "heading": "Cash on Delivery",
-  "feeLine": "A {{fee}} COD fee has been added to your order.",
-  "totalLine": "Total to pay on delivery: {{total}}"
+  "totalWithFee": "Total with fee"
 }
