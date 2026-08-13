@@ -8,17 +8,20 @@
 // "Delivery Schedule" unit; cod-fee-notice renders nothing and can be removed
 // from the checkout editor.
 //
-// COD detection: shopify.selectedPaymentOptions IS populated on the Thank You
-// page (verified live 2026-07-28) and manual COD arrives with type
-// "paymentOnDelivery" — NOT "manualPayment" (that type covers other manual
-// methods like bank deposit, which carry no COD fee). The +₱70 fee lands
-// POST-purchase via order edit (orders/create webhook), so Thank-You totals
-// never include it — the card shows the real amount to hand the rider.
+// The +₱70 fee lands POST-purchase via order edit (orders/create webhook), so
+// Shopify's own Thank-You order summary never includes it. The COMPUTED total
+// (Shopify's Total + fee = "Total with fee") is a SEPARATE extension —
+// extensions/cod-fee-notice — whose block the merchant positions directly below
+// Shopify's Total. This card only EXPLAINS the unexpected "COD FEE" line item;
+// it must not restate the total, or the page would carry the same number twice.
+//
+// COD detection and the fee amount come from ./cod-fee.js, a byte-identical
+// copy of the one in cod-fee-notice/src, so the two surfaces can never disagree.
 
 import '@shopify/ui-extensions/preact';
 import {render} from "preact";
 
-const DEFAULT_COD_FEE = 70;
+import {isCashOnDeliveryOrder, resolveCodFee} from './cod-fee.js';
 
 export default async () => {
   render(<Extension />, document.body);
@@ -61,13 +64,9 @@ function Extension() {
           <s-stack direction="block" gap="small-200">
             <s-heading>Cash on Delivery</s-heading>
             <s-text>
-              A {cod.feeFormatted} COD fee has been added to your order.
+              A {cod.feeFormatted} COD fee has been added to your order. See the
+              order summary for the total to pay on delivery.
             </s-text>
-            {cod.totalFormatted ? (
-              <s-text type="emphasis">
-                Total to pay on delivery: {cod.totalFormatted}
-              </s-text>
-            ) : null}
           </s-stack>
         ) : null}
       </s-stack>
@@ -76,31 +75,18 @@ function Extension() {
 }
 
 function getCodNotice() {
-  const selectedOptions = shopify.selectedPaymentOptions?.value ?? [];
-  const isCashOnDelivery = selectedOptions.some(
-    (option) => option.type === 'paymentOnDelivery',
-  );
-  if (!isCashOnDelivery) {
+  if (!isCashOnDeliveryOrder()) {
     return null;
   }
 
-  const feeSetting = Number(shopify.settings.value?.fee_amount);
-  const fee =
-    Number.isFinite(feeSetting) && feeSetting > 0
-      ? feeSetting
-      : DEFAULT_COD_FEE;
+  const fee = resolveCodFee();
+  if (!(fee > 0)) {
+    return null;
+  }
 
-  const total = shopify.cost.totalAmount.value;
-  const currency = total?.currencyCode ?? 'PHP';
-  const totalWithFee = total ? Number(total.amount) + fee : null;
+  const currency = shopify.cost?.totalAmount?.value?.currencyCode ?? 'PHP';
 
-  return {
-    feeFormatted: shopify.i18n.formatCurrency(fee, {currency}),
-    totalFormatted:
-      totalWithFee != null
-        ? shopify.i18n.formatCurrency(totalWithFee, {currency})
-        : null,
-  };
+  return {feeFormatted: shopify.i18n.formatCurrency(fee, {currency})};
 }
 
 function getCartMetafieldValue(appMetafields, namespace, key) {
