@@ -22,21 +22,53 @@ export function isCashOnDeliveryOrder() {
   return selectedOptions.some((option) => option.type === 'paymentOnDelivery');
 }
 
-// The fee amount, preferring live order data over the display setting.
+// The fee amount, in order of how close each source is to the truth:
 //
-// No usable live signal — the fee line hasn't landed, the page is an all-pre-edit
-// snapshot, or the order carries a cart-level discount — falls back to the
-// merchant setting, then to ₱70.
+//   1. the gap between the line list and the snapshot subtotal — the amount
+//      ACTUALLY charged, once the fee line has landed
+//   2. the shop metafield /app/cod-settings writes — what the merchant last
+//      saved, and what the webhook will charge
+//   3. the block's own `fee_amount` setting — a separate field that does not
+//      follow the settings page; kept only as a legacy fallback
+//   4. ₱70
 export function resolveCodFee() {
   const charged = feeFromLineGap();
   if (charged != null) {
     return charged;
   }
 
+  const settingsPageFee = feeFromShopMetafield();
+  if (settingsPageFee != null) {
+    return settingsPageFee;
+  }
+
   const feeSetting = Number(shopify.settings?.value?.fee_amount);
   return Number.isFinite(feeSetting) && feeSetting > 0
     ? feeSetting
     : DEFAULT_COD_FEE;
+}
+
+// What /app/cod-settings last saved, mirrored onto a shop metafield declared in
+// both extensions' shopify.extension.toml.
+//
+// This is the ONLY link between the settings page and what the customer reads.
+// The page sets the COD Fee VARIANT's price — the amount actually charged — but
+// an extension cannot read that price (the product is unpublished from the
+// Online Store on purpose), and the block's own `fee_amount` setting is a
+// separate field that does not follow the page. Without this mirror, repricing
+// to ₱85 left the Thank You page saying ₱70 while the rider collected ₱85
+// (reproduced on prod order #4096, 2026-08-14).
+//
+// `appMetafields` only ever returns metafields this app declared, so matching
+// the key alone is unambiguous.
+function feeFromShopMetafield() {
+  const entries = shopify.appMetafields?.value ?? [];
+  const entry = entries.find(
+    (item) => item.target?.type === 'shop' && item.metafield?.key === 'fee',
+  );
+
+  const amount = Number(entry?.metafield?.value);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
 // Whether Shopify is ALREADY listing the "COD FEE" line item. It draws that

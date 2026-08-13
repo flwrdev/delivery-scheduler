@@ -33,6 +33,16 @@ key = "date"
 namespace = "custom"
 key = "time_slot"
 
+# The COD fee amount, mirrored here by /app/cod-settings so the Thank You page
+# shows the amount that will actually be charged. The extension cannot read the
+# COD Fee variant's price — that product is unpublished from the Online Store
+# on purpose — and the block's own `fee_amount` setting is a SEPARATE field that
+# does not follow the settings page (caught 2026-08-14: fee set to ₱85, page
+# still said ₱70). Same mechanism the delivery date/time already use.
+[[extensions.metafields]]
+namespace = "$app:cod"
+key = "fee"
+
 # COD fee display (merged from the retired cod-fee-notice block).
 # Keep in sync with the COD fee product variant price (COD-FEE) and the
 # /app/cod-settings fee field — this only controls what the card DISPLAYS.

@@ -88,6 +88,19 @@ const FEE_PRICE_MUTATION = `#graphql
   }
 `;
 
+const SHOP_ID_QUERY = `#graphql
+  query CodSettingsShopId {
+    shop {
+      id
+    }
+  }
+`;
+
+// Namespace/key must match the [[extensions.metafields]] declaration in BOTH
+// thank-you extensions — that is how the storefront reads it.
+export const COD_FEE_METAFIELD_NAMESPACE = "$app:cod";
+export const COD_FEE_METAFIELD_KEY = "fee";
+
 type CodConfig = {
   minimumAmount?: number;
   maximumAmount?: number;
@@ -262,6 +275,49 @@ export const action = async ({ request }: { request: Request }) => {
       for (const err of feeResult.data?.productVariantsBulkUpdate?.userErrors ??
         []) {
         errors.push(`COD fee: ${err.message}`);
+      }
+
+      // Mirror the fee onto a shop metafield so the Thank You page can show the
+      // amount that will actually be charged. The extension there cannot read a
+      // variant price — the COD Fee product is unpublished from the Online
+      // Store on purpose — and before this it fell back to a SEPARATE
+      // checkout-editor setting, so repricing here left the customer reading
+      // the old number while being charged the new one (caught 2026-08-14:
+      // fee set to ₱85, Thank You page still said ₱70).
+      //
+      // A failure here must not fail the save: the price above is what gets
+      // charged and is already committed. The customer would just see a stale
+      // display, which is the behaviour we had before.
+      const shopResponse = await admin.graphql(SHOP_ID_QUERY);
+      const shopResult = (await shopResponse.json()) as {
+        data?: { shop?: { id?: string } };
+      };
+      const shopId = shopResult.data?.shop?.id;
+
+      if (shopId) {
+        const mirrorResponse = await admin.graphql(SET_CONFIG_MUTATION, {
+          variables: {
+            metafields: [
+              {
+                ownerId: shopId,
+                namespace: COD_FEE_METAFIELD_NAMESPACE,
+                key: COD_FEE_METAFIELD_KEY,
+                type: "number_decimal",
+                value: feeAmount.toFixed(2),
+              },
+            ],
+          },
+        });
+        const mirrorResult = (await mirrorResponse.json()) as {
+          data?: { metafieldsSet?: { userErrors?: Array<{ message: string }> } };
+        };
+        for (const err of mirrorResult.data?.metafieldsSet?.userErrors ?? []) {
+          console.warn(`[cod-settings] fee mirror metafield: ${err.message}`);
+        }
+      } else {
+        console.warn(
+          "[cod-settings] no shop id returned; fee mirror metafield not written.",
+        );
       }
     }
 
