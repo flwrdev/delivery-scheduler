@@ -117,6 +117,30 @@ export const COD_FEE_METAFIELD_KEY = "fee";
 export const COD_FEE_LIQUID_NAMESPACE = "custom";
 export const COD_FEE_LIQUID_KEY = "cod_fee";
 
+// Releasit's OWN copy of the fee, in centavos. Not ours, deliberately written.
+//
+// The order confirmation email's COD block is Releasit's — its Liquid draws the
+// `COD Fee ₱70` row and resolves the `{order_total}` placeholder in the
+// merchant's message from THIS metafield, not from the order. The arithmetic is
+// right and the number is wrong: at send time the order is still pre-edit
+// (₱1,226 on #4097), Releasit adds its own `commission`, and ₱70 gave ₱1,296
+// when the customer owed ₱1,311. Feed it the real fee and both the row and the
+// total come out correct with no template edit at all.
+//
+// Releasit's fee ENGINE stays off (`_cod_fee.other_settings.isFeeEnabled`
+// false) — turning it on would charge the fee a second time. This writes only
+// the display amount.
+//
+// Last writer wins: saving inside the Releasit app overwrites this. Re-saving
+// /app/cod-settings puts it back.
+export const RELEASIT_FEE_NAMESPACE = "_cod_fee";
+export const RELEASIT_FEE_KEY = "commission";
+
+/** Releasit stores the fee as an integer number of centavos ("7000" = ₱70). */
+export function toReleasitCentavos(feeAmount: number): string {
+  return String(Math.round(feeAmount * 100));
+}
+
 type CodConfig = {
   minimumAmount?: number;
   maximumAmount?: number;
@@ -309,9 +333,10 @@ export const action = async ({ request }: { request: Request }) => {
       // the new one (caught 2026-08-14: fee set to ₱85, Thank You page still
       // said ₱70).
       //
-      // Two copies of the same value, because no single namespace is readable
+      // Three copies of the same value, because no single namespace is readable
       // everywhere: `$app:cod` for the checkout UI extensions, `custom.cod_fee`
-      // for Liquid (see the constants above).
+      // for Liquid, and `_cod_fee.commission` for the Releasit block that draws
+      // the fee in the order confirmation email (see the constants above).
       //
       // A failure here must not fail the save: the price above is what gets
       // charged and is already committed. The customer would just see a stale
@@ -339,6 +364,13 @@ export const action = async ({ request }: { request: Request }) => {
                 key: COD_FEE_LIQUID_KEY,
                 type: "number_decimal",
                 value: feeAmount.toFixed(2),
+              },
+              {
+                ownerId: shopId,
+                namespace: RELEASIT_FEE_NAMESPACE,
+                key: RELEASIT_FEE_KEY,
+                type: "number_integer",
+                value: toReleasitCentavos(feeAmount),
               },
             ],
           },
