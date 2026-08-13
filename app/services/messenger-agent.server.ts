@@ -8,6 +8,8 @@
 // message text or LLM output.
 
 import prisma from "../db.server";
+import { COD_FACTS_FALLBACK, loadCodFacts } from "./cod-facts.server";
+import type { CodFacts } from "./cod-facts.server";
 import {
   executeAgentTool,
   getManilaNowLabel,
@@ -101,11 +103,29 @@ export function buildDynamicContext(now: Date): string {
   return `Current date and time in Asia/Manila: ${getManilaNowLabel(now)}. All dates are in Asia/Manila.`;
 }
 
+// "P70", "P2,500" — the merchant's own shorthand, and plain text because
+// Messenger does not render markdown (the ₱ sign is fine, but the prompt has
+// always used P here and the agent mirrors it back to customers).
+function formatPesos(amount: number): string {
+  return `P${
+    Number.isInteger(amount)
+      ? amount.toLocaleString("en-US")
+      : amount.toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+  }`;
+}
+
 // The STATIC system prompt — identical bytes across every conversation and turn
-// (ordersEnabled is a deploy-constant, not per-conversation). This is the large
+// (ordersEnabled is a deploy-constant; `cod` only moves when the merchant saves
+// /app/cod-settings, and is memoized for 5 minutes). This is the large
 // cacheable prefix, and it is exported so the eval harness exercises the exact
-// prod prompt. Zero behavior change.
-export function buildStaticSystemPrompt(ordersEnabled: boolean): string {
+// prod prompt.
+export function buildStaticSystemPrompt(
+  ordersEnabled: boolean,
+  cod: CodFacts = COD_FACTS_FALLBACK,
+): string {
   return [
     "You are FlowerBot, the customer service and sales assistant of The Flowercart, a flower shop in the Philippines that delivers within Metro Manila.",
     "",
@@ -178,7 +198,17 @@ export function buildStaticSystemPrompt(ordersEnabled: boolean): string {
     "- Some covered towns are OUTSIDE Metro Manila (marked provincial in the tool result): covered at may same-day delivery din — if asked, say yes we do same-day delivery po (same slots and cutoff as Metro Manila).",
     "- If the tool returns BOTH a Metro Manila match and a provincial match for the same name (e.g. Dasmarinas Village Makati vs Dasmarinas Cavite), ask the customer which one they mean before quoting.",
     "- FREE SHIPPING on orders P2,500 and up.",
-    "- Payment methods: online via Xendit (cards, GCash, Maya, GrabPay, bank transfer, QRPh) or Cash on Delivery. COD is available for METRO MANILA addresses only — no COD for provincial areas (Bulacan/Rizal/Cavite/Laguna towns), online payment lang doon. COD has an extra P70 fee added automatically to the total, and rider booking can take a bit longer on COD. COD is only for orders up to P2,500 — for orders ABOVE P2,500, online payment lang po (no COD, and no split-payment arrangement).",
+    `- Payment methods: online via Xendit (cards, GCash, Maya, GrabPay, bank transfer, QRPh) or Cash on Delivery. COD is available for METRO MANILA addresses only — no COD for provincial areas (Bulacan/Rizal/Cavite/Laguna towns), online payment lang doon. COD has an extra ${formatPesos(
+      cod.feeAmount,
+    )} fee added automatically to the total, and rider booking can take a bit longer on COD.${
+      cod.maximumAmount === null
+        ? ""
+        : ` COD is only for orders up to ${formatPesos(
+            cod.maximumAmount,
+          )} — for orders ABOVE ${formatPesos(
+            cod.maximumAmount,
+          )}, online payment lang po (no COD, and no split-payment arrangement).`
+    }`,
     "- About the shop: The Flowercart is a Metro Manila-based online flower shop — fresh rose bouquets and floral arrangements for all occasions (birthdays, anniversaries, graduations, romantic surprises), with same-day delivery. Website: https://flowercart.store",
     "- Store/pickup hours: 9:00 AM to 5:00 PM daily at 255 Kawit St, Tondo, Manila (walk-in and pickup ONLY; earliest pickup 9:00 AM — ask when they plan to drop by so the order is ready).",
     "- DELIVERY hours are LONGER than the walk-in store: delivery time windows run from 9:00 AM up to 11:00 PM (there IS an evening slot, 6PM–11PM). The exact open windows per date come from get_available_slots. NEVER tell a customer that delivery ends at 5 PM — 5 PM is the walk-in store's closing time, not a delivery limit. Only true dawn/overnight delivery (before 9 AM or after 11 PM) is unavailable.",
@@ -609,7 +639,7 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   const ordersEnabled = messengerOrdersEnabled();
   // Split for prompt caching: `system` is the byte-identical cached prefix;
   // `systemContext` (the current date) rides after the cache breakpoint.
-  const system = buildStaticSystemPrompt(ordersEnabled);
+  const system = buildStaticSystemPrompt(ordersEnabled, await loadCodFacts());
   const systemContext = buildDynamicContext(now);
   const tools = ordersEnabled
     ? MESSENGER_AGENT_TOOLS
