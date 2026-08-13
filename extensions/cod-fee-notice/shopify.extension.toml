@@ -1,15 +1,21 @@
-# COD fee notice — Thank You page banner for Cash on Delivery orders.
-# The +₱70 fee is added post-purchase via order edit (orders/create webhook),
-# so the Thank You page totals never include it; this block tells the buyer
-# the fee applies and the real total to pay on delivery.
+# COD "Total with fee" — Thank You page row for Cash on Delivery orders.
 #
-# Merchant must add the block once via the checkout editor:
-# Settings → Checkout → Customize → Thank you page → Add app block.
+# The +₱70 fee is added post-purchase via order edit (orders/create webhook), so
+# Shopify's own Total on this page is the pre-edit checkout snapshot and cannot
+# be modified by any extension. This block states the real amount to hand the
+# rider: Shopify's Total + the fee.
+#
+# Merchant must place the block once via the checkout editor:
+# Settings → Checkout → Customize → Thank you page → Add app block,
+# positioned directly BELOW the order summary's Total.
+#
+# The handle and uid are deliberately unchanged from the retired 2026-07-31
+# cod-fee-notice banner so an already-placed block keeps its position.
 
 api_version = "2026-04"
 
 [[extensions]]
-name = "cod-fee-notice"
+name = "COD Total With Fee"
 handle = "cod-fee-notice"
 type = "ui_extension"
 uid = "ed45e780-b460-a5aa-2dc5-01f1354b538238c1a9ee"
@@ -18,11 +24,14 @@ uid = "ed45e780-b460-a5aa-2dc5-01f1354b538238c1a9ee"
 module = "./src/Checkout.jsx"
 target = "purchase.thank-you.block.render"
 
-# Keep in sync with the COD fee product variant price (COD-FEE) and the
-# /app/cod-settings fee field — this only controls what the banner DISPLAYS.
+# Fallback fee only. The row prefers the amount actually charged (the gap
+# between the line list and the snapshot subtotal); this setting is used when
+# that signal isn't available — no fee line yet, or a discounted order.
+# Keep in sync with the COD Fee product variant price (COD-FEE) and the
+# /app/cod-settings fee field.
 [extensions.settings]
 [[extensions.settings.fields]]
 key = "fee_amount"
 type = "number_decimal"
 name = "COD fee amount"
-description = "Displayed COD fee. Must match the COD Fee product price (default 70)."
+description = "Fallback COD fee. Must match the COD Fee product price (default 70)."
