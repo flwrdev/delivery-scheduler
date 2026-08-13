@@ -21,8 +21,9 @@ target = "purchase.thank-you.block.render"
 
 # NOTE: the COD *totals* live in the separate `cod-fee-notice` extension, whose
 # block the merchant positions directly below Shopify's Total in the checkout
-# editor. src/OrderSummary.jsx (an earlier attempt at the same thing, from a
-# static target ABOVE the Subtotal row) is intentionally NOT registered here.
+# editor. Keep this extension to ONE target — a second one here would put two
+# entries in the picker under near-identical names, which is how the merchant
+# ended up placing the totals block twice on 2026-08-14.
 
 [[extensions.metafields]]
 namespace = "custom"
