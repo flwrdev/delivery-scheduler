@@ -43,7 +43,35 @@ export interface SearchShopProductsInput {
   query?: string;
   minPricePhp?: number;
   maxPricePhp?: number;
+  /** "price_asc" = cheapest first, "price_desc" = most expensive first. */
+  sort?: "price_asc" | "price_desc";
+  /** Product tags the result MUST have (color/type/compound), e.g. ["white"], ["red rose"]. */
+  tags?: string[];
+  /** Product tags to EXCLUDE, e.g. ["roses"] for "ayaw ko ng roses". */
+  excludeTags?: string[];
+  /** true = search ONLY add-ons (tag "Add-ons"); default/false = bouquets only (excludes add-ons). */
+  addons?: boolean;
 }
+
+// Shopify's product query has no price sortKey (price lives on variants), so a
+// "cheapest / most expensive" ask fetches a bounded pool and sorts IN CODE, then
+// returns only the carousel-worth. Bound keeps the Admin call cheap.
+const SORT_POOL_LIMIT = 100;
+
+// Merchant-curated best sellers (2026-08, exact titles). Shown as their own
+// carousel, ordered as listed here — NOT a Shopify best-selling metric and NOT a
+// collection link.
+const BEST_SELLER_TITLES = [
+  "Autumn Morning",
+  "Sweet Heart",
+  "California Dreaming",
+  "Luxe Noir",
+  "Majestic Bouquet",
+  "Meadow Fresh",
+  "Crimson Whisper",
+];
+const BEST_SELLER_NOTE =
+  "These are the shop's curated best sellers, live prices in PHP. A carousel is sent to the customer automatically after your reply — do not list the names or prices in your text.";
 
 export type SearchShopProductsResult =
   | {
@@ -256,9 +284,10 @@ function toProduct(productTitle: string, node: ProductNode, variant: VariantNode
 async function runProductSearch(
   admin: AdminGraphqlClient,
   query: string,
+  first: number = PRODUCT_CAROUSEL_LIMIT,
 ): Promise<MessengerProduct[]> {
   const response = await admin.graphql(SEARCH_PRODUCTS_QUERY, {
-    variables: { first: PRODUCT_CAROUSEL_LIMIT, query },
+    variables: { first, query },
   });
   const body = (await response.json()) as {
     data?: { products?: { nodes?: ProductNode[] } };
@@ -267,7 +296,9 @@ async function runProductSearch(
   const products: MessengerProduct[] = [];
   for (const node of nodes) {
     const variant = node.variants?.nodes?.[0];
-    if (!variant?.id || !node.title) {
+    // Skip unpublished/hidden products (no storefront url) — e.g. the internal
+    // "COD Fee" line-item product — so they never surface in a customer carousel.
+    if (!variant?.id || !node.title || !node.onlineStoreUrl) {
       continue;
     }
     products.push(toProduct(node.title, node, variant));
@@ -330,13 +361,36 @@ export async function searchShopProducts(
   }
 
   const terms: string[] = ["status:active", ...priceTerms];
+  // Add-on scope: bouquet browse/sort/reco EXCLUDES add-ons (tag "Add-ons"); the
+  // add-on upsell opts in with addons:true to search WITHIN add-ons.
+  terms.push(input.addons === true ? "tag:'Add-ons'" : "-tag:'Add-ons'");
   const keyword = input.query?.trim();
   if (keyword) {
     // Escape quotes; match on title.
     terms.push(`title:*${keyword.replace(/["\\]/g, "")}*`);
   }
+  // Tag filters — reliable color/type/compound matching (pink, roses, red rose…).
+  for (const tag of input.tags ?? []) {
+    const clean = tag.trim().replace(/['\\]/g, "");
+    if (clean) terms.push(`tag:'${clean}'`);
+  }
+  for (const tag of input.excludeTags ?? []) {
+    const clean = tag.trim().replace(/['\\]/g, "");
+    if (clean) terms.push(`-tag:'${clean}'`);
+  }
 
   try {
+    // Cheapest / most-expensive: fetch a bounded pool and sort by price in code
+    // (Shopify has no product-level price sortKey), then keep the carousel-worth.
+    if (input.sort) {
+      const pool = await runProductSearch(client.admin, terms.join(" "), SORT_POOL_LIMIT);
+      const sorted = [...pool].sort((a, b) =>
+        input.sort === "price_asc" ? a.pricePhp - b.pricePhp : b.pricePhp - a.pricePhp,
+      );
+      console.log(`[messenger-products] sorted ${pool.length} product(s) by ${input.sort}`);
+      return { ok: true, products: sorted.slice(0, PRODUCT_CAROUSEL_LIMIT), note: PRODUCTS_NOTE };
+    }
+
     const products = await runProductSearch(client.admin, terms.join(" "));
     console.log(`[messenger-products] search matched ${products.length} product(s)`);
     if (products.length > 0 || !keyword) {
@@ -372,6 +426,41 @@ export async function searchShopProducts(
     const detail = error instanceof Error ? error.message : "unknown";
     console.warn(`[messenger-products] search failed: ${detail}`);
     return { ok: false, error: `Product search failed: ${detail}` };
+  }
+}
+
+/**
+ * The merchant-curated best sellers (BEST_SELLER_TITLES), live prices/availability,
+ * ordered as curated. Fetched by an OR-of-titles query — no Shopify best-selling
+ * metric, no collection link. Returned in the SearchShopProductsResult shape so it
+ * rides the same carousel path as search_products.
+ */
+export async function getBestSellers(): Promise<SearchShopProductsResult> {
+  const client = await getAdminClient();
+  if (!client.ok) {
+    return { ok: false, error: client.error };
+  }
+  try {
+    const orClause = BEST_SELLER_TITLES.map(
+      (title) => `title:"${title.replace(/["\\]/g, "")}"`,
+    ).join(" OR ");
+    const found = await runProductSearch(client.admin, `status:active (${orClause})`);
+    const norm = (value: string) => value.normalize("NFD").toLowerCase().trim();
+    // Order by the curated list; append any matched-but-unlisted defensively.
+    const ordered = BEST_SELLER_TITLES.map((title) =>
+      found.find((product) => norm(product.productTitle) === norm(title)),
+    ).filter((product): product is MessengerProduct => Boolean(product));
+    const extra = found.filter((product) => !ordered.includes(product));
+    console.log(`[messenger-products] best sellers matched ${found.length}/${BEST_SELLER_TITLES.length}`);
+    return {
+      ok: true,
+      products: [...ordered, ...extra].slice(0, PRODUCT_CAROUSEL_LIMIT),
+      note: BEST_SELLER_NOTE,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown";
+    console.warn(`[messenger-products] best sellers failed: ${detail}`);
+    return { ok: false, error: `Best sellers lookup failed: ${detail}` };
   }
 }
 

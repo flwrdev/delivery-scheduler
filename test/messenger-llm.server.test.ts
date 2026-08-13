@@ -73,10 +73,29 @@ describe("runLlmTurn", () => {
 
     const params = createMock.mock.calls[0][0];
     expect(params.model).toBe("claude-sonnet-5");
-    expect(params.system).toBe(BASE_INPUT.system);
+    // Prompt caching: system is an array whose first (static) block carries the
+    // cache_control breakpoint; that block's text is the passed-in static prompt.
+    expect(params.system[0].text).toBe(BASE_INPUT.system);
+    expect(params.system[0].cache_control).toEqual({ type: "ephemeral" });
     expect(params.tools).toHaveLength(1);
     expect(params.tools[0].name).toBe("resolve_date");
     expect(params.max_tokens).toBeGreaterThanOrEqual(1024);
+  });
+
+  it("appends systemContext as a trailing UNCACHED system block", async () => {
+    createMock.mockResolvedValue({
+      content: [{ type: "text", text: "ok" }],
+      stop_reason: "end_turn",
+    });
+
+    await runLlmTurn({ ...BASE_INPUT, systemContext: "Current date: Aug 4." });
+
+    const params = createMock.mock.calls[0][0];
+    expect(params.system).toHaveLength(2);
+    expect(params.system[0].cache_control).toEqual({ type: "ephemeral" });
+    expect(params.system[1].text).toBe("Current date: Aug 4.");
+    // The volatile block must NOT be cached (it changes every call).
+    expect(params.system[1].cache_control).toBeUndefined();
   });
 
   it("maps tool_use blocks", async () => {
