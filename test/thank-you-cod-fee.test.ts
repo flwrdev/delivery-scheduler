@@ -188,16 +188,17 @@ describe.each(COPIES)("cod-fee.js in $name", ({ mod }) => {
       expect(codFeeLineIsVisible()).toBe(false);
     });
 
-    // Unlike resolveCodFee, this deliberately does NOT bail out on a discount:
-    // a false "visible" costs one explanatory row, a false "not visible" makes
-    // the duplicate this check exists to prevent.
-    it("still reports visible on a discounted order", () => {
+    // A cart discount can open the same gap, so on a discounted order the gap
+    // no longer proves the fee line landed. Report "not visible" and let the
+    // stand-in render: a stray duplicate is recoverable, a fee the customer
+    // never sees is not.
+    it("reports NOT visible on a discounted order, whatever the gap", () => {
       setShopify({
         lines: [line(799), line(70)],
         subtotal: 799,
         cartDiscounts: [{ discountedAmount: { amount: 50, currencyCode: "PHP" } }],
       });
-      expect(codFeeLineIsVisible()).toBe(true);
+      expect(codFeeLineIsVisible()).toBe(false);
     });
 
     it("is false when the lines / cost APIs are unavailable", () => {

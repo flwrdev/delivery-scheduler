@@ -45,9 +45,17 @@ export function resolveCodFee() {
 // see the list without it. Nothing in an extension can hide that line, so the
 // stand-in row we draw in its place must disappear the moment it arrives.
 //
-// Deliberately ignores the discount guard below: a false "visible" costs one
-// explanatory row, a false "not visible" shows ₱70 twice. Bias toward quiet.
+// A cart-level discount can open the same gap this reads (see feeFromLineGap
+// below), which would hide the stand-in on a discounted order even though the
+// real line has NOT landed — the fee would then be missing entirely. When the
+// signal is ambiguous, show the fee: a stray duplicate is recoverable, a fee
+// the customer never sees is not.
 export function codFeeLineIsVisible() {
+  const cartDiscounts = shopify.discountAllocations?.value ?? [];
+  if (cartDiscounts.length > 0) {
+    return false;
+  }
+
   return lineGap() > 0.005;
 }
 
