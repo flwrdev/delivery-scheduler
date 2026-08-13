@@ -74,7 +74,7 @@ it("keeps the two cod-fee.js copies byte-identical", () => {
 });
 
 describe.each(COPIES)("cod-fee.js in $name", ({ mod }) => {
-  const { isCashOnDeliveryOrder, resolveCodFee } = mod;
+  const { codFeeLineIsVisible, isCashOnDeliveryOrder, resolveCodFee } = mod;
 
   describe("isCashOnDeliveryOrder", () => {
     it("matches the manual COD method's paymentOnDelivery type", () => {
@@ -174,4 +174,41 @@ describe.each(COPIES)("cod-fee.js in $name", ({ mod }) => {
     });
   });
 
+  // Drives whether FeeLine.jsx draws its stand-in "COD FEE" row. Shopify's own
+  // line item cannot be hidden, so the stand-in must vanish the moment the
+  // real one lands — otherwise the customer reads ₱70 twice.
+  describe("codFeeLineIsVisible", () => {
+    it("is true once the fee line has landed in the list", () => {
+      setShopify({ lines: [line(799), line(70)], subtotal: 799 });
+      expect(codFeeLineIsVisible()).toBe(true);
+    });
+
+    it("is false while the list is still the pre-edit snapshot", () => {
+      setShopify({ lines: [line(799)], subtotal: 799 });
+      expect(codFeeLineIsVisible()).toBe(false);
+    });
+
+    // Unlike resolveCodFee, this deliberately does NOT bail out on a discount:
+    // a false "visible" costs one explanatory row, a false "not visible" makes
+    // the duplicate this check exists to prevent.
+    it("still reports visible on a discounted order", () => {
+      setShopify({
+        lines: [line(799), line(70)],
+        subtotal: 799,
+        cartDiscounts: [{ discountedAmount: { amount: 50, currencyCode: "PHP" } }],
+      });
+      expect(codFeeLineIsVisible()).toBe(true);
+    });
+
+    it("is false when the lines / cost APIs are unavailable", () => {
+      setShopify({});
+      expect(codFeeLineIsVisible()).toBe(false);
+
+      setShopify({ lines: [], subtotal: 799 });
+      expect(codFeeLineIsVisible()).toBe(false);
+
+      setShopify({ lines: [line(799)], subtotal: 900 });
+      expect(codFeeLineIsVisible()).toBe(false);
+    });
+  });
 });

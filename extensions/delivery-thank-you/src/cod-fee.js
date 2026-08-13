@@ -39,6 +39,18 @@ export function resolveCodFee() {
     : DEFAULT_COD_FEE;
 }
 
+// Whether Shopify is ALREADY listing the "COD FEE" line item. It draws that
+// line from `order.lineItems` once the orders/create order edit lands — 7-10s
+// after checkout on prod, while this page renders in 1-3s — so most customers
+// see the list without it. Nothing in an extension can hide that line, so the
+// stand-in row we draw in its place must disappear the moment it arrives.
+//
+// Deliberately ignores the discount guard below: a false "visible" costs one
+// explanatory row, a false "not visible" shows ₱70 twice. Bias toward quiet.
+export function codFeeLineIsVisible() {
+  return lineGap() > 0.005;
+}
+
 // The orders/create webhook adds the COD Fee line AFTER checkout completes, so
 // this page can already list that line while `cost` is still the pre-edit
 // checkout snapshot. When that is the case, the gap between the line list and
@@ -59,10 +71,18 @@ function feeFromLineGap() {
     return null;
   }
 
+  const gap = lineGap();
+  return gap > 0.005 ? gap : null;
+}
+
+// How much the line list exceeds the snapshot subtotal — the fee, once its
+// line has landed. 0 when either API is unavailable, so both callers above
+// read that as "no fee line".
+function lineGap() {
   const lines = shopify.lines?.value ?? [];
   const subtotal = Number(shopify.cost?.subtotalAmount?.value?.amount);
   if (lines.length === 0 || !Number.isFinite(subtotal)) {
-    return null;
+    return 0;
   }
 
   const linesTotal = lines.reduce(
@@ -70,6 +90,5 @@ function feeFromLineGap() {
     0,
   );
 
-  const gap = linesTotal - subtotal;
-  return gap > 0.005 ? gap : null;
+  return linesTotal - subtotal;
 }
