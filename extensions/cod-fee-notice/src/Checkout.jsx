@@ -2,6 +2,7 @@
 // Thank You page (purchase.thank-you.block.render).
 //
 //     ─────────────────────────────────────
+//     COD FEE                      ₱70.00
 //     Total with fee            ₱1,034.00
 //
 // Why this exists as its own extension:
@@ -26,13 +27,24 @@
 // The card in `delivery-thank-you` explains WHY the fee is there; this row only
 // states the number, so the two never restate the same total twice.
 //
+// Both rows live in THIS block because it is the only surface that renders.
+// `purchase.thank-you.cart-line-list.render-after` would have put the fee row
+// in the item list, exactly where Shopify draws the real line — but a
+// diagnostic build that rendered unconditionally produced nothing on a live
+// COD order (dev-22, order #TA47AH0MC, 2026-08-14), so that static target does
+// not run on this shop. Do not reach for it again without re-testing.
+//
 // COD detection and the fee amount come from ./cod-fee.js, a byte-identical
 // copy of the one in delivery-thank-you/src (see that file's header).
 
 import '@shopify/ui-extensions/preact';
 import {render} from "preact";
 
-import {isCashOnDeliveryOrder, resolveCodFee} from './cod-fee.js';
+import {
+  codFeeLineIsVisible,
+  isCashOnDeliveryOrder,
+  resolveCodFee,
+} from './cod-fee.js';
 
 export default async () => {
   render(<Extension />, document.body);
@@ -55,16 +67,24 @@ function Extension() {
 
   const currency = total.currencyCode ?? 'PHP';
 
+  // The fee row names the ₱70 that turns Shopify's Total into the amount the
+  // rider collects. It is skipped only when Shopify is ALREADY listing the real
+  // "COD FEE" line item — that line is drawn from `order.lineItems` and no
+  // extension can hide it, so repeating it would show ₱70 twice in one panel.
+  // In practice the order edit lands 7-10s after this page renders, so the row
+  // is what the customer usually sees.
+  const showFeeRow = !codFeeLineIsVisible();
+
   return (
     <s-stack direction="block" gap="base">
       <s-divider />
-      {/* One row only. Shopify already lists the fee as a "COD FEE" line item
-          (drawn from `order.lineItems`, added by the orders/create order edit),
-          and no extension can hide it — so restating it here would put ₱70
-          twice in one panel. Merchant decision 2026-08-14.
-          `strong` (bold), not `emphasis` — emphasis renders italic, which read
+      {/* `strong` (bold), not `emphasis` — emphasis renders italic, which read
           as a footnote next to Shopify's bold Total row. */}
       <s-grid gridTemplateColumns="1fr auto" gap="small-200">
+        {showFeeRow ? <s-text>COD FEE</s-text> : null}
+        {showFeeRow ? (
+          <s-text>{shopify.i18n.formatCurrency(fee, {currency})}</s-text>
+        ) : null}
         <s-text type="strong">Total with fee</s-text>
         <s-text type="strong">
           {shopify.i18n.formatCurrency(orderTotal + fee, {currency})}
