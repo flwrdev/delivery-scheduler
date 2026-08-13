@@ -19,6 +19,11 @@ uid = "44f2b914-bc99-5eb8-57fb-7f587681a1863e539d62"
 module = "./src/Checkout.jsx"
 target = "purchase.thank-you.block.render"
 
+# NOTE: the COD *totals* live in the separate `cod-fee-notice` extension, whose
+# block the merchant positions directly below Shopify's Total in the checkout
+# editor. src/OrderSummary.jsx (an earlier attempt at the same thing, from a
+# static target ABOVE the Subtotal row) is intentionally NOT registered here.
+
 [[extensions.metafields]]
 namespace = "custom"
 key = "date"
