@@ -4,7 +4,10 @@
 //     app's PaymentCustomization (read live by the checkout function),
 //   - the COD Fee variant's price (SKU COD-FEE — the amount the orders/create
 //     webhook adds to COD orders),
-//   - the payment customization's enabled flag.
+//   - the payment customization's enabled flag,
+//   - two shop metafields mirroring the fee for the surfaces that cannot read a
+//     variant price: `$app:cod`/`fee` (checkout UI extensions) and
+//     `custom`/`cod_fee` (Liquid, i.e. the order confirmation email).
 // None of these touch delivery state — see api.md ("COD settings" caveat).
 // Per ADR-11, the action always answers 200 + { ok, ... }.
 
@@ -101,9 +104,24 @@ const SHOP_ID_QUERY = `#graphql
 export const COD_FEE_METAFIELD_NAMESPACE = "$app:cod";
 export const COD_FEE_METAFIELD_KEY = "fee";
 
+// The SAME fee, mirrored a second time under a plain (non app-reserved)
+// namespace so LIQUID can read it — `$app:cod` resolves to `app--<id>--cod`,
+// which only this app can see, and Liquid is not this app.
+//
+// This copy exists for the Order confirmation NOTIFICATION, which today
+// hardcodes "+ ₱70.00" and adds 70 into its own subtotal/total. It cannot read
+// the fee off the order either: Shopify sends that email seconds BEFORE the
+// orders/create webhook adds the COD Fee line (prod #4097 — email 20:48:59,
+// line item 20:49:04), so at render time the order does not have the fee yet.
+// A shop metafield is the only value that is correct at that instant.
+export const COD_FEE_LIQUID_NAMESPACE = "custom";
+export const COD_FEE_LIQUID_KEY = "cod_fee";
+
 type CodConfig = {
   minimumAmount?: number;
   maximumAmount?: number;
+  /** Display-only copy for the checkout function's paymentMethodRename. */
+  feeAmount?: number;
   [key: string]: unknown;
 };
 
@@ -222,6 +240,12 @@ export const action = async ({ request }: { request: Request }) => {
     merged.minimumAmount = minimumAmount ?? 0;
     if (maximumAmount === null) delete merged.maximumAmount;
     else merged.maximumAmount = maximumAmount;
+    // Third copy of the fee, this one for the checkout function: it renames the
+    // COD payment method so the "+₱70" the merchant typed into Settings →
+    // Payments follows this page. The function reads only this metafield, and
+    // Shopify exposes no API for that method's name.
+    if (feeAmount === null) delete merged.feeAmount;
+    else merged.feeAmount = feeAmount;
 
     const setResponse = await admin.graphql(SET_CONFIG_MUTATION, {
       variables: {
@@ -277,13 +301,17 @@ export const action = async ({ request }: { request: Request }) => {
         errors.push(`COD fee: ${err.message}`);
       }
 
-      // Mirror the fee onto a shop metafield so the Thank You page can show the
-      // amount that will actually be charged. The extension there cannot read a
-      // variant price — the COD Fee product is unpublished from the Online
-      // Store on purpose — and before this it fell back to a SEPARATE
-      // checkout-editor setting, so repricing here left the customer reading
-      // the old number while being charged the new one (caught 2026-08-14:
-      // fee set to ₱85, Thank You page still said ₱70).
+      // Mirror the fee onto shop metafields so the surfaces that CANNOT read the
+      // variant price still show the amount that will actually be charged (the
+      // COD Fee product is unpublished from the Online Store on purpose). Before
+      // this, each surface fell back to its own separate copy of the number, so
+      // repricing here left the customer reading the old one while being charged
+      // the new one (caught 2026-08-14: fee set to ₱85, Thank You page still
+      // said ₱70).
+      //
+      // Two copies of the same value, because no single namespace is readable
+      // everywhere: `$app:cod` for the checkout UI extensions, `custom.cod_fee`
+      // for Liquid (see the constants above).
       //
       // A failure here must not fail the save: the price above is what gets
       // charged and is already committed. The customer would just see a stale
@@ -302,6 +330,13 @@ export const action = async ({ request }: { request: Request }) => {
                 ownerId: shopId,
                 namespace: COD_FEE_METAFIELD_NAMESPACE,
                 key: COD_FEE_METAFIELD_KEY,
+                type: "number_decimal",
+                value: feeAmount.toFixed(2),
+              },
+              {
+                ownerId: shopId,
+                namespace: COD_FEE_LIQUID_NAMESPACE,
+                key: COD_FEE_LIQUID_KEY,
                 type: "number_decimal",
                 value: feeAmount.toFixed(2),
               },
