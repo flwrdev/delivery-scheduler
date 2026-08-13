@@ -38,8 +38,20 @@ function setShopify(stub: {
   subtotal?: number;
   feeSetting?: unknown;
   cartDiscounts?: unknown[];
+  shopFee?: unknown;
 }) {
   (globalThis as Record<string, unknown>).shopify = {
+    appMetafields: {
+      value:
+        stub.shopFee === undefined
+          ? []
+          : [
+              {
+                target: { type: "shop" },
+                metafield: { key: "fee", value: stub.shopFee },
+              },
+            ],
+    },
     selectedPaymentOptions:
       stub.paymentOptions === undefined
         ? undefined
@@ -141,6 +153,38 @@ describe.each(COPIES)("cod-fee.js in $name", ({ mod }) => {
         cartDiscounts: [{ discountedAmount: { amount: 70, currencyCode: "PHP" } }],
       });
       expect(resolveCodFee()).toBe(70);
+    });
+
+    // The whole point of the shop metafield: /app/cod-settings sets the COD Fee
+    // VARIANT price, which the extension cannot read, so the page mirrors the
+    // amount here. Without it, repricing to ₱85 left the customer reading ₱70
+    // while the rider collected ₱85 (prod order #4096, 2026-08-14).
+    it("uses what /app/cod-settings saved before the block's own setting", () => {
+      setShopify({
+        lines: [line(799)],
+        subtotal: 799,
+        shopFee: "85.00",
+        feeSetting: 70,
+      });
+      expect(resolveCodFee()).toBe(85);
+    });
+
+    // The charged amount still wins: if the fee line has landed, that is what
+    // the customer is actually paying, whatever the settings page last said.
+    it("still prefers the charged amount over the shop metafield", () => {
+      setShopify({
+        lines: [line(799), line(100)],
+        subtotal: 799,
+        shopFee: "85.00",
+      });
+      expect(resolveCodFee()).toBeCloseTo(100, 5);
+    });
+
+    it("ignores a blank, zero or non-numeric shop metafield", () => {
+      for (const shopFee of ["", "0", "-5", "abc"]) {
+        setShopify({ lines: [line(799)], subtotal: 799, shopFee, feeSetting: 70 });
+        expect(resolveCodFee()).toBe(70);
+      }
     });
 
     it("falls back to the merchant setting when the fee line has not landed yet", () => {

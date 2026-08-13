@@ -24,6 +24,16 @@ uid = "ed45e780-b460-a5aa-2dc5-01f1354b538238c1a9ee"
 module = "./src/Checkout.jsx"
 target = "purchase.thank-you.block.render"
 
+# The COD fee amount, mirrored here by /app/cod-settings so the Thank You page
+# shows the amount that will actually be charged. The extension cannot read the
+# COD Fee variant's price — that product is unpublished from the Online Store
+# on purpose — and the block's own `fee_amount` setting is a SEPARATE field that
+# does not follow the settings page (caught 2026-08-14: fee set to ₱85, page
+# still said ₱70). Same mechanism the delivery date/time already use.
+[[extensions.metafields]]
+namespace = "$app:cod"
+key = "fee"
+
 # Fallback fee only. The row prefers the amount actually charged (the gap
 # between the line list and the snapshot subtotal); this setting is used when
 # that signal isn't available — no fee line yet, or a discounted order.
