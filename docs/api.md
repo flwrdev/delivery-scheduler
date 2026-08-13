@@ -33,7 +33,7 @@ Know which one you're in before writing a handler:
 | ------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `/app` (shell + nav)                  | [app/routes/app.jsx](../app/routes/app.jsx)                                           | No — loader only.                                                                                                                                                                                                                                                                                            |
 | `/app/_index` (redirect to orders)    | [app/routes/app.\_index.jsx](../app/routes/app._index.jsx)                            | No — loader-side redirect. Default destination is `/app/orders` (`sanitizeEmbeddedAppReturnTo(...) ?? "/app/orders"`; Scheduler V2 D2 — Orders Ops is the app home since Phase 3).                                                                                                                            |
-| `/app/orders`                         | [app/routes/app.orders.tsx](../app/routes/app.orders.tsx)                             | **Yes — generic order bulk actions PLUS, since Orders Ops V2 Phase 4, the merchant `reschedule` op (a delivery write path — see §2, row 4).** Generic mutations: `orderClose`, `orderOpen`, `orderCancel`, `tagsAdd`, `tagsRemove`, `fulfillmentCreate`. The `reschedule` op calls the shared `rescheduleOrderDelivery()` service. Also hosts the `sendEmail` op (Customer Email, 2026-07-13, ADR-11): sends plain-text mail through the merchant's business mailbox via [`send-customer-email.server.ts`](../app/services/send-customer-email.server.ts) — an **outbound side effect that writes NOTHING to any order** (explicitly NOT a delivery write path; the §2 table is unchanged). |
+| `/app/orders`                         | [app/routes/app.orders.tsx](../app/routes/app.orders.tsx)                             | **Yes — generic order bulk actions PLUS, since Orders Ops V2 Phase 4, the merchant `reschedule` op (a delivery write path — see §2, row 4).** Generic mutations: `orderClose`, `orderOpen`, `orderCancel`, `tagsAdd`, `tagsRemove`, `fulfillmentCreate`. The `reschedule` op calls the shared `rescheduleOrderDelivery()` service. Also hosts the `sendEmail` op (Customer Email, 2026-07-13, ADR-11): sends plain-text mail through the merchant's business mailbox via [`send-customer-email.server.ts`](../app/services/send-customer-email.server.ts) — an **outbound side effect that writes NOTHING to any order** (explicitly NOT a delivery write path; the §2 table is unchanged). And the `editDetails` op (2026-08-14, ADR-15): a single-order `orderUpdate(shippingAddress)` rewrite of street / apartment / city / ZIP / receiver phone via [`update-order-contact.server.ts`](../app/services/update-order-contact.server.ts) — an order write but **NOT a delivery write** (see the §2 caveat below). |
 | `/app/orders/reschedule-rules`        | [app/routes/app.orders_.reschedule-rules.ts](../app/routes/app.orders_.reschedule-rules.ts) | No — read-only resource route (loader only): returns the delivery schedule rules + live booked counts for the reschedule modal (fetched lazily on modal open; session auth).                                                                                                                       |
 | `/app/scheduler`                      | [app/routes/app.scheduler.tsx](../app/routes/app.scheduler.tsx)                       | **Yes — writes `DeliveryScheduleConfig` only** (Scheduler V2 Phase 3 merged Polaris page). Granular ops (`op` discriminator via [scheduler-ops.server.ts](../app/services/scheduler-ops.server.ts)): `saveSettings` · `createSlot` · `updateSlotDisplay` · `reorderSlots` · `deleteSlot` · `saveDayOverride` · `clearDayOverride` · `refreshCounts` (cache bust, no write). All writes go through `upsertScheduleRules` under the optimistic `version` guard; every response is `200 + {ok,…}` (ADR-11). Does not touch any order. |
 | `/app/schedule-rules`                 | [app/routes/app.schedule-rules.tsx](../app/routes/app.schedule-rules.tsx)             | No — thin authenticated redirect stub to `/app/scheduler` (Scheduler V2 D2; embedded query params preserved). The old folder-route editor is deleted.                                                                                                                                                        |
@@ -107,6 +107,7 @@ Phase 3 (queue + Neon) of the FlowerCart Messenger agent — master context live
 | Order utility helpers             | [app/lib/order-utils.ts](../app/lib/order-utils.ts)                                                                   |
 | Rules loader + booked-count merge | [app/services/schedule-rules.server.ts](../app/services/schedule-rules.server.ts) — `getScheduleRulesDetailed` owns `countsMeta` (`ok`/`partial`/`untracked`/`skipped`/`error` + optional `truncation`) |
 | Order metafield + tag sync        | [app/services/order-delivery-metafields.server.ts](../app/services/order-delivery-metafields.server.ts)               |
+| **Shipping-address rewrite (ADR-15)** | [app/services/update-order-contact.server.ts](../app/services/update-order-contact.server.ts) — `handleEditDetailsOp` (the `editDetails` op) + `buildNextShippingAddress` (the ONE place the overwrite carry-forward happens) / `validateOrderContactPatch` / `hasContactChanges`. Not a delivery write path |
 | Booked-counts engine (Scheduler V2 §5, ADR-12) | [app/services/delivery-bookings.server.ts](../app/services/delivery-bookings.server.ts) — `getDeliveryBookingsSnapshot` (metafield-date-scoped orders search, 60s in-process memo; returns `truncation` when either scan cap clipped the set) + `deriveBookedCounts` (per-read counts w/ exclude-self) |
 | Scheduler granular ops (Scheduler V2 §4.4) | [app/services/scheduler-ops.server.ts](../app/services/scheduler-ops.server.ts) — `runSchedulerOp` (per-section patch + version guard) |
 | Structured slot times (Scheduler V2 §4.3)  | [app/lib/slot-times.ts](../app/lib/slot-times.ts) — `generateSlotValue`/`parseSlotValueToTimes` (frozen `"9AM-12PM"` wire format) |
@@ -161,6 +162,58 @@ The `sendEmail` op (Customer Email, ADR-11) is not an order mutation at all: it
 re-reads the order's customer email (read-only query — the recipient is never
 client-supplied) and sends SMTP mail via `sendCustomerEmail()`; it writes no
 metafield, tag, or customAttribute.
+
+### `editDetails` — a shipping-address write OUTSIDE the delivery contract (2026-08-14)
+
+The panel's Actions menu → "Edit details" posts the `editDetails` op, handled by
+[`update-order-contact.server.ts`](../app/services/update-order-contact.server.ts).
+Single order, five editable fields: `address1`, `address2`, `city`, `zip`, and the
+**receiver** phone (`shippingAddress.phone`). One `orderUpdate(input: {shippingAddress})`
+call; requires `write_orders`, which the app already holds — **no scope change, no
+reinstall**. Design facts (ADR-15):
+
+- **`OrderInput.shippingAddress` MERGES, despite the schema doc saying it "Overwrites
+  the existing shipping address".** Measured live on dev-store order `#1034`
+  (2026-08-14): sending `address1` alone left `firstName`, `lastName`, `city`,
+  `provinceCode`, `countryCodeV2`, and `zip` untouched. Consequences, in order of how
+  easy they are to get wrong:
+  - **Clearing a field needs an explicit `""`.** Omitting the key changes nothing —
+    a silent no-op that still returns success. `address2: ""` and `phone: ""` both
+    clear (verified); `buildNextShippingAddress()` therefore *always* emits those two
+    keys, empty or not.
+  - **`zip: ""` is rejected** ("Enter a postal code" — PH requires one) and the
+    rejection **fails the whole mutation**, taking any street/city edit in the same
+    submit down with it. The ZIP is treated as un-clearable: the server blocks an
+    emptied ZIP when the order has one, and the modal disables Save with an inline
+    reason.
+  - The carry-forward of `firstName`/`lastName`/`company`/`provinceCode`/`countryCode`
+    is now belt-and-braces rather than load-bearing. It is kept on purpose — the
+    *documented* contract is overwrite, so this keeps working if Shopify ever makes
+    behaviour match the docs. `buildNextShippingAddress()` is the ONLY place it
+    happens; nothing else in the codebase builds a `MailingAddressInput` for an order.
+- **No free-text province or country.** `MailingAddressInput` exposes `provinceCode`
+  and `countryCode` only; the `province: "Ontario"` example in Shopify's own
+  `orderUpdate` docs is stale. The read side spells the country **`countryCodeV2`**,
+  the write side **`countryCode`** — the mapping is asserted by a unit test. Live
+  values on this shop are `provinceCode: "PH-00"` (not `"00"`) and
+  `countryCode: "PH"`; both round-trip unchanged through a save.
+- **The stored address is re-read server-side** at write time and never taken from the
+  client, so the carry-forward values cannot be steered by a crafted form post. The
+  orders loader also reads the five carry-forward fields, but only so the modal can
+  display what it is about to preserve.
+- **Sender phone is deliberately NOT editable.** `customer.defaultPhoneNumber` lives on
+  the customer record; changing it needs `write_customers`, which the app does not hold
+  and which would force a merchant reinstall. The receiver phone above is the number
+  the rider actually dials.
+- **Administrative override, never blocked** (ADR-10 posture), but the modal warns on
+  the two cases where the edit does less than it appears to: a FULFILLED / in-transit
+  order (the parcel is already out) and a changed city (shipping was priced by the
+  courier at checkout and is **not** re-computed).
+- **NOT delivery state**: writes no delivery metafield, tag, or customAttribute — the §2
+  table above is unchanged. Failure responses are `200 + ok:false`; validation stays 4xx
+  (ADR-11).
+- Accepted limits: no concurrency guard (last write wins, same posture as REC-5 on the
+  reschedule path), and no delivery-fee re-pricing on a city change.
 
 None of these generic mutations are part of the delivery sync contract — none write `custom.date`, `custom.time_slot`, `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date`, `$app.reschedule_status`, `$app.reschedule_requested_at`, `delivery.reschedule_history`, or the `Delivery Date` / `Delivery Time` customAttributes. (The former bouquet-photo pipeline — `stagedUploadsCreate` + `fileCreate` + a `custom.bouquet_photo` `orderUpdate` — was **removed 2026-07-12**; the feature was descoped from Orders Ops V2, see audit §F.)
 
