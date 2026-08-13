@@ -8,7 +8,7 @@
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
     "deploy": "echo Specify npm run deploy:dev or npm run deploy:prod -- a bare deploy is disabled to prevent hitting the wrong app && exit 1",
-    "deploy:dev": "shopify app deploy --config shopify.app.toml",
+    "deploy:dev": "shopify app deploy --config shopify.app.toml --allow-updates",
     "deploy:prod": "shopify app deploy --config shopify.app.production.toml --allow-updates",
     "config:use": "shopify app config use",
     "env": "shopify app env",
