@@ -7,8 +7,10 @@ import type { BulkActionName, BulkActionResponse } from "../routes/app.orders";
 // so closing on action success is a plain setState — this replaces the old
 // s-modal show()/hide()/removeAttribute("open") DOM pokes that could not
 // reliably close a command-shown modal (audit S1/S2/S6, B1/B2).
-// "sendEmail" is panel-only (single order, own fetcher in SendEmailModal) but
-// shares this union so the §6 smart-refresh pause covers it like every modal.
+// "sendEmail" and "editDetails" are panel-only (single order, own fetcher in
+// their own modal) but share this union so the §6 smart-refresh pause covers
+// them like every modal — that pause is what keeps a background revalidation
+// from landing underneath a half-typed address.
 export type BulkModalName =
   | "archive"
   | "unarchive"
@@ -17,7 +19,8 @@ export type BulkModalName =
   | "removeTags"
   | "markFulfilled"
   | "reschedule"
-  | "sendEmail";
+  | "sendEmail"
+  | "editDetails";
 
 // Bulk-action state, submission, modal visibility, and toast/result handling
 // for /app/orders. Selection now comes from Polaris useIndexResourceState:

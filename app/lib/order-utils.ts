@@ -30,6 +30,13 @@ export interface ShippingAddress {
   zip: string | null;
   country: string | null;
   phone: string | null;
+  // Read-only carry-forward fields (editDetails op). Optional because the
+  // Messenger orders page queries a narrower address shape.
+  firstName?: string | null;
+  lastName?: string | null;
+  company?: string | null;
+  provinceCode?: string | null;
+  countryCodeV2?: string | null;
 }
 
 export interface BillingAddress {
