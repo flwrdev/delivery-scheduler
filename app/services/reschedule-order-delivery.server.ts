@@ -1,4 +1,6 @@
 import { RESCHEDULED_ORDER_TAG } from "../lib/constants";
+import { getShopLocalDate } from "../lib/delivery-availability";
+import { buildOrderEventTag } from "../lib/order-tags";
 import {
   type AdminGraphQLClient,
   type OrderCustomAttribute,
@@ -48,6 +50,13 @@ export interface RescheduleOrderDeliveryOptions {
   currentCustomAttributes: OrderCustomAttribute[];
   existingRescheduleHistoryValue: string | null;
   requestedAt?: string;
+  /**
+   * Shop IANA timezone, used to stamp the `resched-<date>` event tag on the
+   * merchant's calendar day. Both callers already have it on the loaded rules.
+   * Omitted falls back to the shop default rather than the server's zone —
+   * stamping UTC is what put a 4:07 AM reschedule on the previous day.
+   */
+  shopTimezone?: string;
 }
 
 export interface RescheduleOrderDeliveryResult {
@@ -274,18 +283,33 @@ export async function rescheduleOrderDelivery(
   }
 
   // ── Step 4: schedule tags — remove prior delivery tags, add the new date +
-  //    slot labels. The `resched` self-service lock tag is customer-flow-only
-  //    (§5): a merchant override does not consume the customer's one online
-  //    reschedule.
+  //    slot labels. Two additional tags, which are NOT the same thing:
+  //      · `resched` — the self-service LOCK, customer-flow-only (§5): a
+  //        merchant override does not consume the customer's one online
+  //        reschedule. Matched exactly by both reschedule routes.
+  //      · `resched-<shop-local date>` — the timeline event tag, written on
+  //        BOTH paths. Survives the sync's removal pass because it is not
+  //        shaped like a delivery schedule tag (pinned by a test).
   let tagSync: RescheduleSyncState = "updated";
   try {
+    // Stamped from `rescheduledAt`, not from "now", so the tag date and the
+    // reschedule_history timestamp can never disagree about which day this
+    // was — and so the write is deterministic for a caller that supplies
+    // requestedAt.
+    const eventTag = buildOrderEventTag(
+      "reschedule",
+      getShopLocalDate(options.shopTimezone, new Date(rescheduledAt)),
+    );
+    const additionalTags = [
+      ...(options.source === "customer" ? [RESCHEDULED_ORDER_TAG] : []),
+      ...(eventTag ? [eventTag] : []),
+    ];
     const tagResult = await syncOrderDeliveryScheduleTag(admin, {
       orderId: options.orderId,
       deliveryDate: options.date,
       timeSlot: options.timeSlot,
       currentTags: options.currentTags,
-      additionalTags:
-        options.source === "customer" ? [RESCHEDULED_ORDER_TAG] : [],
+      additionalTags,
     });
     if (!tagResult.ok) {
       tagSync = "failed";

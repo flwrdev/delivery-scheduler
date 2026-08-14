@@ -187,12 +187,16 @@ describe("rescheduleOrderDelivery — write sequence & mirrors", () => {
     ]);
 
     // Tags: only the schedule tags are removed; the customer source adds the
-    // resched self-service lock alongside the new date + slot.
+    // resched self-service LOCK alongside the new date + slot, plus the
+    // `resched-<date>` timeline event tag. The event date is stamped from
+    // requestedAt in the shop's zone (2026-07-11T12:00Z is 8 PM in Manila),
+    // so it cannot drift from the reschedule_history timestamp.
     expect(calls[3].variables?.tags).toEqual(["2026-07-15", "9AM-12PM"]);
     expect(calls[4].variables?.tags).toEqual([
       "2026-07-20",
       "3PM-6PM",
       "resched",
+      "resched-2026-07-11",
     ]);
   });
 
@@ -203,8 +207,14 @@ describe("rescheduleOrderDelivery — write sequence & mirrors", () => {
       source: "merchant",
     });
 
+    // The LOCK is customer-only; the timeline event tag is written on both
+    // paths, so a merchant override still shows up on the merchant's timeline.
     const addCall = calls.find((c) => c.query.includes("tagsAdd"));
-    expect(addCall?.variables?.tags).toEqual(["2026-07-20", "3PM-6PM"]);
+    expect(addCall?.variables?.tags).toEqual([
+      "2026-07-20",
+      "3PM-6PM",
+      "resched-2026-07-11",
+    ]);
     const historyValue = JSON.parse(metafieldsOf(calls[1])[0].value);
     expect(historyValue[0].source).toBe("merchant");
   });
@@ -262,7 +272,39 @@ describe("rescheduleOrderDelivery — write sequence & mirrors", () => {
       "2026-07-20",
       "3PM-6PM",
       "resched",
+      "resched-2026-07-11",
     ]);
+  });
+
+  it("stamps the event tag on the SHOP's day, not the server's or UTC's", async () => {
+    // 2026-07-11T20:07Z is 4:07 AM on the 12th in Manila. Stamping UTC here is
+    // the same off-by-one-day class of bug that made the admin order page show
+    // a reschedule as happening before the order was placed (prod #4068).
+    const { admin, calls } = makeAdmin();
+    await rescheduleOrderDelivery(admin, {
+      ...baseOptions,
+      source: "merchant",
+      requestedAt: "2026-07-11T20:07:25.285Z",
+      shopTimezone: "Asia/Manila",
+    });
+
+    const addCall = calls.find((c) => c.query.includes("tagsAdd"));
+    expect(addCall?.variables?.tags).toContain("resched-2026-07-12");
+    expect(addCall?.variables?.tags).not.toContain("resched-2026-07-11");
+  });
+
+  it("still writes the schedule tags when the event tag cannot be built", async () => {
+    // An unusable requestedAt must not cost the order its date/slot tags.
+    const { admin, calls } = makeAdmin();
+    const result = await rescheduleOrderDelivery(admin, {
+      ...baseOptions,
+      source: "merchant",
+      requestedAt: "not a timestamp",
+    });
+
+    const addCall = calls.find((c) => c.query.includes("tagsAdd"));
+    expect(addCall?.variables?.tags).toEqual(["2026-07-20", "3PM-6PM"]);
+    expect(result.tagSync).toBe("updated");
   });
 });
 

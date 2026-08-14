@@ -1,3 +1,5 @@
+import { orderEventTagLabel } from "./order-tags";
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface EmailAddress {
@@ -278,7 +280,13 @@ export function isHiddenTag(tag: string): boolean {
 export function tagDisplayLabel(tag: string): string {
   const lower = tag.toLowerCase().trim();
   if (lower === "ops_md_checked") return "Checked";
+  // The bare `resched` LOCK, not the `resched-<date>` timeline event tag —
+  // those are handled by orderEventTagLabel below.
   if (lower === "resched") return "Rescheduled";
+  // Timeline event tags read as "Rescheduled · Aug 14" instead of the raw
+  // slug. Returns null for anything that isn't one of ours.
+  const eventLabel = orderEventTagLabel(tag);
+  if (eventLabel) return eventLabel;
   return tag.trim();
 }
 

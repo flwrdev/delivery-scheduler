@@ -55,12 +55,19 @@ import { MarkFulfilledModal } from "../components/orders/MarkFulfilledModal";
 import { RescheduleModal } from "../components/orders/RescheduleModal";
 import { SendEmailModal } from "../components/orders/SendEmailModal";
 import { EditDetailsModal } from "../components/orders/EditDetailsModal";
-import { validateMerchantRescheduleSelection } from "../lib/delivery-availability";
+import {
+  getShopLocalDate,
+  validateMerchantRescheduleSelection,
+} from "../lib/delivery-availability";
 import { slotValuesMatch } from "../lib/slot-value";
 import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
 import { handleSendEmailOp } from "../services/send-customer-email.server";
 import { handleEditDetailsOp } from "../services/update-order-contact.server";
-import { getScheduleRulesWithBookedCounts } from "../services/schedule-rules.server";
+import {
+  getScheduleRules,
+  getScheduleRulesWithBookedCounts,
+} from "../services/schedule-rules.server";
+import { buildOrderEventTag, MAX_ORDER_TAG_LENGTH } from "../lib/order-tags";
 import { authenticate } from "../shopify.server";
 import panelStylesHref from "../styles/order-details-panel.css?url";
 
@@ -536,7 +543,12 @@ const BULK_ACTION_NAMES: readonly BulkActionName[] = [
   "reschedule",
 ];
 const MAX_SELECTED_ORDER_IDS = 100;
-const MAX_TAG_LENGTH = 255;
+// Shopify's real per-tag cap is 40, not 255 (live-verified 2026-08-14: 40 is
+// accepted, 41 answers "Order tags is invalid"). The old 255 let a merchant's
+// long tag pass our validation and then fail at Shopify — and because one bad
+// tag fails the ENTIRE tagsAdd call, every other tag in that submit was lost
+// with it. Single-sourced in lib/order-tags.ts.
+const MAX_TAG_LENGTH = MAX_ORDER_TAG_LENGTH;
 
 function isBulkActionName(value: string): value is BulkActionName {
   return (BULK_ACTION_NAMES as readonly string[]).includes(value);
@@ -603,7 +615,12 @@ export const action = async ({
   // docs/api.md is unchanged. Dispatched before the bulk machinery for the
   // same reason sendEmail is: it carries one orderId, not a selection.
   if (opRaw === "editDetails") {
-    return handleEditDetailsOp(admin, fd);
+    // The scheduler config timezone is the app's notion of "the merchant's
+    // day" and already governs every delivery date, so the event tag is
+    // stamped from the same source the reschedule op uses — otherwise two ops
+    // minutes apart could tag different days.
+    const { timezone } = await getScheduleRules(session.shop);
+    return handleEditDetailsOp(admin, fd, timezone);
   }
 
   const op = isBulkActionName(opRaw) ? opRaw : "";
@@ -867,6 +884,51 @@ export const action = async ({
           if (!r.success && r.message) r.message = scopeHint(r.message);
         }
       }
+
+      // ── Step 3: timeline event tag, only for orders that actually got
+      //    tracking and only where the fulfillment succeeded. A tagging
+      //    failure never turns a successful fulfillment into a reported
+      //    failure — the tag is a mirror, like the reschedule sync's.
+      if (trackingNumber || trackingUrl) {
+        const fulfilledIds = results
+          .filter((r) => r.success && safeIds.includes(r.orderId))
+          .map((r) => r.orderId);
+        if (fulfilledIds.length > 0) {
+          try {
+            const { timezone } = await getScheduleRules(session.shop);
+            const eventTag = buildOrderEventTag(
+              "trackingAdded",
+              getShopLocalDate(timezone),
+            );
+            if (eventTag) {
+              for (const id of fulfilledIds) {
+                const res = await admin.graphql(TAGS_ADD_MUTATION, {
+                  variables: { id, tags: [eventTag] },
+                });
+                const j = (await res.json()) as {
+                  data?: {
+                    tagsAdd?: { userErrors?: Array<{ message: string }> } | null;
+                  };
+                  errors?: Array<{ message: string }>;
+                };
+                const tagErrors = [
+                  ...(j.errors?.map((e) => e.message) ?? []),
+                  ...(j.data?.tagsAdd?.userErrors?.map((e) => e.message) ?? []),
+                ];
+                if (tagErrors.length > 0) {
+                  console.warn(
+                    "[markFulfilled] tracking event tag errors:",
+                    id,
+                    tagErrors,
+                  );
+                }
+              }
+            }
+          } catch (e: unknown) {
+            console.warn("[markFulfilled] tracking event tag threw:", e);
+          }
+        }
+      }
     }
   } else if (op === "reschedule") {
     // Merchant reschedule = administrative override (§5, ADR-10). Only the
@@ -1011,6 +1073,7 @@ export const action = async ({
             existingRescheduleHistoryValue:
               state.rescheduleHistory?.value ?? null,
             requestedAt,
+            shopTimezone: rules.timezone,
           });
           if (!r.ok) {
             const msg =
