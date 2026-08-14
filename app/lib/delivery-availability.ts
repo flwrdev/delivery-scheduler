@@ -173,6 +173,38 @@ function getZonedNowParts(timezone: string, now = new Date()): ZonedNowParts {
   };
 }
 
+/**
+ * "Today" as the merchant's calendar sees it, `YYYY-MM-DD`.
+ *
+ * Exposed for the order event tags (`app/lib/order-tags.ts`), which stamp the
+ * shop-local day an event happened. Stamping UTC instead is what made a 4:07 AM
+ * Manila reschedule read as the previous day on the admin order page — see the
+ * 2026-08-14 verification-log entry. Reuses the same cached zoned formatter the
+ * delivery cutoffs run on, so the tag date and the cutoff always agree on which
+ * day it is.
+ */
+export function getShopLocalDate(
+  timezone: string = DEFAULT_DELIVERY_SCHEDULE_RULES.timezone,
+  now = new Date(),
+): string {
+  // Never throws. Callers use this to stamp an OPTIONAL event tag onto a write
+  // that has already succeeded, so a bad input must cost the tag and nothing
+  // else — an earlier version let an unparseable timestamp escape as a
+  // RangeError, which took the order's date and slot tags down with it.
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) return "";
+  try {
+    return getZonedNowParts(timezone, now).date;
+  } catch {
+    // An invalid stored timezone falls back to the shop default rather than
+    // stamping the server's own zone.
+    try {
+      return getZonedNowParts(DEFAULT_DELIVERY_SCHEDULE_RULES.timezone, now).date;
+    } catch {
+      return "";
+    }
+  }
+}
+
 export function isIsoDateString(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
