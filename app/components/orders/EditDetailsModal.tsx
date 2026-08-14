@@ -18,9 +18,12 @@ import type { EditDetailsResponse } from "../../services/update-order-contact.se
 // the RECEIVER's phone (the number the rider calls).
 //
 // Deliberately NOT editable here:
-//   · Recipient name, company, province, country — carried forward untouched
-//     by the server so the overwrite write can't erase them. Shown read-only
-//     below the form so the merchant can see they survive.
+//   · Recipient name, company, province, country, ZIP — carried forward
+//     untouched by the server. Shown read-only below the form so the merchant
+//     can see they survive. The ZIP is in that list because Shopify rejects an
+//     empty PH postal code and fails the whole save with it; it can't be
+//     cleared, it's rarely the wrong field, and a form row for it only cost
+//     the merchant time.
 //   · Sender phone — that lives on the customer record and would need the
 //     write_customers scope, which forces a merchant reinstall.
 export interface EditDetailsModalProps {
@@ -31,7 +34,6 @@ export interface EditDetailsModalProps {
 
 const MAX_ADDRESS_LINE = 255;
 const MAX_CITY = 128;
-const MAX_ZIP = 32;
 const MAX_PHONE = 32;
 
 const IN_TRANSIT_STATUSES = new Set([
@@ -52,7 +54,6 @@ export function EditDetailsModal({
   const [address1, setAddress1] = useState("");
   const [address2, setAddress2] = useState("");
   const [city, setCity] = useState("");
-  const [zip, setZip] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -67,7 +68,6 @@ export function EditDetailsModal({
       setAddress1(addr?.address1 ?? "");
       setAddress2(addr?.address2 ?? "");
       setCity(addr?.city ?? "");
-      setZip(addr?.zip ?? "");
       setPhone(addr?.phone ?? "");
       setError(null);
     }
@@ -96,6 +96,7 @@ export function EditDetailsModal({
       name ? `Recipient: ${name}` : null,
       addr?.company ? `Company: ${addr.company}` : null,
       region ? `Region: ${region}` : null,
+      addr?.zip ? `ZIP: ${addr.zip}` : null,
     ].filter(Boolean) as string[];
   }, [addr]);
 
@@ -111,21 +112,13 @@ export function EditDetailsModal({
     address1.trim() !== (addr?.address1 ?? "").trim() ||
     address2.trim() !== (addr?.address2 ?? "").trim() ||
     cityChanged ||
-    zip.trim() !== (addr?.zip ?? "").trim() ||
     phone.trim() !== (addr?.phone ?? "").trim();
-
-  // Shopify rejects an empty ZIP on a PH address, and that rejection fails the
-  // whole save — the street and city edits would go down with it. Block the
-  // submit here so the merchant sees why before losing anything (verified live
-  // 2026-08-14, ADR-15).
-  const zipCleared = !zip.trim() && Boolean((addr?.zip ?? "").trim());
 
   const canSave =
     !isSubmitting &&
     Boolean(order) &&
     address1.trim().length > 0 &&
     city.trim().length > 0 &&
-    !zipCleared &&
     dirty;
 
   const handleSave = () => {
@@ -137,7 +130,6 @@ export function EditDetailsModal({
     fd.append("address1", address1);
     fd.append("address2", address2);
     fd.append("city", city);
-    fd.append("zip", zip);
     fd.append("phone", phone);
     fetcher.submit(fd, { method: "post" });
   };
@@ -203,31 +195,15 @@ export function EditDetailsModal({
               autoComplete="address-line2"
               disabled={isSubmitting}
             />
-            <FormLayout.Group>
-              <TextField
-                label="City"
-                value={city}
-                onChange={setCity}
-                maxLength={MAX_CITY}
-                autoComplete="address-level2"
-                requiredIndicator
-                disabled={isSubmitting}
-              />
-              <TextField
-                label="ZIP"
-                value={zip}
-                onChange={setZip}
-                maxLength={MAX_ZIP}
-                autoComplete="postal-code"
-                requiredIndicator={Boolean((addr?.zip ?? "").trim())}
-                error={
-                  zipCleared
-                    ? "Shopify requires a postal code — this can't be removed."
-                    : undefined
-                }
-                disabled={isSubmitting}
-              />
-            </FormLayout.Group>
+            <TextField
+              label="City"
+              value={city}
+              onChange={setCity}
+              maxLength={MAX_CITY}
+              autoComplete="address-level2"
+              requiredIndicator
+              disabled={isSubmitting}
+            />
             <TextField
               label="Receiver phone"
               type="tel"

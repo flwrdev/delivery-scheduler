@@ -15,7 +15,7 @@ const CURRENT: OrderShippingAddressSnapshot = {
   address2: "Comembo",
   city: "Taguig City",
   province: "Metro Manila",
-  provinceCode: "00",
+  provinceCode: "PH-00",
   country: "Philippines",
   countryCodeV2: "PH",
   zip: "1630",
@@ -26,7 +26,6 @@ const patch = (over: Partial<OrderContactPatch> = {}): OrderContactPatch => ({
   address1: CURRENT.address1 ?? "",
   address2: CURRENT.address2 ?? "",
   city: CURRENT.city ?? "",
-  zip: CURRENT.zip ?? "",
   phone: CURRENT.phone ?? "",
   ...over,
 });
@@ -45,27 +44,9 @@ describe("validateOrderContactPatch", () => {
   });
 
   it("allows an empty apartment and phone", () => {
-    expect(validateOrderContactPatch(patch({ address2: "", phone: "" })).ok).toBe(
-      true,
-    );
-  });
-
-  // Live-verified 2026-08-14: Shopify answers `zip: ""` with "Enter a postal
-  // code" and fails the ENTIRE mutation, so a merchant clearing the ZIP would
-  // also lose the street/city edits in the same submit.
-  it("refuses to clear a ZIP the order already has", () => {
-    const result = validateOrderContactPatch(patch({ zip: "" }), CURRENT);
-    expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/postal code/i);
-  });
-
-  it("allows an empty ZIP when the order never had one", () => {
-    const noZip = { ...CURRENT, zip: null };
-    expect(validateOrderContactPatch(patch({ zip: "" }), noZip).ok).toBe(true);
-  });
-
-  it("does not flag the ZIP when no snapshot is supplied", () => {
-    expect(validateOrderContactPatch(patch({ zip: "" })).ok).toBe(true);
+    expect(
+      validateOrderContactPatch(patch({ address2: "", phone: "" })).ok,
+    ).toBe(true);
   });
 
   it("accepts the several spellings a PH mobile number arrives in", () => {
@@ -90,15 +71,31 @@ describe("validateOrderContactPatch", () => {
 });
 
 describe("buildNextShippingAddress", () => {
-  // The whole reason this module exists: OrderInput.shippingAddress overwrites
-  // the address, so anything omitted here is erased on the order.
   it("carries forward every field the merchant cannot edit", () => {
     const next = buildNextShippingAddress(CURRENT, patch());
     expect(next.firstName).toBe("Glenard");
     expect(next.lastName).toBe("Alondra");
     expect(next.company).toBe("PAVAHAI");
-    expect(next.provinceCode).toBe("00");
+    expect(next.provinceCode).toBe("PH-00");
     expect(next.countryCode).toBe("PH");
+    expect(next.zip).toBe("1630");
+  });
+
+  // The ZIP is not on the form at all: Shopify rejects an empty PH postal code
+  // and fails the whole mutation with it, so it can only ever be carried
+  // through from the stored address.
+  it("takes the ZIP from the stored address, never from the form", () => {
+    const next = buildNextShippingAddress(CURRENT, patch());
+    expect(next.zip).toBe(CURRENT.zip);
+    // A form value can't reach it — OrderContactPatch has no zip field, and
+    // an extra key on the object must not leak into the input either.
+    const smuggled = { ...patch(), zip: "9999" } as OrderContactPatch;
+    expect(buildNextShippingAddress(CURRENT, smuggled).zip).toBe("1630");
+  });
+
+  it("omits the ZIP when the stored address has none", () => {
+    const noZip: OrderShippingAddressSnapshot = { ...CURRENT, zip: null };
+    expect(buildNextShippingAddress(noZip, patch())).not.toHaveProperty("zip");
   });
 
   it("maps the read-side countryCodeV2 onto the write-side countryCode", () => {
@@ -121,14 +118,14 @@ describe("buildNextShippingAddress", () => {
       patch({
         address1: "12 Kalayaan Ave",
         city: "Quezon City",
-        zip: "1100",
         phone: "09171234567",
       }),
     );
     expect(next.address1).toBe("12 Kalayaan Ave");
     expect(next.city).toBe("Quezon City");
-    expect(next.zip).toBe("1100");
     expect(next.phone).toBe("09171234567");
+    // …and the ZIP rides along untouched.
+    expect(next.zip).toBe("1630");
   });
 
   it("trims whitespace off every value", () => {
@@ -153,11 +150,7 @@ describe("buildNextShippingAddress", () => {
     // …while the carry-forward fields are still present.
     expect(next.firstName).toBe("Glenard");
     expect(next.countryCode).toBe("PH");
-  });
-
-  it("omits a blank ZIP rather than sending the empty string Shopify rejects", () => {
-    const next = buildNextShippingAddress(CURRENT, patch({ zip: "" }));
-    expect(next).not.toHaveProperty("zip");
+    expect(next.zip).toBe("1630");
   });
 
   it("never sends an empty carry-forward key", () => {
@@ -166,35 +159,23 @@ describe("buildNextShippingAddress", () => {
       address1: "1 Main St",
       city: "Manila",
     };
-    const next = buildNextShippingAddress(sparse, patch({ zip: "" }));
+    const next = buildNextShippingAddress(sparse, patch());
     for (const key of [
       "firstName",
       "lastName",
       "company",
       "provinceCode",
       "countryCode",
+      "zip",
     ]) {
       expect(next).not.toHaveProperty(key);
     }
   });
 
-  it("omits carry-forward keys that are absent on the stored address", () => {
-    const sparse: OrderShippingAddressSnapshot = {
-      address1: "1 Main St",
-      city: "Manila",
-      countryCodeV2: "PH",
-    };
-    const next = buildNextShippingAddress(sparse, patch({ address2: "", zip: "", phone: "" }));
-    expect(next).not.toHaveProperty("firstName");
-    expect(next).not.toHaveProperty("company");
-    expect(next).not.toHaveProperty("provinceCode");
-    expect(next.countryCode).toBe("PH");
-  });
-
   it("still produces a usable input when there is no stored address", () => {
     const next = buildNextShippingAddress(
       null,
-      patch({ address1: "1 Main St", city: "Manila", address2: "", zip: "", phone: "" }),
+      patch({ address1: "1 Main St", city: "Manila", address2: "", phone: "" }),
     );
     expect(next).toEqual({
       address1: "1 Main St",
@@ -204,17 +185,17 @@ describe("buildNextShippingAddress", () => {
     });
   });
 
-  it("matches the input that was live-verified against order #1034", () => {
+  it("matches the input that was live-verified against order #1043", () => {
     // The exact shape the dev-store smoke ran on 2026-08-14: Shopify accepted
-    // it, applied the street edit, and left the recipient name, province, and
-    // country intact.
+    // it, applied the street edit and the new phone, and left the recipient
+    // name, province, country, and ZIP intact.
     const live: OrderShippingAddressSnapshot = {
-      firstName: "john",
-      lastName: "joseph",
+      firstName: "The",
+      lastName: "FlowerCart",
       company: null,
-      address1: "255 kawit st tondo manila",
-      address2: "144",
-      city: "manila",
+      address1: "255 Kawit Street",
+      address2: "146",
+      city: "Manila",
       province: "Metro Manila",
       provinceCode: "PH-00",
       country: "Philippines",
@@ -223,22 +204,21 @@ describe("buildNextShippingAddress", () => {
       phone: null,
     };
     const next = buildNextShippingAddress(live, {
-      address1: "12 Kalayaan Ave",
-      address2: "144",
-      city: "manila",
-      zip: "1013",
-      phone: "",
+      address1: "SMOKE 12 Kalayaan Ave",
+      address2: "146",
+      city: "Manila",
+      phone: "09171234567",
     });
     expect(next).toEqual({
-      firstName: "john",
-      lastName: "joseph",
+      firstName: "The",
+      lastName: "FlowerCart",
       provinceCode: "PH-00",
       countryCode: "PH",
-      address1: "12 Kalayaan Ave",
-      address2: "144",
-      city: "manila",
       zip: "1013",
-      phone: "",
+      address1: "SMOKE 12 Kalayaan Ave",
+      address2: "146",
+      city: "Manila",
+      phone: "09171234567",
     });
   });
 });
@@ -250,7 +230,10 @@ describe("hasContactChanges", () => {
 
   it("ignores whitespace-only differences", () => {
     expect(
-      hasContactChanges(CURRENT, patch({ address1: "  Rd 5 BLK 6 Lot 1 Comembo  " })),
+      hasContactChanges(
+        CURRENT,
+        patch({ address1: "  Rd 5 BLK 6 Lot 1 Comembo  " }),
+      ),
     ).toBe(false);
   });
 
@@ -258,7 +241,6 @@ describe("hasContactChanges", () => {
     ["address1", { address1: "12 Kalayaan Ave" }],
     ["address2", { address2: "Unit 4B" }],
     ["city", { city: "Quezon City" }],
-    ["zip", { zip: "1100" }],
     ["phone", { phone: "09171234567" }],
   ])("detects an edited %s", (_field, over) => {
     expect(hasContactChanges(CURRENT, patch(over))).toBe(true);
