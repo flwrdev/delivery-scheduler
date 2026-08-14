@@ -1,3 +1,5 @@
+import { getShopLocalDate } from "../lib/delivery-availability";
+import { buildOrderEventTag } from "../lib/order-tags";
 import type { AdminGraphQLClient } from "./order-delivery-metafields.server";
 
 // Merchant "Edit details" (Orders Ops — panel Actions menu). Rewrites the
@@ -260,9 +262,18 @@ function opJson(payload: EditDetailsResponse, status = 200): Response {
   return Response.json(payload, status === 200 ? undefined : { status });
 }
 
+const ADD_ORDER_TAGS_MUTATION = `#graphql
+  mutation AddOrderContactTags($id: ID!, $tags: [String!]!) {
+    tagsAdd(id: $id, tags: $tags) {
+      userErrors { field message }
+    }
+  }
+`;
+
 export async function handleEditDetailsOp(
   admin: AdminGraphQLClient,
   fd: FormData,
+  shopTimezone?: string,
 ): Promise<Response> {
   const orderId = String(fd.get("orderId") || "");
   if (!SHOPIFY_ORDER_GID_RE.test(orderId)) {
@@ -353,6 +364,36 @@ export async function handleEditDetailsOp(
       message:
         e instanceof Error ? e.message : "Couldn't update the delivery details.",
     });
+  }
+
+  // Timeline event tag. A tagging failure must never fail a save that already
+  // rewrote the address — the same posture as the reschedule service's mirror
+  // steps, which log and carry on.
+  const eventTag = buildOrderEventTag(
+    "addressEdited",
+    getShopLocalDate(shopTimezone),
+  );
+  if (eventTag) {
+    try {
+      const res = await admin.graphql(ADD_ORDER_TAGS_MUTATION, {
+        variables: { id: orderId, tags: [eventTag] },
+      });
+      const j = (await res.json()) as {
+        data?: {
+          tagsAdd?: { userErrors?: Array<{ message: string }> } | null;
+        };
+        errors?: Array<{ message: string }>;
+      };
+      const tagErrors = [
+        ...(j.errors?.map((e) => e.message) ?? []),
+        ...(j.data?.tagsAdd?.userErrors?.map((e) => e.message) ?? []),
+      ];
+      if (tagErrors.length > 0) {
+        console.warn("[handleEditDetailsOp] event tag write errors:", tagErrors);
+      }
+    } catch (error) {
+      console.warn("[handleEditDetailsOp] event tag write threw:", error);
+    }
   }
 
   return opJson({ ok: true, message: "Delivery details updated." });

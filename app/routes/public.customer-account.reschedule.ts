@@ -554,6 +554,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       currentTags: order.tags ?? [],
       currentCustomAttributes: order.customAttributes ?? [],
       existingRescheduleHistoryValue: order.rescheduleHistory?.value ?? null,
+      shopTimezone: scheduleRules.timezone,
     });
 
     if (!result.ok) {
