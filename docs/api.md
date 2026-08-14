@@ -101,6 +101,7 @@ Phase 3 (queue + Neon) of the FlowerCart Messenger agent — master context live
 | Validation engine                 | [app/lib/delivery-availability.ts](../app/lib/delivery-availability.ts) — includes `validateMerchantRescheduleSelection` (merchant-mode data-integrity checks, §5 of the V2 design; additive, storefront/customer paths unchanged). `isSlotBlocked` / `isSlotAtCapacity` / `getSlotCapacityEntry` resolve override-map keys canonically (ADR-13) |
 | **Reschedule write orchestration** | [app/services/reschedule-order-delivery.server.ts](../app/services/reschedule-order-delivery.server.ts) — `rescheduleOrderDelivery()`, the ONE shared write sequence both reschedule sources call (REC-1) |
 | Shared constants (reschedule tag) | [app/lib/constants.ts](../app/lib/constants.ts) — single source of `RESCHEDULED_ORDER_TAG`                            |
+| **Order tag vocabulary (2026-08-14)** | [app/lib/order-tags.ts](../app/lib/order-tags.ts) — `MAX_ORDER_TAG_LENGTH` (40, live-verified), the `ORDER_EVENT_TAGS` timeline prefixes, plus `buildOrderEventTag` / `parseOrderEventTag` / `orderEventTagLabel`. Every tag the app writes or reasons about is declared here |
 | Strict rules schema (Scheduler V2 §4.1) | [app/lib/schedule-rules-schema.ts](../app/lib/schedule-rules-schema.ts) — `validateScheduleRulesPatch` (strict write gate, field errors; pre-existing duplicate slot labels are grandfathered) + `deserializeStoredScheduleRules` (lenient-but-loud read, `ConfigHealthIssue[]`; the only place override entries are pruned — ADR-13) |
 | Canonical slot comparator (Scheduler V2 §4.2) | [app/lib/slot-value.ts](../app/lib/slot-value.ts) — `normalizeSlotValueForMatch`/`resolveConfiguredSlotValue`/`slotValuesMatch` + `findSlotOverrideKey` (override-map key resolution, exact spelling wins a tie — ADR-13); comparison only, stored/written slot values stay verbatim |
 | Embedded URL path builder         | [app/lib/embedded-route.js](../app/lib/embedded-route.js)                                                             |
@@ -218,6 +219,48 @@ reinstall**. Design facts (ADR-15):
 None of these generic mutations are part of the delivery sync contract — none write `custom.date`, `custom.time_slot`, `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date`, `$app.reschedule_status`, `$app.reschedule_requested_at`, `delivery.reschedule_history`, or the `Delivery Date` / `Delivery Time` customAttributes. (The former bouquet-photo pipeline — `stagedUploadsCreate` + `fileCreate` + a `custom.bouquet_photo` `orderUpdate` — was **removed 2026-07-12**; the feature was descoped from Orders Ops V2, see audit §F.)
 
 However, because the tag input is freeform, a merchant *can* manually add or remove a string that matches `DELIVERY_SCHEDULE_TAG_PATTERN` (e.g. `2026-05-23` or `9AM-12PM`). The system does not validate or enforce this — if it happens, downstream readers (`order-delivery-block`, scheduler queries) will see the manually-typed tag the same way they see auto-synced delivery tags. Treat this as a manual-override side channel; the supported merchant path is the `reschedule` op.
+
+### Order event tags — the merchant's timeline (2026-08-14)
+
+Three tags mark what happened to an order, shaped `<prefix>-<YYYY-MM-DD>` where the
+date is the **shop-local** day:
+
+| Tag | Written by | Op |
+| --- | --- | --- |
+| `resched-<date>` | [reschedule-order-delivery.server.ts](../app/services/reschedule-order-delivery.server.ts) | Both reschedule paths (customer **and** merchant) |
+| `addr-<date>` | [update-order-contact.server.ts](../app/services/update-order-contact.server.ts) | `editDetails` |
+| `tracked-<date>` | [app.orders.tsx](../app/routes/app.orders.tsx) `action` | `markFulfilled`, only when tracking was supplied and the fulfillment succeeded |
+
+The vocabulary lives in [app/lib/order-tags.ts](../app/lib/order-tags.ts). Facts that
+constrain it, all measured live on the dev store:
+
+- **A tag is capped at 40 characters.** 41 is rejected with the opaque `"Order tags is
+  invalid"`, and the rejection fails the **entire** `tagsAdd` call — one over-length tag
+  silently takes every other tag in the same batch with it. `MAX_TAG_LENGTH` in
+  `app.orders.tsx` claimed 255 until this landed, so a merchant's long tag passed our
+  validation and then died at Shopify.
+- **Event tags must not look like delivery schedule tags.** `syncOrderDeliveryScheduleTag`
+  removes prior schedule tags on every reschedule, and `isDeliveryScheduleTag` matches a
+  bare ISO date, a bare slot, and the `delivery:` / `delivery date:` / `delivery time:`
+  prefixes. A tag in any of those shapes would be deleted by the next reschedule with no
+  error. `test/order-tags.test.ts` pins that the three prefixes dodge it.
+- **The date is shop-local, never UTC.** Stamped from the scheduler config `timezone` —
+  the same source every delivery date uses — so two ops minutes apart cannot tag
+  different days. The reschedule tag is derived from `requestedAt` rather than "now", so
+  it can never disagree with the `reschedule_history` timestamp. Stamping UTC is the bug
+  that made a 4:07 AM Manila reschedule read as the previous day (see the 2026-08-14
+  verification-log entry).
+- **Tagging never fails the operation.** Each write is guarded and logs on failure, the
+  same posture as the reschedule service's mirror steps. An unusable timestamp costs the
+  event tag and nothing else — `getShopLocalDate` returns `""` instead of throwing.
+- **`resched-<date>` is NOT the `resched` lock.** The lock is matched exactly by both
+  reschedule routes and remains customer-flow-only; the event tag is written on both
+  paths. `parseOrderEventTag` deliberately returns null for the bare lock.
+
+Two accepted limits: two events of one kind on one day collapse into a single tag
+(`delivery.reschedule_history` stays the precise audit trail), and the existing bare date
+/ slot tag shapes are **left untouched** — they sit on thousands of live orders and back
+merchant-saved admin views, so re-shaping them is a migration, not a cleanup.
 
 ### COD fee auto-add — an order-edit write OUTSIDE the delivery contract (2026-07-28)
 
