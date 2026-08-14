@@ -1,5 +1,6 @@
 import "@shopify/ui-extensions/preact";
 import { render } from "preact";
+import { formatRescheduledAt } from "./format-timestamp";
 
 export default async () => {
   const orderId = shopify.data.selected?.[0]?.id;
@@ -18,8 +19,10 @@ async function fetchRescheduleInfo(id) {
   const res = await fetch("shopify:admin/api/graphql.json", {
     method: "POST",
     body: JSON.stringify({
+      // `shop { ianaTimezone }` is read so the reschedule timestamp can be
+      // shown in the shop's day rather than raw UTC — see format-timestamp.js.
       query:
-        "query GetReschedule($id: ID!) { order(id: $id) { rescheduleStatus: metafield(namespace: \"$app\", key: \"reschedule_status\") { value } rescheduleDate: metafield(namespace: \"custom\", key: \"date\") { value } rescheduleTimeSlot: metafield(namespace: \"custom\", key: \"time_slot\") { value } requestedAt: metafield(namespace: \"$app\", key: \"reschedule_requested_at\") { value } } }",
+        "query GetReschedule($id: ID!) { shop { ianaTimezone } order(id: $id) { rescheduleStatus: metafield(namespace: \"$app\", key: \"reschedule_status\") { value } rescheduleDate: metafield(namespace: \"custom\", key: \"date\") { value } rescheduleTimeSlot: metafield(namespace: \"custom\", key: \"time_slot\") { value } requestedAt: metafield(namespace: \"$app\", key: \"reschedule_requested_at\") { value } } }",
       variables: { id },
     }),
   });
@@ -31,6 +34,7 @@ async function fetchRescheduleInfo(id) {
     date: o.rescheduleDate?.value ?? null,
     timeSlot: o.rescheduleTimeSlot?.value ?? null,
     requestedAt: o.requestedAt?.value ?? null,
+    shopTimezone: json.data?.shop?.ianaTimezone ?? null,
   };
 }
 
@@ -83,7 +87,9 @@ function RescheduleStatusAction({ info }) {
           {info.requestedAt && (
             <s-stack direction="block" gap="small">
               <s-text color="subdued">Rescheduled at</s-text>
-              <s-text>{info.requestedAt}</s-text>
+              <s-text>
+                {formatRescheduledAt(info.requestedAt, info.shopTimezone)}
+              </s-text>
             </s-stack>
           )}
         </s-stack>

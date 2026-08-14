@@ -1,5 +1,6 @@
 import "@shopify/ui-extensions/preact";
 import { render } from "preact";
+import { formatRescheduledAt } from "./format-timestamp";
 
 export default async () => {
   const orderId = shopify.data.selected?.[0]?.id;
@@ -14,7 +15,9 @@ async function fetchOrderDelivery(id) {
   const res = await fetch("shopify:admin/api/graphql.json", {
     method: "POST",
     body: JSON.stringify({
-      query: "query GetOrderDelivery($id: ID!) { order(id: $id) { customAttributes { key value } deliveryDate: metafield(namespace: \"custom\", key: \"date\") { value } timeSlot: metafield(namespace: \"custom\", key: \"time_slot\") { value } rescheduleRequestedAt: metafield(namespace: \"$app\", key: \"reschedule_requested_at\") { value } rescheduleStatus: metafield(namespace: \"$app\", key: \"reschedule_status\") { value } } }",
+      // `shop { ianaTimezone }` is read so the reschedule timestamp can be
+      // shown in the shop's day rather than raw UTC — see format-timestamp.js.
+      query: "query GetOrderDelivery($id: ID!) { shop { ianaTimezone } order(id: $id) { customAttributes { key value } deliveryDate: metafield(namespace: \"custom\", key: \"date\") { value } timeSlot: metafield(namespace: \"custom\", key: \"time_slot\") { value } rescheduleRequestedAt: metafield(namespace: \"$app\", key: \"reschedule_requested_at\") { value } rescheduleStatus: metafield(namespace: \"$app\", key: \"reschedule_status\") { value } } }",
       variables: { id },
     }),
   });
@@ -29,6 +32,7 @@ async function fetchOrderDelivery(id) {
     timeSlot: o.timeSlot?.value ?? attr("Delivery Time"),
     rescheduleRequestedAt: o.rescheduleRequestedAt?.value ?? null,
     rescheduleStatus: o.rescheduleStatus?.value ?? null,
+    shopTimezone: json.data?.shop?.ianaTimezone ?? null,
   };
 }
 
@@ -66,7 +70,9 @@ function DeliveryBlock({ order }) {
         {order.rescheduleStatus === "confirmed" && order.rescheduleRequestedAt && (
           <s-stack direction="block" gap="small">
             <s-text color="subdued">Rescheduled at</s-text>
-            <s-text>{order.rescheduleRequestedAt}</s-text>
+            <s-text>
+              {formatRescheduledAt(order.rescheduleRequestedAt, order.shopTimezone)}
+            </s-text>
           </s-stack>
         )}
       </s-stack>
