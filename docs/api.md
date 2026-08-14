@@ -168,7 +168,7 @@ metafield, tag, or customAttribute.
 
 The panel's Actions menu → "Edit details" posts the `editDetails` op, handled by
 [`update-order-contact.server.ts`](../app/services/update-order-contact.server.ts).
-Single order, five editable fields: `address1`, `address2`, `city`, `zip`, and the
+Single order, four editable fields: `address1`, `address2`, `city`, and the
 **receiver** phone (`shippingAddress.phone`). One `orderUpdate(input: {shippingAddress})`
 call; requires `write_orders`, which the app already holds — **no scope change, no
 reinstall**. Design facts (ADR-15):
@@ -184,14 +184,16 @@ reinstall**. Design facts (ADR-15):
     keys, empty or not.
   - **`zip: ""` is rejected** ("Enter a postal code" — PH requires one) and the
     rejection **fails the whole mutation**, taking any street/city edit in the same
-    submit down with it. The ZIP is treated as un-clearable: the server blocks an
-    emptied ZIP when the order has one, and the modal disables Save with an inline
-    reason.
-  - The carry-forward of `firstName`/`lastName`/`company`/`provinceCode`/`countryCode`
-    is now belt-and-braces rather than load-bearing. It is kept on purpose — the
-    *documented* contract is overwrite, so this keeps working if Shopify ever makes
-    behaviour match the docs. `buildNextShippingAddress()` is the ONLY place it
-    happens; nothing else in the codebase builds a `MailingAddressInput` for an order.
+    submit down with it. The ZIP is therefore **not editable at all** — it is a
+    carry-forward field like the recipient name, shown read-only in the modal's
+    "Kept as is" line. It can't be cleared, it is rarely the field that's wrong, and
+    a form row for it only cost the merchant time.
+  - The carry-forward set is `firstName`/`lastName`/`company`/`provinceCode`/
+    `countryCode`/`zip`. Given merge semantics it is belt-and-braces rather than
+    load-bearing, and it is kept on purpose — the *documented* contract is overwrite,
+    so this keeps working if Shopify ever makes behaviour match the docs.
+    `buildNextShippingAddress()` is the ONLY place it happens; nothing else in the
+    codebase builds a `MailingAddressInput` for an order.
 - **No free-text province or country.** `MailingAddressInput` exposes `provinceCode`
   and `countryCode` only; the `province: "Ontario"` example in Shopify's own
   `orderUpdate` docs is stale. The read side spells the country **`countryCodeV2`**,
