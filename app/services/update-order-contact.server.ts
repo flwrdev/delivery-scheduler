@@ -20,10 +20,10 @@ import type { AdminGraphQLClient } from "./order-delivery-metafields.server";
 //     "clear this field" must be an explicit "", never an omitted key —
 //     omitting it is a silent no-op that still reports success.
 //   · `zip: ""` is REJECTED for PH addresses ("Enter a postal code") and the
-//     rejection kills the WHOLE mutation, so a merchant clearing the ZIP would
-//     also lose the street and city edits in the same submit. The ZIP therefore
-//     cannot be cleared at all, and `validateOrderContactPatch` says so up front
-//     rather than letting Shopify answer with a confusing error.
+//     rejection kills the WHOLE mutation. The ZIP is therefore NOT editable
+//     here at all — it is carried forward like the recipient name. It cannot
+//     be cleared, it is almost never the thing that's wrong, and having it in
+//     the form only slowed the merchant down.
 //   · The read field is `countryCodeV2`; the write field is `countryCode`.
 //
 // The carry-forward of the non-editable fields (firstName, lastName, company,
@@ -37,7 +37,6 @@ const SHOPIFY_ORDER_GID_RE = /^gid:\/\/shopify\/Order\/\d+$/;
 
 export const MAX_ADDRESS_LINE_LENGTH = 255;
 export const MAX_CITY_LENGTH = 128;
-export const MAX_ZIP_LENGTH = 32;
 export const MAX_PHONE_LENGTH = 32;
 
 /**
@@ -61,12 +60,11 @@ export interface OrderShippingAddressSnapshot {
   phone?: string | null;
 }
 
-/** The five fields the merchant may actually change. */
+/** The four fields the merchant may actually change. */
 export interface OrderContactPatch {
   address1: string;
   address2: string;
   city: string;
-  zip: string;
   phone: string;
 }
 
@@ -129,15 +127,11 @@ export interface OrderContactValidation {
 /**
  * Pure field validation. Deliberately permissive on phone shape — Shopify
  * normalizes and reports its own userError, and PH mobile numbers reach this
- * form in several spellings (09xx, +639xx, with spaces). Only length, the two
- * genuinely required fields, and the un-clearable ZIP are enforced here.
- *
- * `current` is optional so the pure length/required checks stay callable
- * without an order; pass it to also catch the ZIP case.
+ * form in several spellings (09xx, +639xx, with spaces). Only length and the
+ * two genuinely required fields are enforced here.
  */
 export function validateOrderContactPatch(
   patch: OrderContactPatch,
-  current?: OrderShippingAddressSnapshot | null,
 ): OrderContactValidation {
   const address1 = trimmed(patch.address1);
   const city = trimmed(patch.city);
@@ -166,22 +160,6 @@ export function validateOrderContactPatch(
       message: `City must be ${MAX_CITY_LENGTH} characters or fewer.`,
     };
   }
-  if (trimmed(patch.zip).length > MAX_ZIP_LENGTH) {
-    return {
-      ok: false,
-      message: `ZIP must be ${MAX_ZIP_LENGTH} characters or fewer.`,
-    };
-  }
-  // Shopify rejects an empty ZIP on a PH address ("Enter a postal code") and
-  // the rejection fails the ENTIRE mutation, taking the street and city edits
-  // down with it. Catch it here so the merchant gets one clear sentence
-  // instead of losing the rest of their changes to a Shopify error.
-  if (!trimmed(patch.zip) && trimmed(current?.zip)) {
-    return {
-      ok: false,
-      message: "ZIP can't be removed — Shopify requires a postal code on this address.",
-    };
-  }
   if (trimmed(patch.phone).length > MAX_PHONE_LENGTH) {
     return {
       ok: false,
@@ -198,13 +176,12 @@ export function validateOrderContactPatch(
  * things (see the measured behaviour at the top of this file):
  *
  *   · Carry-forward fields — omitted when blank. They are never being cleared,
- *     and `countryCode` is an enum where "" is invalid.
+ *     and `countryCode` is an enum where "" is invalid. `zip` is one of these:
+ *     it can't be cleared (Shopify rejects an empty PH postal code and fails
+ *     the whole mutation), so it is re-sent as-is and never exposed to edit.
  *   · Clearable editable fields (address2, phone) — ALWAYS sent, even empty,
  *     because "" is the only thing that actually clears them. Omitting a
  *     blank one is a silent no-op that still reports success.
- *   · `zip` — sent only when non-empty. "" is rejected for PH and fails the
- *     whole mutation; `validateOrderContactPatch` blocks that case earlier, so
- *     a blank here means the order never had a ZIP.
  *   · `address1` / `city` — required, guaranteed non-empty by validation.
  */
 export function buildNextShippingAddress(
@@ -230,12 +207,12 @@ export function buildNextShippingAddress(
   putIfPresent("provinceCode", current?.provinceCode);
   // Read side is countryCodeV2, write side is countryCode.
   putIfPresent("countryCode", current?.countryCodeV2);
+  putIfPresent("zip", current?.zip);
 
   // Editable.
   putIfPresent("address1", patch.address1);
   putAlways("address2", patch.address2);
   putIfPresent("city", patch.city);
-  putIfPresent("zip", patch.zip);
   putAlways("phone", patch.phone);
 
   return next;
@@ -250,7 +227,6 @@ export function hasContactChanges(
     trimmed(current?.address1) !== trimmed(patch.address1) ||
     trimmed(current?.address2) !== trimmed(patch.address2) ||
     trimmed(current?.city) !== trimmed(patch.city) ||
-    trimmed(current?.zip) !== trimmed(patch.zip) ||
     trimmed(current?.phone) !== trimmed(patch.phone)
   );
 }
@@ -284,15 +260,12 @@ export async function handleEditDetailsOp(
     address1: String(fd.get("address1") || ""),
     address2: String(fd.get("address2") || ""),
     city: String(fd.get("city") || ""),
-    zip: String(fd.get("zip") || ""),
     phone: String(fd.get("phone") || ""),
   };
 
-  // Length + required checks run before the read; the ZIP-clearing check needs
-  // the stored address and runs again below once we have it.
-  const shape = validateOrderContactPatch(patch);
-  if (!shape.ok) {
-    return opJson({ ok: false, message: shape.message ?? "Invalid input." }, 400);
+  const check = validateOrderContactPatch(patch);
+  if (!check.ok) {
+    return opJson({ ok: false, message: check.message ?? "Invalid input." }, 400);
   }
 
   // The stored address is re-read server-side and never taken from the client:
@@ -326,11 +299,6 @@ export async function handleEditDetailsOp(
       ok: false,
       message: e instanceof Error ? e.message : "Couldn't read the order.",
     });
-  }
-
-  const check = validateOrderContactPatch(patch, current);
-  if (!check.ok) {
-    return opJson({ ok: false, message: check.message ?? "Invalid input." }, 400);
   }
 
   if (!hasContactChanges(current, patch)) {
