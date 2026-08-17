@@ -32,6 +32,21 @@ The full topology + data model is in `docs/architecture.md`; the route/auth/writ
 contract is in `docs/api.md`. Those docs are the source of truth — this section is only
 a first-glance mental model.
 
+## Marketing bulletin board (ops-notes)
+
+**Pagkatapos ng anumang pagbabagong pwedeng gumalaw sa benta o checkout** — capacity
+cap, pag-alis/pagbalik ng same-day, cutoff/prep-time change, disabled dates, COD window,
+slot changes — magdagdag ng isang linya sa `../flowercart-marketing/ops-notes.md`:
+
+```
+YYYY-MM-DD | capacity|site-change|outage | ano ang ginawa | inaasahang epekto
+```
+
+Binabasa ito ng daily marketing reporter bago mag-flag ng anomaly (hal. noong bagyo ng
+2026-08-13, ang 14% checkout rate ay hindi na-flag dahil naka-log ang capacity cap).
+Isang direksyon lang: nagsusulat lang ng balita — hindi binabasa ang numero/desisyon
+sa marketing repo mula dito.
+
 ## Commands
 
 ```bash
