@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import type { Transporter } from "nodemailer";
 import type { AdminGraphQLClient } from "./order-delivery-metafields.server";
+import prisma from "../db.server";
 
 // Customer Email (customer-email-design.md): in-app compose, sent server-side
 // through the merchant's business mailbox on Namecheap Private Email via
@@ -201,6 +202,7 @@ function opJson(payload: SendEmailResponse, status = 200): Response {
 export async function handleSendEmailOp(
   admin: AdminGraphQLClient,
   fd: FormData,
+  shop: string,
 ): Promise<Response> {
   const orderId = String(fd.get("orderId") || "");
   const subject = String(fd.get("subject") || "").trim();
@@ -337,6 +339,22 @@ export async function handleSendEmailOp(
   if (!sent.ok) {
     return opJson({ ok: false, message: sent.error });
   }
+
+  // Panel-timeline log only (E-5 revisit) — the send already succeeded, so a
+  // logging failure here must never turn a successful send into an error
+  // response. Same guarded-write posture as mirrorLalamoveOrderStatus.
+  try {
+    await prisma.emailSendLog.create({
+      data: { shop, shopifyOrderId: orderId, to: email, subject },
+    });
+  } catch (error) {
+    console.warn(
+      `[send-customer-email] EmailSendLog write failed for ${orderId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
   return opJson({
     ok: true,
     message: sent.copyFailed

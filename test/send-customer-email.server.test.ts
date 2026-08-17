@@ -14,6 +14,12 @@ vi.mock("nodemailer", () => ({
   default: { createTransport: createTransportMock },
 }));
 
+const prismaMock = vi.hoisted(() => ({
+  emailSendLog: { create: vi.fn() },
+}));
+
+vi.mock("../app/db.server", () => ({ default: prismaMock }));
+
 import {
   _resetEmailTransportForTests,
   EMAIL_NOT_CONFIGURED_MESSAGE,
@@ -26,6 +32,7 @@ import {
 } from "../app/services/send-customer-email.server";
 
 const USER = "shop@flowercart.test";
+const SHOP = "flowercart-dev.myshopify.com";
 
 function stubEmailEnv() {
   vi.stubEnv("EMAIL_SMTP_HOST", "mail.privateemail.com");
@@ -40,6 +47,8 @@ beforeEach(() => {
   sendMailMock.mockReset();
   sendMailMock.mockResolvedValue({ messageId: "test" });
   createTransportMock.mockClear();
+  prismaMock.emailSendLog.create.mockReset();
+  prismaMock.emailSendLog.create.mockResolvedValue({});
   stubEmailEnv();
 });
 
@@ -186,7 +195,7 @@ describe("handleSendEmailOp", () => {
     // A spoofed "to" field must have zero effect on the recipient.
     const fd = makeFd({ to: "evil@attacker.test" });
 
-    const res = await handleSendEmailOp(admin, fd);
+    const res = await handleSendEmailOp(admin, fd, SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
 
     expect(res.status).toBe(200);
@@ -196,6 +205,30 @@ describe("handleSendEmailOp", () => {
     expect(sendMailMock).toHaveBeenCalledWith(
       expect.objectContaining({ to: "cust@example.com", bcc: USER }),
     );
+    expect(prismaMock.emailSendLog.create).toHaveBeenCalledWith({
+      data: {
+        shop: SHOP,
+        shopifyOrderId: "gid://shopify/Order/123",
+        to: "cust@example.com",
+        subject: "Order #1009",
+      },
+    });
+  });
+
+  it("does not log to EmailSendLog when the send fails", async () => {
+    sendMailMock.mockRejectedValueOnce({ code: "EAUTH", message: "535" });
+    const { admin } = makeAdmin(orderPayload("cust@example.com"));
+    await handleSendEmailOp(admin, makeFd(), SHOP);
+    expect(prismaMock.emailSendLog.create).not.toHaveBeenCalled();
+  });
+
+  it("a log-write failure never fails the already-successful send response", async () => {
+    prismaMock.emailSendLog.create.mockRejectedValueOnce(new Error("db down"));
+    const { admin } = makeAdmin(orderPayload("cust@example.com"));
+    const res = await handleSendEmailOp(admin, makeFd(), SHOP);
+    const j = (await res.json()) as { ok: boolean; message: string };
+    expect(res.status).toBe(200);
+    expect(j).toEqual({ ok: true, message: "Email sent to cust@example.com." });
   });
 
   it.each([
@@ -204,7 +237,7 @@ describe("handleSendEmailOp", () => {
     ["non-order gid", "gid://shopify/Product/123"],
   ])("rejects a %s orderId without touching the API", async (_label, id) => {
     const { admin, calls } = makeAdmin(orderPayload("cust@example.com"));
-    const res = await handleSendEmailOp(admin, makeFd({ orderId: id }));
+    const res = await handleSendEmailOp(admin, makeFd({ orderId: id }), SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(res.status).toBe(400);
     expect(j.ok).toBe(false);
@@ -228,7 +261,7 @@ describe("handleSendEmailOp", () => {
     ],
   ])("rejects %s with a 400", async (_label, overrides, message) => {
     const { admin, calls } = makeAdmin(orderPayload("cust@example.com"));
-    const res = await handleSendEmailOp(admin, makeFd(overrides));
+    const res = await handleSendEmailOp(admin, makeFd(overrides), SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(res.status).toBe(400);
     expect(j).toEqual({ ok: false, message });
@@ -238,7 +271,7 @@ describe("handleSendEmailOp", () => {
 
   it("400 when the order has no customer email", async () => {
     const { admin } = makeAdmin(orderPayload(null));
-    const res = await handleSendEmailOp(admin, makeFd());
+    const res = await handleSendEmailOp(admin, makeFd(), SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(res.status).toBe(400);
     expect(j).toEqual({
@@ -250,7 +283,7 @@ describe("handleSendEmailOp", () => {
 
   it("404 when the order does not exist", async () => {
     const { admin } = makeAdmin({ data: { order: null } });
-    const res = await handleSendEmailOp(admin, makeFd());
+    const res = await handleSendEmailOp(admin, makeFd(), SHOP);
     expect(res.status).toBe(404);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(j).toEqual({ ok: false, message: "Order not found." });
@@ -261,7 +294,7 @@ describe("handleSendEmailOp", () => {
   // breaks the fetcher JSON contract (observed live via the dev tunnel).
   it("200 + ok:false when the order read returns GraphQL errors", async () => {
     const { admin } = makeAdmin({ errors: [{ message: "boom" }] });
-    const res = await handleSendEmailOp(admin, makeFd());
+    const res = await handleSendEmailOp(admin, makeFd(), SHOP);
     expect(res.status).toBe(200);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(j.ok).toBe(false);
@@ -272,7 +305,7 @@ describe("handleSendEmailOp", () => {
   it("200 + ok:false with the humanized message when the send fails", async () => {
     sendMailMock.mockRejectedValueOnce({ code: "EAUTH", message: "535" });
     const { admin } = makeAdmin(orderPayload("cust@example.com"));
-    const res = await handleSendEmailOp(admin, makeFd());
+    const res = await handleSendEmailOp(admin, makeFd(), SHOP);
     expect(res.status).toBe(200);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(j.ok).toBe(false);
@@ -283,7 +316,7 @@ describe("handleSendEmailOp", () => {
     vi.stubEnv("EMAIL_SMTP_USER", "");
     vi.stubEnv("EMAIL_SMTP_PASSWORD", "");
     const { admin } = makeAdmin(orderPayload("cust@example.com"));
-    const res = await handleSendEmailOp(admin, makeFd());
+    const res = await handleSendEmailOp(admin, makeFd(), SHOP);
     expect(res.status).toBe(200);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(j).toEqual({ ok: false, message: EMAIL_NOT_CONFIGURED_MESSAGE });
@@ -387,7 +420,7 @@ describe("handleSendEmailOp photo validation (E-8)", () => {
     const fd = makeFd();
     fd.append("photo", makePhoto("bouquet.jpg", "image/jpeg", 1024));
 
-    const res = await handleSendEmailOp(admin, fd);
+    const res = await handleSendEmailOp(admin, fd, SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
 
     expect(res.status).toBe(200);
@@ -409,7 +442,7 @@ describe("handleSendEmailOp photo validation (E-8)", () => {
     const fd = makeFd();
     fd.append("photo", makePhoto("bouquet.jpg", "image/jpeg", 1024));
 
-    const res = await handleSendEmailOp(admin, fd);
+    const res = await handleSendEmailOp(admin, fd, SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(j.ok).toBe(true);
     expect(j.message).toBe(
@@ -423,7 +456,7 @@ describe("handleSendEmailOp photo validation (E-8)", () => {
     for (let i = 0; i <= MAX_EMAIL_PHOTOS; i++) {
       fd.append("photo", makePhoto(`p${i}.jpg`, "image/jpeg", 10));
     }
-    const res = await handleSendEmailOp(admin, fd);
+    const res = await handleSendEmailOp(admin, fd, SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(res.status).toBe(400);
     expect(j).toEqual({
@@ -437,7 +470,7 @@ describe("handleSendEmailOp photo validation (E-8)", () => {
     const { admin } = makeAdmin(orderPayload("cust@example.com"));
     const fd = makeFd();
     fd.append("photo", makePhoto("notes.pdf", "application/pdf", 10));
-    const res = await handleSendEmailOp(admin, fd);
+    const res = await handleSendEmailOp(admin, fd, SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(res.status).toBe(400);
     expect(j.message).toContain('"notes.pdf" is not a supported photo type');
@@ -451,7 +484,7 @@ describe("handleSendEmailOp photo validation (E-8)", () => {
       "photo",
       makePhoto("huge.jpg", "image/jpeg", MAX_EMAIL_PHOTO_BYTES + 1),
     );
-    const res = await handleSendEmailOp(admin, fd);
+    const res = await handleSendEmailOp(admin, fd, SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(res.status).toBe(400);
     expect(j.message).toContain('"huge.jpg" is larger than 8 MB');
@@ -463,7 +496,7 @@ describe("handleSendEmailOp photo validation (E-8)", () => {
     const fd = makeFd();
     fd.append("photo", makePhoto("a.jpg", "image/jpeg", MAX_EMAIL_PHOTO_BYTES));
     fd.append("photo", makePhoto("b.jpg", "image/jpeg", MAX_EMAIL_PHOTO_BYTES));
-    const res = await handleSendEmailOp(admin, fd);
+    const res = await handleSendEmailOp(admin, fd, SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(res.status).toBe(400);
     expect(j.message).toBe("Photos are 15 MB max in total.");
@@ -474,7 +507,7 @@ describe("handleSendEmailOp photo validation (E-8)", () => {
     const { admin } = makeAdmin(orderPayload("cust@example.com"));
     const fd = makeFd();
     fd.append("photo", makePhoto("empty.jpg", "image/jpeg", 0));
-    const res = await handleSendEmailOp(admin, fd);
+    const res = await handleSendEmailOp(admin, fd, SHOP);
     const j = (await res.json()) as { ok: boolean; message: string };
     expect(j).toEqual({ ok: true, message: "Email sent to cust@example.com." });
     expect(sendMailMock).toHaveBeenCalledTimes(1);

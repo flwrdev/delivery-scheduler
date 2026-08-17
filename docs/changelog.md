@@ -4,6 +4,18 @@
 
 Human-readable, newest-first narrative of the architecture history. Each line is a plain-English summary; the authoritative detail (with verifier notes) lives in the matching row of [verification-log.md](./verification-log.md).
 
+- **2026-08-17 (Delivery timeline: Fulfilled/Delivered/Email-sent logging, ADR-17)** — Hiling ng merchant: gusto niyang makita rin sa order panel na "Delivery timeline" kung kailan na-mark fulfilled ang isang order, kailan ito na-mark Delivered, at kailan may na-send na customer email — hindi lang reschedule history ang nakikita dati. Dalawa sa tatlong bagay na ito ay nasa Shopify na pala, hindi lang kinukuha: ang "Fulfilled" ay `Fulfillment.createdAt` at ang "Delivered" ay `Fulfillment.deliveredAt` (galing mismo sa DELIVERED fulfillment event na isinusulat na ng Lalamove poller, ADR-16) — dinagdag lang sa GraphQL query. Ang "Email sent" naman ay wala talagang record kahit saan — sadyang "zero writes" ang disenyo simula pa noon (E-5 sa customer-email-design.md). Ngayon, bagong maliit na Postgres table na `EmailSendLog` (kaparehong disenyo ng `LalamoveTracking`) ang nagta-tala nito tuwing matagumpay na may na-send na email — walang binabago sa Shopify order mismo, kaya hindi ito bumibilang sa "4 write paths" contract. Pinagsama-sama ngayon sa isang listahan, pinagsunod-sunod ayon sa oras, ang reschedule history + fulfilled + delivered + email-sent sa loob ng `DeliveryTimeline` component.
+
+  **Bagong migration** (`20260817000000_add_email_send_log`) — kailangan ng `npm run setup` bago ang susunod na `npm run dev`. Berde ang lahat ng apat na pre-flight gate (705/705 test — walo bago, typecheck, lint).
+
+  **RELEASE sa production (Cloud Run `delivery-scheduler-00235-sbv`)** — Merchant go ("sige ideploy mo na"). Backend-only deploy (walang binagong `extensions/` o `shopify.app.production.toml`, kaya hindi kinailangan ang `npm run deploy:prod`). Ang migration ay dating na-apply na sa iisang shared Neon database na ginagamit ng dev AT prod (`ep-super-glade-a4ahn2da`, kinumpirma sa pamamagitan ng paghahambing ng Cloud Run secret `delivery-scheduler-database-url` sa lokal na `.env`), kaya ligtas agad ang deploy nang walang missing-table risk. Naghahatid ng 100% ng traffic ang bagong revision, at 200 ang sagot ng service URL probe. **Hindi pa na-verify nang live sa browser** ang panel UI mismo (Fulfilled/Delivered/Email-sent rows) — nasubukan ito sa dev store pero hindi tumatalab ang mga click doon dahil sa kilalang "event swallowing" issue sa Shopify admin embedded iframe; ang code path ay na-verify lang sa antas ng successful loader execution (naka-load nang tama ang orders list gamit ang bagong GraphQL field + Postgres join, walang error) at sa 705 unit test.
+
+  **VERIFIED (parehong araw, follow-up):** ang merchant mismo ang nag-test sa order #1046 sa dev store gamit ang sariling browser (hindi apektado ng iframe-automation issue), at nagpadala ng screenshot — kumpleto at tama ang pagkakasunod-sunod ng lahat ng apat na bagong entry: **Delivered** (2:41 PM) → **Latest reschedule · Merchant** (2:39 PM) → **Marked fulfilled** (2:28 PM) → **Email sent to cod-test@example.com** (2:28 PM). Nakumpirma rin via read-only Shopify Admin API query (matapos lumipat mula prod papunta sa dev store) na tugma ang underlying data. Buo na ang feature — data layer at rendered UI parehong verified.
+
+- **2026-08-16 (RELEASE sa production — Cloud Run `delivery-scheduler-00234-262`)** — Na-deploy ang dalawang follow-up na fix mula sa isang pangalawang `/code-review high app/routes/` pass, na hindi nasakop ng naunang 15-fix na code-review session kanina ring araw na iyon. **(1)** Kumpleto na ang reset ng `closeModal()` sa `useBulkActions.ts` — dati, tatlong Cancel-modal field lang (`cancelReason`/`cancelRestock`/`cancelNotify`) ang naiwan na hindi na-clear kapag dine-dismiss ang Cancel-order modal nang hindi na-confirm (Cancel button, backdrop, o Esc); ang parehong klase ng cross-order state-leak bug na na-ayos na noon para sa `fulfillLalamoveOrderId` ay puwede pa ring mangyari dito — halimbawang lumang cancel reason o restock/notify checkbox na tahasang sumasabit sa susunod na order. **(2)** Itinama ang apat na lugar na may lumang "every 30 minutes" na sinasabi tungkol sa Lalamove poller cadence — 10 minutes na talaga ang aktwal mula pa noong naunang 2026-08-16 na session, ayon mismo sa verification-log; naiwan lang unupdated ang dalawang code comment (`internal.lalamove-poll.ts`, `lalamove-tracking.server.ts`) at dalawang doc (`decisions.md`, `api.md`).
+
+  Berde ang apat na pre-flight gate sa eksaktong tree na ipinadala (697/697 test, typecheck, lint, build), at nakumpirma ulit na nakaturo pa rin sa prod Cloud Run URL ang `APP_BASE_URL`. Backend-code lang ang binago — walang extensions o `shopify.app.production.toml` na kasama, kaya hindi na kinailangan ang `npm run deploy:prod`. Naghahatid ng 100% ng traffic ang bagong revision `delivery-scheduler-00234-262`, at 200 ang sagot ng service URL.
+
 - **2026-08-14 (Post-release smoke sa production — napatunayan na rin ang `tracked-<date>`)** — Gumawa ng test order (`#4111`) sa flowercart.store para subukan ang bagong deploy sa totoong tindahan. Isang ₱1.00 na custom item (walang produkto, kaya walang nagalaw na inventory), payment method na "Other" at hindi COD (kaya hindi pumasok ang COD-fee path), at bagong customer na **sadyang walang email** — iyon ang mahalagang guardrail, dahil ginagawa nitong imposible ang anumang confirmation o fulfillment notification. Naka-uncheck din ang "Notify customer by email".
 
   **Mga resulta:** binago ng `editDetails` ang street papuntang `SMOKE 99 Katipunan Ave` habang **buo ang ZIP 1800, ang pangalan ng tatanggap, at ang region** — at tama ang billing address na naiwan sa lumang kalye, patunay na shipping lang ang hinahawakan ng op. Naisulat ang `addr-2026-08-14`, na lumabas sa table bilang **"Address edited · Aug 14"**. Pagkatapos, ang `markFulfilled` na may tracking na `SMOKE-TRACK-001` ay nagsulat ng **`tracked-2026-08-14`** — **ang huling path na hindi pa napapatunayan kahit saan**, at ang tanging hindi kayang saklawin ng test dahil kailangan nito ng tunay at hindi na mababawing fulfillment. Panghuling tags sa buhay na order: `["addr-2026-08-14", "tracked-2026-08-14"]`.
@@ -210,3 +222,56 @@ Human-readable, newest-first narrative of the architecture history. Each line is
   page (ADR-11) + set/not-set status sa loader. Ang mga tap ay `[TAP] <payload>` sa
   existing webhook path; system prompt may bagong append-only "MENU & GREETING TAPS"
   section.
+
+## 2026-08-16 — Lalamove courier-status listener (ADR-16): auto-mark "Delivered"
+
+- Bagong webhook listener (`webhooks.lalamove-tracking.ts`) + fallback poller
+  (`internal.lalamove-poll.ts`) — pag na-mark na `COMPLETE` ng Lalamove ang isang
+  delivery, automatic na ang `fulfillmentEventCreate(DELIVERED)` sa katumbas na
+  Shopify order, kahit manu-manong binook ang delivery sa Lalamove web portal.
+- **Hindi ito dispatch integration** — hindi kailanman tumatawag ng
+  create/edit/cancel sa Lalamove API; nananatiling manu-mano ang pagbook ng
+  merchant. Hiwalay ito sa ADR-1 (ADR-16 explains why).
+- Correlation sa pagitan ng Lalamove order at Shopify order ay hindi galing sa
+  tracking link (na-live-verify na hindi ito ang totoong Lalamove order id).
+- **SAME-DAY PIVOT (2026-08-16):** live-tested ang webhook gamit ang totoong
+  delivery — kumpirmadong **hindi kailanman nagpa-fire** ang Lalamove
+  order-status webhooks para sa mga order na manu-manong binook (Partner
+  Portal's sariling "Webhook attempts" log: zero order events, habang
+  gumana ang ibang event type sa parehong URL). Tinanggal ang phone-matching
+  design; sa halip, **direktang ipapaste ng merchant ang totoong Lalamove
+  Order ID** (mula sa "Additional info" ng Lalamove app, hindi ang tracking
+  link) sa "Mark as fulfilled" modal — isang order lang sa isang pagkakataon.
+  Ang fallback poller (bawat 30 minuto via Google Cloud Scheduler) na ang
+  siyang tunay na gumagana, hindi na ang webhook.
+- Bagong Prisma model `LalamoveTracking` (side-table lang, hindi delivery
+  state), bagong env vars (`LALAMOVE_API_KEY/SECRET/MARKET/ENV/SHOP`,
+  `LALAMOVE_POLL_SECRET`).
+- **Dalawa pang bug ang natuklasan at naayos habang live-testing:** (1) ang
+  Lalamove app ay nagpapakita ng Order ID na may "#" sa harap
+  (`#3563144148557194173`) — pag-paste nito, nasisira ang HMAC signature
+  dahil URL fragment delimiter ang "#" (natatanggal ang buong ID bago pa
+  maipadala ang request); naayos via `sanitizeLalamoveOrderId()`. (2) may
+  2-oras na "staleness gate" ang poller na dinisenyo noong fallback pa lang
+  ito sa webhook — mali ito ngayong primary mechanism na ang polling, dahil
+  nagiging invisible sa poller ang mga deliveries na na-COMPLETE sa loob ng
+  unang 2 oras; tinanggal na ang gate.
+- **NA-LIVE-VERIFY NA END-TO-END sa totoong production order (2026-08-16).**
+  Order **#4126** ("Crimson Whisper" bouquet, customer Jun Carbonell,
+  ₱1,770.95 paid) — nag-book ng Lalamove delivery, na-paste ang Order ID,
+  nag-complete ang courier, na-detect ng poller, **automatic na naging
+  "Delivered" ang Shopify order** — walang isang click na ginawa nang
+  manu-mano.
+- **Multi-agent code review + 15 fix (2026-08-16), pagkatapos ma-live-verify.**
+  Pinaka-seryoso: hindi na-clear ang Lalamove Order ID field pag "Cancel" o
+  partial-failure — pwedeng ma-link ang maling order sa maling courier.
+  Naayos na rin: walang error-handling sa poller loop (isang error =
+  kanselado ang buong batch), hindi tinatanggal ang cancelled/expired na
+  order sa polling, race condition sa double-submit, "Delivered" timestamp
+  gamit ang oras ng poll sa halip na totoong oras ng delivery mula kay
+  Lalamove, laos na dokumentasyon (`schema.prisma`, `architecture.md`,
+  `CLAUDE.md`) na naglalarawan pa rin ng tinanggal na phone-matching design.
+  Binawasan din ang poller interval mula 30 papuntang **10 minuto**, dahil
+  sa totoong pagkaantala na naranasan (na-COMPLETE ang delivery bago pa man
+  dumating ang susunod na naka-iskedyul na check). Kumpletong tapos na ang
+  feature.

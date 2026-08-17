@@ -75,13 +75,20 @@ so it ships as a separate chunk that only mounts when a merchant opens an order.
 **Both the list and the drawer share one source: the route `loader`.** There is
 **no separate fetch for the drawer.**
 
-- The `loader` (`app.orders.tsx:210`) calls `authenticate.admin(request)` then
+- The `loader` (`app.orders.tsx`) calls `authenticate.admin(request)` then
   `admin.graphql(GET_ORDERS_QUERY, …)`. The query (`GET_ORDERS_QUERY`,
-  `app.orders.tsx:53`) fetches `orders(first/after/last/before, query,
+  `app.orders.tsx`) fetches `orders(first/after/last/before, query,
   sortKey: CREATED_AT, reverse: true)` including metafields (`custom.date`,
   `custom.time_slot`, `delivery.date`, `delivery.time_slot`,
   `delivery.reschedule_history`), `customAttributes`, `lineItems`,
-  `shippingAddress`, `billingAddress`, price sets, and customer.
+  `shippingAddress`, `billingAddress`, price sets, customer, and (since
+  2026-08-17, for `DeliveryTimeline`'s Fulfilled/Delivered entries)
+  `fulfillments(first: 5) { createdAt deliveredAt }`.
+- After the GraphQL response is mapped to `Order[]`, the loader does one extra
+  Postgres lookup (`prisma.emailSendLog.findMany`, scoped to `session.shop` +
+  the page's order ids) and attaches the rows as `order.emailLog` — the only
+  loader field that doesn't come from `GET_ORDERS_QUERY` (see
+  `docs/customer-email-design.md` E-5 revisit).
 - The loader returns `orders: Order[]` + `pageInfo` + echoed filter params via
   `Response.json(..., { headers: { "Cache-Control": "no-store" } })`.
 - The client reads it with `useLoaderData()` (`app.orders.tsx:918`).

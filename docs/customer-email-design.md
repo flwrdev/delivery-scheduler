@@ -52,7 +52,7 @@ domain (Starter/Private/Business plans), 50 recipients per message.
 | E-2 | Compose entry point | **The panel's existing "Send email" action opens an in-app Polaris compose modal** (replaces the Gmail-tab link). The send service is written reusable so the planned Communications page can call it later. Rejected: waiting for the new page (no in-app send until then). |
 | E-3 | Sent copy | **Auto-BCC the sender mailbox on every send** — the copy lands in the merchant inbox (filterable to a folder). Rejected: IMAP-append to Sent (extra connection + failure point), no copy. |
 | E-4 | Recipient trust | **The server NEVER trusts a client-supplied recipient.** The op receives an order id, re-reads the customer email from Admin GraphQL, and sends only there. The endpoint cannot be used as an arbitrary-recipient relay. |
-| E-5 | Order-state writes | **None.** Sending an email writes nothing to the Shopify order (no metafield, no tag, no timeline). `/app/orders` stays a 4-write-path route per api.md §2; this op is an outbound side effect only. |
+| E-5 | Order-state writes | **None to the Shopify order** — still no metafield, no tag, no Shopify order timeline. `/app/orders` stays a 4-write-path route per api.md §2. **Revisited 2026-08-17:** the order panel's `DeliveryTimeline` now also shows fulfilled/delivered/email-sent activity, so a successful send now writes one row to a new Postgres-only `EmailSendLog` table (shop, order id, recipient, subject, sent-at) — never the Shopify order, so the §2 write-path contract is unchanged. A log-write failure never fails the send response (same guarded posture as `LalamoveTracking`'s writes). |
 | E-6 | Message format | **Plain text** body (merchant-typed), subject prefilled `Order #XXXX`. HTML branding/templates are future scope (§7). |
 | E-7 | Sequencing | Separate branch `feature/customer-email`, implemented only after the V2 §8-FST closeout. New dependency `nodemailer` (+ `@types/nodemailer` dev). |
 
@@ -169,8 +169,9 @@ the order has no customer email) → `sendCustomerEmail(...)` → typed response
 1. **Template presets** (reschedule confirmation / delay notice / delivery
    reminder) prefilled from order data — natural once the modal exists.
 2. **Communications page** — the merchant's planned dedicated page (decongest
-   Orders Operations); reuses `sendCustomerEmail` + the modal; could add send
-   history (would need storage — revisit the no-log decision E-5 then).
+   Orders Operations); reuses `sendCustomerEmail` + the modal. Send history now
+   exists (`EmailSendLog`, E-5 revisit 2026-08-17) — this page could read the
+   same table instead of a per-order view.
 3. HTML-branded emails; IMAP-append to Sent; bulk/campaign sending (likely
    never — that's a marketing-tool job).
 

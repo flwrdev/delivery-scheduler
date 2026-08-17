@@ -7,6 +7,9 @@ import {
   getDeliveryStatus,
   getOrderPhone,
   getReceiverPhone,
+  getFulfilledAt,
+  getDeliveredAt,
+  getEmailSentEvents,
 } from "../app/lib/order-utils";
 
 // S11: cancelled orders keep displayFulfillmentStatus === "UNFULFILLED", so
@@ -126,5 +129,52 @@ describe("getReceiverPhone", () => {
         } as Partial<Order>),
       ),
     ).toBe("—");
+  });
+});
+
+describe("getFulfilledAt", () => {
+  it("returns null when there are no fulfillments", () => {
+    expect(getFulfilledAt(order())).toBeNull();
+    expect(getFulfilledAt(order({ fulfillments: [] }))).toBeNull();
+  });
+
+  it("returns the earliest fulfillment createdAt", () => {
+    const o = order({
+      fulfillments: [
+        { createdAt: "2026-08-10T00:00:00Z", deliveredAt: null },
+        { createdAt: "2026-08-05T00:00:00Z", deliveredAt: null },
+      ],
+    });
+    expect(getFulfilledAt(o)).toBe("2026-08-05T00:00:00Z");
+  });
+});
+
+describe("getDeliveredAt", () => {
+  it("returns null when no fulfillment has a deliveredAt", () => {
+    const o = order({
+      fulfillments: [{ createdAt: "2026-08-10T00:00:00Z", deliveredAt: null }],
+    });
+    expect(getDeliveredAt(o)).toBeNull();
+  });
+
+  it("returns the earliest non-null deliveredAt", () => {
+    const o = order({
+      fulfillments: [
+        { createdAt: "2026-08-05T00:00:00Z", deliveredAt: "2026-08-12T00:00:00Z" },
+        { createdAt: "2026-08-01T00:00:00Z", deliveredAt: "2026-08-09T00:00:00Z" },
+      ],
+    });
+    expect(getDeliveredAt(o)).toBe("2026-08-09T00:00:00Z");
+  });
+});
+
+describe("getEmailSentEvents", () => {
+  it("returns an empty array when there is no email log", () => {
+    expect(getEmailSentEvents(order())).toEqual([]);
+  });
+
+  it("returns the order's email log as-is", () => {
+    const emailLog = [{ sentAt: "2026-08-10T00:00:00Z", to: "a@b.com" }];
+    expect(getEmailSentEvents(order({ emailLog }))).toEqual(emailLog);
   });
 });

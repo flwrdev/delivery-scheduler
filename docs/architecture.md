@@ -21,16 +21,17 @@ Lahat ng nodes/edges sa baba ay may corresponding file or config.
 
 ## What's actually in this repo
 
-This is a Shopify embedded app (React Router 7, ported from the Shopify Remix template) that adds delivery-date/time-slot scheduling to checkout and syncs that state onto Shopify orders. **Delivery state lives on the Shopify order, not in Postgres** — Postgres holds four models (`Session`, `DeliveryScheduleConfig`, plus the Messenger-agent conversation pair `MessengerThread`/`MessengerMessage` since 2026-08-01); everything about a specific order's delivery date/slot/reschedule status is stored as order metafields, tags, and customAttributes. Booked-slot counts are live-derived and never persisted — since Scheduler V2 Phase 2 ([ADR-12](./decisions.md)) they come from a `metafields.custom.date:`-scoped Admin GraphQL orders search over the capacity-tracked dates, memoized in-process for 60 seconds. Last-mile courier dispatch is **not** handled here — it is delegated to the official Shopify Lalamove app (the former custom Lalamove integration was removed 2026-07-04; see [decisions.md ADR-1](./decisions.md)). The app has two outbound side channels besides the Shopify APIs: (1) **customer email** (2026-07-13, [ADR-11](./decisions.md)): the `/app/orders` `sendEmail` op sends plain-text mail through the merchant's business mailbox (Namecheap Private Email SMTP via nodemailer, [`services/send-customer-email.server.ts`](../app/services/send-customer-email.server.ts)) — an outbound side effect that **writes nothing to any order** (design: [customer-email-design.md](./customer-email-design.md)); and (2) the **Meta Messenger webhook** (FlowerCart Messenger agent — phase 3 since 2026-08-01): `GET/POST /webhooks/messenger` receives Meta-signed page events, records them in the Neon conversation models (`MessengerThread`/`MessengerMessage`, mid-unique dedupe), and enqueues a **Cloud Tasks** task (`messenger-events`, us-central1) that the HMAC-authed worker route `POST /webhooks/messenger/worker` processes via the Messenger Send API ([`services/messenger-send.server.ts`](../app/services/messenger-send.server.ts)) — no Admin API, no session storage, zero order writes; route/auth detail in [api.md](./api.md#meta-messenger-webhook-flowercart-messenger-agent). (Master context outside the repo.)
+This is a Shopify embedded app (React Router 7, ported from the Shopify Remix template) that adds delivery-date/time-slot scheduling to checkout and syncs that state onto Shopify orders. **Delivery state lives on the Shopify order, not in Postgres** — Postgres holds five models (`Session`, `DeliveryScheduleConfig`, the Messenger-agent conversation pair `MessengerThread`/`MessengerMessage` since 2026-08-01, the Lalamove correlation side-table `LalamoveTracking` since 2026-08-16 (ADR-16), and the Customer Email send log `EmailSendLog` since 2026-08-17); everything about a specific order's delivery date/slot/reschedule status is stored as order metafields, tags, and customAttributes. Booked-slot counts are live-derived and never persisted — since Scheduler V2 Phase 2 ([ADR-12](./decisions.md)) they come from a `metafields.custom.date:`-scoped Admin GraphQL orders search over the capacity-tracked dates, memoized in-process for 60 seconds. Last-mile courier dispatch is **not** handled here — it is delegated to the official Shopify Lalamove app (the former custom Lalamove integration was removed 2026-07-04; see [decisions.md ADR-1](./decisions.md)). The app has two outbound side channels besides the Shopify APIs: (1) **customer email** (2026-07-13, [ADR-11](./decisions.md)): the `/app/orders` `sendEmail` op sends plain-text mail through the merchant's business mailbox (Namecheap Private Email SMTP via nodemailer, [`services/send-customer-email.server.ts`](../app/services/send-customer-email.server.ts)) — an outbound side effect that **writes nothing to any order**; since 2026-08-17 it also writes one `EmailSendLog` row to Postgres per send, purely so the order panel's `DeliveryTimeline` can show when an email went out (design: [customer-email-design.md](./customer-email-design.md), E-5 revisit); and (2) the **Meta Messenger webhook** (FlowerCart Messenger agent — phase 3 since 2026-08-01): `GET/POST /webhooks/messenger` receives Meta-signed page events, records them in the Neon conversation models (`MessengerThread`/`MessengerMessage`, mid-unique dedupe), and enqueues a **Cloud Tasks** task (`messenger-events`, us-central1) that the HMAC-authed worker route `POST /webhooks/messenger/worker` processes via the Messenger Send API ([`services/messenger-send.server.ts`](../app/services/messenger-send.server.ts)) — no Admin API, no session storage, zero order writes; route/auth detail in [api.md](./api.md#meta-messenger-webhook-flowercart-messenger-agent). (Master context outside the repo.)
 
 The full route/extension/service inventory (extensions ×5, embedded admin routes, auth/bootstrap routes, App Proxy routes, customer-account JWT routes, webhooks, services/lib) lives in **[api.md](./api.md)** — along with the order write-path contract. The one-sentence version proved there: only **4 surfaces** actually mutate delivery-schedule state (`webhooks.orders.create.ts`; `apps.schedule-rules.reschedule.ts` with no live caller; `public.customer-account.reschedule.ts` the only live customer path; and the `/app/orders` merchant `reschedule` op added by Orders Ops V2 Phase 4, ADR-10), and all 5 extensions except `delivery-reschedule-customer` are read-only.
 
 ### Database (Prisma — `prisma/schema.prisma`)
 
-Two models lang. Walang other table.
-
 - `Session`
 - `DeliveryScheduleConfig`
+- `MessengerThread` / `MessengerMessage` (Messenger agent conversation pair — never the order)
+- `LalamoveTracking` (ADR-16 — Lalamove↔Shopify correlation side-table, never delivery state)
+- `EmailSendLog` (2026-08-17 — Customer Email send log for the order panel's `DeliveryTimeline`; never delivery state, never joins the order write-path contract in [api.md](./api.md))
 
 ---
 
@@ -210,6 +211,24 @@ erDiagram
 
     Session ||..o{ DeliveryScheduleConfig : "shop string (no FK)"
     MessengerThread ||--o{ MessengerMessage : "psid"
+```
+
+**`LalamoveTracking` (ADR-16, 2026-08-16):** a Lalamove↔Shopify correlation side-table, same "Postgres holds the SIDE CHANNEL, never delivery state" posture as the Messenger models above — it is not a delivery-date/slot write, it exists so a Lalamove courier's own `COMPLETE` status can auto-flip a Shopify fulfillment to "Delivered" via `fulfillmentEventCreate`. **Polling-only** as of the same-day ADR-16 addendum — Lalamove's push webhooks never fire for orders booked through the merchant's manual web flow (live-confirmed via the Lalamove Partner Portal's own "Webhook attempts" log). Rows are populated explicitly by the merchant pasting the real Lalamove Order ID into the "Mark as fulfilled" modal (`recordLalamoveOrderId()`) — never by webhook, and never by parsing the merchant-facing tracking link, which does not carry Lalamove's real order id. Full contract in [api.md](./api.md#lalamove-courier-status-listener-adr-16--not-a-shopify-webhook-not-dispatch-polling-only-as-of-the-same-day-addendum); the ADR-1-vs-ADR-16 distinction (status-listen ≠ dispatch) is in [decisions.md](./decisions.md).
+
+```mermaid
+erDiagram
+    LalamoveTracking {
+        string   id PK
+        string   shop
+        string   shopifyOrderId
+        string   shopifyFulfillmentId
+        string   lalamoveOrderId UK
+        string   status
+        datetime deliveredAt
+        datetime lastPolledAt
+        datetime createdAt
+        datetime updatedAt
+    }
 ```
 
 **Messenger conversation models (FlowerCart Messenger agent, phase 3):** Neon holds the CONVERSATION, never the order — Shopify stays the order ledger (master doc, locked decision #1). `MessengerMessage.mid` is unique and doubles as the webhook dedupe (Meta redelivers on non-200); `repliedAt`/`replyMid` make the Cloud Tasks worker retry-idempotent and record bot-sent mids for phase 7 human-takeover echo-matching. Route/queue detail in [api.md](./api.md#meta-messenger-webhook-flowercart-messenger-agent).
