@@ -15,12 +15,12 @@ export interface MarkFulfilledModalProps {
   onClose: () => void;
   selectedCount: number;
   isSubmitting: boolean;
-  fulfillTrackingNumber: string;
-  setFulfillTrackingNumber: (value: string) => void;
   fulfillTrackingUrl: string;
   setFulfillTrackingUrl: (value: string) => void;
   fulfillNotify: boolean;
   setFulfillNotify: (value: boolean) => void;
+  fulfillLalamoveOrderId: string;
+  setFulfillLalamoveOrderId: (value: string) => void;
   onConfirm: () => void;
 }
 
@@ -29,12 +29,12 @@ export function MarkFulfilledModal({
   onClose,
   selectedCount,
   isSubmitting,
-  fulfillTrackingNumber,
-  setFulfillTrackingNumber,
   fulfillTrackingUrl,
   setFulfillTrackingUrl,
   fulfillNotify,
   setFulfillNotify,
+  fulfillLalamoveOrderId,
+  setFulfillLalamoveOrderId,
   onConfirm,
 }: MarkFulfilledModalProps) {
   return (
@@ -65,19 +65,29 @@ export function MarkFulfilledModal({
             </Text>
           </Banner>
           <TextField
-            label="Tracking number (optional)"
-            placeholder="e.g. 1Z999AA10123456784"
-            value={fulfillTrackingNumber}
-            onChange={setFulfillTrackingNumber}
-            autoComplete="off"
-          />
-          <TextField
             label="Tracking URL (optional)"
             placeholder="https://tracking.example.com/…"
             value={fulfillTrackingUrl}
             onChange={setFulfillTrackingUrl}
             autoComplete="off"
           />
+          {selectedCount === 1 && (
+            <TextField
+              label="Lalamove Order ID (optional)"
+              placeholder="e.g. 3562752825958289729"
+              helpText={
+                <>
+                  From the Lalamove app&apos;s order detail &quot;Additional
+                  info&quot; section — <strong>not</strong> the tracking
+                  link. When completed, this order is automatically marked
+                  Delivered.
+                </>
+              }
+              value={fulfillLalamoveOrderId}
+              onChange={setFulfillLalamoveOrderId}
+              autoComplete="off"
+            />
+          )}
           <Checkbox
             label="Notify customer by email"
             checked={fulfillNotify}
