@@ -19,6 +19,9 @@ ng state na iyon papunta sa Shopify orders.
 - **Only a few surfaces write delivery state.** Most extensions and admin order-page
   blocks are read-only. Never assume a surface writes — verify in `docs/api.md`.
 - **Courier dispatch is out of scope** — handled by the official Shopify Lalamove app.
+  A separate, narrow Lalamove **status-listener** (ADR-16) auto-marks a fulfillment
+  "Delivered" once the merchant pastes the courier's real Order ID — read-only against
+  Lalamove, not dispatch; see ADR-16 before assuming all Lalamove code is banned.
 - **The app sends customer emails itself** via the merchant's Private Email SMTP
   mailbox (`app/services/send-customer-email.server.ts`, in-app compose modal on
   `/app/orders`) — zero order writes. Route-op upstream failures must return
@@ -77,8 +80,12 @@ Rules:
   `docs/verification-log.md`, and add an entry to `docs/changelog.md`
   and/or `docs/decisions.md` if applicable.
 - Courier dispatch is out of scope — handled by the official Shopify
-  Lalamove app. Do not reintroduce custom Lalamove code
-  (see `docs/decisions.md` ADR-1).
+  Lalamove app. Do not reintroduce custom Lalamove **dispatch** code
+  (booking, editing, or cancelling a delivery — see `docs/decisions.md`
+  ADR-1). This does NOT ban all Lalamove code: a narrow, read-only
+  courier-**status-listener** exists (ADR-16) to auto-mark a fulfillment
+  "Delivered" — it never dispatches. Read ADR-16 before touching anything
+  Lalamove-shaped so you don't rip out a live feature by mistake.
 - After creating or pulling any new Prisma migration, explicitly tell
   the user: "Run `npm run setup` before your next `npm run dev`" —
   dev boot no longer auto-applies migrations (see shopify.web.toml

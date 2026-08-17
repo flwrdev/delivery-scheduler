@@ -35,15 +35,6 @@ export function useBulkActions(
   const fetcher = useFetcher<BulkActionResponse>();
   const isSubmitting: boolean = fetcher.state !== "idle";
 
-  // Modal visibility — single source of truth for all six bulk modals.
-  const [activeModal, setActiveModal] = useState<BulkModalName | null>(null);
-  const openModal = useCallback((name: BulkModalName) => {
-    setActiveModal(name);
-  }, []);
-  const closeModal = useCallback(() => {
-    setActiveModal(null);
-  }, []);
-
   // Cancel modal form state
   const [cancelReason, setCancelReason] = useState<string>("CUSTOMER");
   const [cancelRestock, setCancelRestock] = useState<boolean>(false);
@@ -55,10 +46,40 @@ export function useBulkActions(
   const [removeTagsInput, setRemoveTagsInput] = useState<string>("");
 
   // Mark as fulfilled modal form state
-  const [fulfillTrackingNumber, setFulfillTrackingNumber] =
-    useState<string>("");
   const [fulfillTrackingUrl, setFulfillTrackingUrl] = useState<string>("");
   const [fulfillNotify, setFulfillNotify] = useState<boolean>(false);
+  // Lalamove Order ID (ADR-16) — the real numeric id from the Lalamove app's
+  // order detail "Additional info" section, NOT the tracking share-link.
+  // Single-order only: applying one courier's id to a multi-order bulk
+  // fulfillment would be wrong, so the modal only accepts it when exactly
+  // one order is selected (enforced in MarkFulfilledModal + here).
+  const [fulfillLalamoveOrderId, setFulfillLalamoveOrderId] = useState<string>("");
+
+  // Modal visibility — single source of truth for all six bulk modals.
+  const [activeModal, setActiveModal] = useState<BulkModalName | null>(null);
+  const openModal = useCallback((name: BulkModalName) => {
+    setActiveModal(name);
+  }, []);
+  // Closing (Cancel button, backdrop, Esc) resets every modal's form state,
+  // not just on a successful submit — otherwise a value typed then
+  // cancelled survives into the next time that modal opens, silently
+  // attached to whatever's selected then. This matters most for
+  // fulfillLalamoveOrderId (ADR-16): a stale id left over from a cancelled
+  // submit on order A can get attached to order B's fulfillment the next
+  // time the modal opens, misdirecting the auto-Delivered courier
+  // correlation to the wrong Shopify order.
+  const closeModal = useCallback(() => {
+    setActiveModal(null);
+    setCancelReason("CUSTOMER");
+    setCancelRestock(false);
+    setCancelNotify(false);
+    setCancelStaffNote("");
+    setAddTagsInput("");
+    setRemoveTagsInput("");
+    setFulfillTrackingUrl("");
+    setFulfillNotify(false);
+    setFulfillLalamoveOrderId("");
+  }, []);
 
   const submitBulk = useCallback(
     (op: BulkActionName, extras?: Record<string, string>) => {
@@ -124,11 +145,19 @@ export function useBulkActions(
     const fd = new FormData();
     fd.append("_action", "markFulfilled");
     selectedResources.forEach((id) => fd.append("orderId", id));
-    fd.append("trackingNumber", fulfillTrackingNumber);
     fd.append("trackingUrl", fulfillTrackingUrl);
     fd.append("notifyCustomer", fulfillNotify ? "1" : "0");
+    if (selectedResources.length === 1 && fulfillLalamoveOrderId.trim()) {
+      fd.append("lalamoveOrderId", fulfillLalamoveOrderId.trim());
+    }
     fetcher.submit(fd, { method: "post" });
-  }, [selectedResources, fetcher, fulfillTrackingNumber, fulfillTrackingUrl, fulfillNotify]);
+  }, [
+    selectedResources,
+    fetcher,
+    fulfillTrackingUrl,
+    fulfillNotify,
+    fulfillLalamoveOrderId,
+  ]);
 
   // The selection callbacks come from useIndexResourceState, whose returned
   // function identities are not guaranteed stable across renders — read them
@@ -196,13 +225,7 @@ export function useBulkActions(
         `${n} ${n === 1 ? "order" : "orders"} ${meta?.verb ?? "updated"}.`,
       );
       clearSelectionRef.current();
-      setActiveModal(null);
-      setCancelStaffNote("");
-      setAddTagsInput("");
-      setRemoveTagsInput("");
-      setFulfillTrackingNumber("");
-      setFulfillTrackingUrl("");
-      setFulfillNotify(false);
+      closeModal();
     } else if (d.summary && d.summary.failed > 0) {
       const failed = (d.results || []).filter((r) => !r.success);
       const lines = failed
@@ -225,11 +248,11 @@ export function useBulkActions(
       if (succeededIds.length > 0) {
         removeSelectedResourcesRef.current(succeededIds);
       }
-      setActiveModal(null);
+      closeModal();
     } else if (d.message) {
       shopify.toast.show(d.message, { isError: true });
     }
-  }, [fetcher.data, fetcher.state, shopify]);
+  }, [fetcher.data, fetcher.state, shopify, closeModal]);
 
   return {
     isSubmitting,
@@ -252,12 +275,12 @@ export function useBulkActions(
     setAddTagsInput,
     removeTagsInput,
     setRemoveTagsInput,
-    fulfillTrackingNumber,
-    setFulfillTrackingNumber,
     fulfillTrackingUrl,
     setFulfillTrackingUrl,
     fulfillNotify,
     setFulfillNotify,
+    fulfillLalamoveOrderId,
+    setFulfillLalamoveOrderId,
     handleArchiveConfirm,
     handleUnarchiveConfirm,
     handleCancelConfirm,
