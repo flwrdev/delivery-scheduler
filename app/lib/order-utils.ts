@@ -97,6 +97,8 @@ export interface Order {
   } | null;
   customAttributes: CustomAttribute[];
   lineItems: { edges: { node: LineItem }[] } | null;
+  fulfillments: { createdAt: string; deliveredAt: string | null }[] | null;
+  emailLog: { sentAt: string; to: string }[];
 }
 
 export type BadgeTone =
@@ -629,4 +631,28 @@ export function getDeliveryStatus(order: Order): DeliveryStatus {
     return { label: "Scheduled", tone: "success" };
   }
   return { label: "—", tone: "neutral" };
+}
+
+// ─── Fulfilled / Delivered / Email-sent timeline helpers ──────────────────────
+
+export function getFulfilledAt(order: Order): string | null {
+  const timestamps = (order.fulfillments || [])
+    .map((f) => f.createdAt)
+    .filter((v): v is string => Boolean(v) && !Number.isNaN(Date.parse(v)));
+  if (timestamps.length === 0) return null;
+  return timestamps.sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+}
+
+export function getDeliveredAt(order: Order): string | null {
+  const timestamps = (order.fulfillments || [])
+    .map((f) => f.deliveredAt)
+    .filter((v): v is string => Boolean(v) && !Number.isNaN(Date.parse(v!)));
+  if (timestamps.length === 0) return null;
+  return timestamps.sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+}
+
+export function getEmailSentEvents(
+  order: Order,
+): { sentAt: string; to: string }[] {
+  return order.emailLog || [];
 }

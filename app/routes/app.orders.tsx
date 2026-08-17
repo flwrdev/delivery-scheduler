@@ -63,6 +63,8 @@ import { slotValuesMatch } from "../lib/slot-value";
 import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
 import { handleSendEmailOp } from "../services/send-customer-email.server";
 import { handleEditDetailsOp } from "../services/update-order-contact.server";
+import { recordLalamoveOrderId } from "../services/lalamove-tracking.server";
+import prisma from "../db.server";
 import {
   getScheduleRules,
   getScheduleRulesWithBookedCounts,
@@ -217,6 +219,10 @@ const GET_ORDERS_QUERY = `
           rescheduleStatus: metafield(namespace: "$app", key: "reschedule_status") {
             value
           }
+          fulfillments(first: 5) {
+            createdAt
+            deliveredAt
+          }
           lineItems(first: 10) {
             edges {
               node {
@@ -293,7 +299,7 @@ export const loader = async ({
 }: {
   request: Request;
 }): Promise<Response> => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
 
   const rawDeliveryDateParam = url.searchParams.get("deliveryDate");
@@ -377,11 +383,33 @@ export const loader = async ({
     errors?: Array<{ message: string }>;
   };
 
+  const orders =
+    body.data?.orders?.edges?.map((edge: { node: Order }) => edge.node) ?? [];
+
+  // Email-sent history (E-5 revisit, docs/customer-email-design.md) lives in
+  // Postgres, never on the Shopify order — one lookup keyed by this page's
+  // order ids, grouped and attached below.
+  const orderIds = orders.map((o) => o.id);
+  const emailLogRows =
+    orderIds.length > 0
+      ? await prisma.emailSendLog.findMany({
+          where: { shop: session.shop, shopifyOrderId: { in: orderIds } },
+          orderBy: { sentAt: "desc" },
+        })
+      : [];
+  const emailLogByOrderId = new Map<string, { sentAt: string; to: string }[]>();
+  for (const row of emailLogRows) {
+    const list = emailLogByOrderId.get(row.shopifyOrderId) ?? [];
+    list.push({ sentAt: row.sentAt.toISOString(), to: row.to });
+    emailLogByOrderId.set(row.shopifyOrderId, list);
+  }
+  for (const order of orders) {
+    order.emailLog = emailLogByOrderId.get(order.id) ?? [];
+  }
+
   return Response.json(
     {
-      orders:
-        body.data?.orders?.edges?.map((edge: { node: Order }) => edge.node) ??
-        [],
+      orders,
       pageInfo: body.data?.orders?.pageInfo ?? null,
       errors: body.errors ?? null,
       deliveryDateParam,
@@ -603,10 +631,11 @@ export const action = async ({
   const opRaw = String(fd.get("_action") || "");
 
   // Customer Email (customer-email-design.md): single-order in-app compose,
-  // dispatched before the bulk machinery. Outbound side effect only — writes
-  // nothing to the order (E-5), so /app/orders stays a 4-write-path route.
+  // dispatched before the bulk machinery. Writes nothing to the Shopify order
+  // (E-5), so /app/orders stays a 4-write-path route — it logs the send to
+  // Postgres (EmailSendLog) purely for the panel timeline, not a delivery write.
   if (opRaw === "sendEmail") {
-    return handleSendEmailOp(admin, fd);
+    return handleSendEmailOp(admin, fd, session.shop);
   }
 
   // Edit details: single-order shipping-address rewrite from the panel's
@@ -681,7 +710,7 @@ export const action = async ({
           success: false,
           message: j.errors.map((e) => e.message).join("; "),
         });
-        return;
+        return j;
       }
       const errs =
         (j?.data?.[rootKey]?.[errorsKey] as Array<{ message: string }>) || [];
@@ -694,9 +723,11 @@ export const action = async ({
       } else {
         results.push({ orderId: id, success: true });
       }
+      return j;
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "GraphQL error";
       results.push({ orderId: id, success: false, message });
+      return undefined;
     }
   };
 
@@ -771,9 +802,13 @@ export const action = async ({
       await runOne(id, mutation, { id, tags }, rootKey, "userErrors");
     }
   } else if (op === "markFulfilled") {
-    const trackingNumber = String(fd.get("trackingNumber") || "").trim();
     const trackingUrl = String(fd.get("trackingUrl") || "").trim();
     const notifyCustomer = fd.get("notifyCustomer") === "1";
+    // ADR-16: only meaningful for a single order — the modal only submits
+    // this when exactly one order is selected, but re-check server-side
+    // rather than trust the client.
+    const lalamoveOrderId =
+      orderIds.length === 1 ? String(fd.get("lalamoveOrderId") || "").trim() : "";
     if (trackingUrl && !isHttpTrackingUrl(trackingUrl)) {
       return Response.json(
         {
@@ -864,15 +899,12 @@ export const action = async ({
           })),
           notifyCustomer,
         };
-        if (trackingNumber || trackingUrl) {
-          const trackingInfo: Record<string, string> = {};
-          if (trackingNumber) trackingInfo.number = trackingNumber;
-          if (trackingUrl) trackingInfo.url = trackingUrl;
-          fulfillment.trackingInfo = trackingInfo;
+        if (trackingUrl) {
+          fulfillment.trackingInfo = { url: trackingUrl };
         }
 
         const before = results.length;
-        await runOne(
+        const fulfillJson = await runOne(
           id,
           FULFILLMENT_CREATE_MUTATION,
           { fulfillment },
@@ -883,13 +915,61 @@ export const action = async ({
           const r = results[i];
           if (!r.success && r.message) r.message = scopeHint(r.message);
         }
+
+        // ADR-16: record the Lalamove correlation right after the fulfillment
+        // that created it succeeds — never fails the fulfillment itself, a
+        // bad/mistyped id just gets logged (mirrors the tracking-tag write's
+        // guarded posture below). lalamoveOrderId is only ever truthy when
+        // orderIds.length === 1 (forced above), so `id` here is always that
+        // one order — no extra identity check needed.
+        if (lalamoveOrderId) {
+          const succeeded = results
+            .slice(before)
+            .some((r) => r.orderId === id && r.success);
+          const fulfillmentId = (
+            fulfillJson?.data?.fulfillmentCreate as
+              | { fulfillment?: { id?: string } }
+              | undefined
+          )?.fulfillment?.id;
+          if (succeeded && fulfillmentId) {
+            try {
+              const lalamoveResult = await recordLalamoveOrderId(
+                admin,
+                session.shop,
+                id,
+                fulfillmentId,
+                lalamoveOrderId,
+              );
+              if (lalamoveResult.status === "not_found") {
+                console.warn(
+                  `[markFulfilled] Lalamove order id "${lalamoveOrderId}" not found — check it's the numeric order id, not the tracking link.`,
+                );
+              } else if (
+                lalamoveResult.status === "lalamove_lookup_failed" ||
+                lalamoveResult.status === "shopify_write_failed"
+              ) {
+                console.warn(
+                  `[markFulfilled] Lalamove tracking record failed: ${lalamoveResult.error}`,
+                );
+              } else if (lalamoveResult.status === "already_tracked") {
+                console.warn(
+                  `[markFulfilled] Lalamove order id "${lalamoveOrderId}" is already linked to a different order — not re-linked to ${id}.`,
+                );
+              }
+            } catch (e: unknown) {
+              console.warn("[markFulfilled] Lalamove tracking record threw:", e);
+            }
+          }
+        }
       }
 
       // ── Step 3: timeline event tag, only for orders that actually got
       //    tracking and only where the fulfillment succeeded. A tagging
       //    failure never turns a successful fulfillment into a reported
       //    failure — the tag is a mirror, like the reschedule sync's.
-      if (trackingNumber || trackingUrl) {
+      //    Fires on Tracking URL OR the Lalamove Order ID (ADR-16) — either
+      //    one alone still means "tracking got added to this fulfillment."
+      if (trackingUrl || lalamoveOrderId) {
         const fulfilledIds = results
           .filter((r) => r.success && safeIds.includes(r.orderId))
           .map((r) => r.orderId);
@@ -1292,12 +1372,12 @@ function Extension() {
     setAddTagsInput,
     removeTagsInput,
     setRemoveTagsInput,
-    fulfillTrackingNumber,
-    setFulfillTrackingNumber,
     fulfillTrackingUrl,
     setFulfillTrackingUrl,
     fulfillNotify,
     setFulfillNotify,
+    fulfillLalamoveOrderId,
+    setFulfillLalamoveOrderId,
     handleArchiveConfirm,
     handleUnarchiveConfirm,
     handleCancelConfirm,
@@ -2040,12 +2120,12 @@ function Extension() {
         onClose={closeModal}
         selectedCount={selectedCount}
         isSubmitting={isSubmitting}
-        fulfillTrackingNumber={fulfillTrackingNumber}
-        setFulfillTrackingNumber={setFulfillTrackingNumber}
         fulfillTrackingUrl={fulfillTrackingUrl}
         setFulfillTrackingUrl={setFulfillTrackingUrl}
         fulfillNotify={fulfillNotify}
         setFulfillNotify={setFulfillNotify}
+        fulfillLalamoveOrderId={fulfillLalamoveOrderId}
+        setFulfillLalamoveOrderId={setFulfillLalamoveOrderId}
         onConfirm={handleMarkFulfilled}
       />
       <RescheduleModal

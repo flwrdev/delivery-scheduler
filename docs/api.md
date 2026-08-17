@@ -76,6 +76,21 @@ Boilerplate scaffold para sa OAuth at non-embedded login. Hindi business logic.
 
 API version sa `shopify.app.toml` is `2026-04`.
 
+## Lalamove courier-status listener (ADR-16 — NOT a Shopify webhook, NOT dispatch; polling-only as of the same-day addendum)
+
+**Correlation is explicit, not inferred.** The merchant pastes the real Lalamove Order ID (from the Lalamove app's order detail "Additional info" section — NOT the tracking share-link) into a new optional field in the `/app/orders` "Mark as fulfilled" modal, single-order only. The `markFulfilled` handler in [app.orders.tsx](../app/routes/app.orders.tsx) calls `recordLalamoveOrderId()` right after a successful `fulfillmentCreate`. Live-tested 2026-08-16: Lalamove's push webhooks do **not** fire for orders booked through the merchant's manual "Place Order" web flow (confirmed via the Lalamove Partner Portal's own "Webhook attempts" log showing zero order events across a real driver assignment + cancellation, while an unrelated event delivered fine on the same URL) — so the poller below, not the webhook, is what actually runs.
+
+| Path | File | Auth |
+| --- | --- | --- |
+| `POST /internal/lalamove-poll` | [internal.lalamove-poll.ts](../app/routes/internal.lalamove-poll.ts) | Shared-secret header (`x-lalamove-poll-secret` vs `LALAMOVE_POLL_SECRET`), timing-safe compare. **Primary mechanism** — triggered by the Google Cloud Scheduler job `delivery-scheduler-lalamove-poll` (us-central1, every 10 minutes — cut down from 30 the same day after a live gap) created 2026-08-16. |
+| `POST /webhooks/lalamove-tracking` | [webhooks.lalamove-tracking.ts](../app/routes/webhooks.lalamove-tracking.ts) | Lalamove's own HMAC-SHA256 scheme, verified by hand via [verify-lalamove-signature.server.ts](../app/lib/verify-lalamove-signature.server.ts) — never touches `authenticate.*`. **Best-effort only** — left wired in case Lalamove ever pushes something for this account, but confirmed not to in practice (see above). Header/payload shape remains unverified against a real payload. |
+
+Read-only Lalamove Open API client: [lalamove-client.server.ts](../app/lib/lalamove-client.server.ts) — `getOrderStatus(orderId)` (GET `/v3/orders/{id}`, live-verified 2026-08-16 against the production API, including against a manually web-booked order) and `configureLalamoveWebhook(url)` (PATCH `/v3/webhook`, one-time setup call, not wired to any UI). This app never calls Lalamove's order create/edit/cancel endpoints — dispatch stays 100% in the merchant's manual `web.lalamove.com` booking (ADR-1, unaffected by ADR-16).
+
+Matching/write logic: [lalamove-tracking.server.ts](../app/services/lalamove-tracking.server.ts) — `recordLalamoveOrderId()` (validates the merchant-pasted id via `getOrderStatus` before recording, so a mistyped id — e.g. the share-link token pasted by mistake — is caught immediately; marks Delivered immediately if the courier already completed by paste time) and `markLalamoveOrderDelivered()` (the ONE place `fulfillmentEventCreate(status: DELIVERED)` is called, used by both the poller and the best-effort webhook). **This is a fulfillment-status write, explicitly OUTSIDE the delivery-date/slot write-path contract in §2 below** — same framing as `editDetails` and the COD fee auto-add: it touches no delivery metafield, tag, or customAttribute.
+
+Env: `LALAMOVE_API_KEY`, `LALAMOVE_API_SECRET`, `LALAMOVE_MARKET` (`PH`), `LALAMOVE_ENV` (`sandbox`/`production`), `LALAMOVE_SHOP` (single-shop app, same convention as `MESSENGER_SHOP`), `LALAMOVE_POLL_SECRET`. All required for the listener to do anything; a missing key degrades to a logged no-op, never a 5xx.
+
 ## Meta Messenger webhook (FlowerCart Messenger agent)
 
 | Path | File | Auth |
@@ -157,12 +172,17 @@ Besides the `reschedule` op above, the `/app/orders` `action` handler runs these
 - `orderClose` / `orderOpen` (archive/unarchive)
 - `orderCancel`
 - `tagsAdd` / `tagsRemove` — **freeform text input**; merchant types arbitrary tag strings
-- `fulfillmentCreate` (mark fulfilled, with optional tracking number/URL)
+- `fulfillmentCreate` (mark fulfilled, with optional tracking number/URL, and — single order only, ADR-16 — an optional Lalamove Order ID that starts courier-delivery polling; see the [Lalamove courier-status listener](#lalamove-courier-status-listener-adr-16--not-a-shopify-webhook-not-dispatch-polling-only-as-of-the-same-day-addendum) section above)
 
 The `sendEmail` op (Customer Email, ADR-11) is not an order mutation at all: it
 re-reads the order's customer email (read-only query — the recipient is never
 client-supplied) and sends SMTP mail via `sendCustomerEmail()`; it writes no
-metafield, tag, or customAttribute.
+metafield, tag, or customAttribute. Since 2026-08-17 a successful send also
+writes one row to Postgres (`EmailSendLog` — shop, order id, recipient,
+subject, sent-at), purely so the order panel's `DeliveryTimeline` can show
+when the email went out; that's a Postgres-only log write, not an order write,
+so it does not join this write-path contract (see `docs/customer-email-design.md`
+E-5 revisit).
 
 ### `editDetails` — a shipping-address write OUTSIDE the delivery contract (2026-08-14)
 

@@ -1,11 +1,15 @@
 import { Badge, BlockStack, Text } from "@shopify/polaris";
 import {
   type Order,
+  type RescheduleTimelineEvent,
   getAttr,
   getDeliveryDateValue,
   getDeliveryTimeValue,
   getRescheduleTimelineEvents,
   hasRescheduleTag,
+  getFulfilledAt,
+  getDeliveredAt,
+  getEmailSentEvents,
   formatTimelineDelivery,
   formatTimelineTimestamp,
   formatTimelineStatus,
@@ -18,6 +22,39 @@ function sourceLabel(source: string): string | null {
   return null;
 }
 
+type ActivityEvent =
+  | { kind: "reschedule"; timestamp: string; event: RescheduleTimelineEvent }
+  | { kind: "fulfilled"; timestamp: string }
+  | { kind: "delivered"; timestamp: string }
+  | { kind: "email"; timestamp: string; to: string };
+
+function timeValue(timestamp: string): number {
+  const parsed = Date.parse(timestamp);
+  // Pushes events with an unparseable/missing timestamp (the reschedule
+  // history's "—" sentinel) to the bottom, matching the prior sort behavior.
+  return Number.isNaN(parsed) ? -Infinity : parsed;
+}
+
+function buildActivityEvents(order: Order): ActivityEvent[] {
+  const events: ActivityEvent[] = getRescheduleTimelineEvents(order).map(
+    (event) => ({ kind: "reschedule", timestamp: event.requestedAt, event }),
+  );
+
+  const fulfilledAt = getFulfilledAt(order);
+  if (fulfilledAt) events.push({ kind: "fulfilled", timestamp: fulfilledAt });
+
+  const deliveredAt = getDeliveredAt(order);
+  if (deliveredAt) events.push({ kind: "delivered", timestamp: deliveredAt });
+
+  for (const { sentAt, to } of getEmailSentEvents(order)) {
+    events.push({ kind: "email", timestamp: sentAt, to });
+  }
+
+  return events.sort(
+    (a, b) => timeValue(b.timestamp) - timeValue(a.timestamp),
+  );
+}
+
 /**
  * At-a-glance reschedule history: original schedule (order-time
  * customAttributes), each recorded change (from → to, who, when), and the
@@ -26,7 +63,10 @@ function sourceLabel(source: string): string | null {
  */
 export function DeliveryTimeline({ order }: { order: Order }) {
   const events = getRescheduleTimelineEvents(order);
-  if (events.length === 0 && !hasRescheduleTag(order)) return null;
+  const activityEvents = buildActivityEvents(order);
+  const hasActivity =
+    events.length > 0 || hasRescheduleTag(order) || activityEvents.length > 0;
+  if (!hasActivity) return null;
 
   const attrs = order.customAttributes || [];
   // The reschedule write path overwrites the Delivery Date/Time
@@ -67,14 +107,19 @@ export function DeliveryTimeline({ order }: { order: Order }) {
             </Text>
           </BlockStack>
         </li>
-        {events.length === 0 ? (
+        {hasRescheduleTag(order) && events.length === 0 && (
           <li className="odp-timeline-item">
             <Text as="span" tone="subdued">
               Rescheduled — history not yet recorded
             </Text>
           </li>
-        ) : (
-          events.map((event, index) => {
+        )}
+        {activityEvents.map((item, index) => {
+          if (item.kind === "reschedule") {
+            const rescheduleIndex = activityEvents
+              .slice(0, index)
+              .filter((e) => e.kind === "reschedule").length;
+            const event = item.event;
             const from = formatTimelineDelivery(
               event.fromDate,
               event.fromTimeSlot,
@@ -84,13 +129,13 @@ export function DeliveryTimeline({ order }: { order: Order }) {
             return (
               <li
                 className="odp-timeline-item"
-                key={`${event.requestedAt}-${event.date}-${event.timeSlot}-${index}`}
+                key={`reschedule-${event.requestedAt}-${event.date}-${event.timeSlot}-${index}`}
               >
                 <BlockStack gap="050">
                   <Text as="span" variant="bodySm" tone="subdued">
-                    {index === 0
+                    {rescheduleIndex === 0
                       ? "Latest reschedule"
-                      : `Reschedule ${events.length - index}`}
+                      : `Reschedule ${events.length - rescheduleIndex}`}
                     {source ? " · " : ""}
                     {source && (
                       <Badge size="small" tone={source === "Merchant" ? "info" : undefined}>
@@ -108,8 +153,51 @@ export function DeliveryTimeline({ order }: { order: Order }) {
                 </BlockStack>
               </li>
             );
-          })
-        )}
+          }
+          if (item.kind === "fulfilled") {
+            return (
+              <li className="odp-timeline-item" key={`fulfilled-${item.timestamp}`}>
+                <BlockStack gap="050">
+                  <Text as="span" variant="bodySm" tone="subdued">
+                    Marked fulfilled
+                  </Text>
+                  <Text as="span">
+                    {formatTimelineTimestamp(item.timestamp)}
+                  </Text>
+                </BlockStack>
+              </li>
+            );
+          }
+          if (item.kind === "delivered") {
+            return (
+              <li className="odp-timeline-item" key={`delivered-${item.timestamp}`}>
+                <BlockStack gap="050">
+                  <Text as="span" variant="bodySm" tone="subdued">
+                    Delivered
+                  </Text>
+                  <Text as="span">
+                    {formatTimelineTimestamp(item.timestamp)}
+                  </Text>
+                </BlockStack>
+              </li>
+            );
+          }
+          return (
+            <li
+              className="odp-timeline-item"
+              key={`email-${item.timestamp}-${item.to}`}
+            >
+              <BlockStack gap="050">
+                <Text as="span" variant="bodySm" tone="subdued">
+                  Email sent to {item.to}
+                </Text>
+                <Text as="span">
+                  {formatTimelineTimestamp(item.timestamp)}
+                </Text>
+              </BlockStack>
+            </li>
+          );
+        })}
         <li className="odp-timeline-item">
           <BlockStack gap="050">
             <Text as="span" variant="bodySm" tone="subdued">

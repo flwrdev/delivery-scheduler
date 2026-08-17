@@ -235,3 +235,69 @@ Per the merchant's call, the op is an **administrative override in the ADR-10 se
 **Consequence:** `/app/orders` gains a **fifth order write path**, and the first one that mutates customer-facing data. It is **not** a delivery write path — it touches no delivery metafield, tag, or customAttribute, so the api.md §2 table is unchanged. The orders loader query grew five read-only fields (`firstName`, `lastName`, `company`, `provinceCode`, `countryCodeV2`) purely so the overwrite has something to carry forward. Two known limits accepted as-is: no concurrency guard (last write wins, same posture as REC-5 on the reschedule path), and the delivery fee is not re-priced on a city change (surfaced as a warning instead).
 
 **Status:** Accepted; implemented and **live-smoked 2026-08-14** on `fix/scheduler-rules-sweep`. The smoke ran against dev-store order `#1034` (snapshot → six mutations → full restore, verified field-by-field) and **found a real bug**: the first implementation cleared a field by omitting its key, which under the actual merge semantics is a silent no-op that still reports success. Fixed by sending an explicit `""` for the clearable editable fields and blocking the un-clearable ZIP up front. 29 unit cases now pin the measured behaviour, including one asserting the exact input Shopify accepted on `#1034`.
+
+---
+
+## ADR-16 — Listen to Lalamove's Open API webhook to auto-mark fulfillments "Delivered"; this does NOT reopen ADR-1
+
+**Source:** merchant request 2026-08-15/16 ("pag na-deliver na sa Lalamove, dapat automatic mag-mark as delivered ang Shopify order"); spiked live against the production Lalamove Open API before implementation in the same session.
+
+**Context:** A fulfilled order never flips to "Delivered" in Shopify — Shopify has no visibility into the courier's actual drop-off, so a human has to click Shopify's own native "Mark as delivered" button by hand once the merchant's Lalamove tracking link shows it arrived. The merchant books every Lalamove delivery manually on `web.lalamove.com` (the general "Place Order" flow, not the Shopify-integrated "Shopify Orders" tab), so there is no Shopify-side hook at booking time.
+
+Two things were verified live against the production Lalamove Open API before committing to a design:
+
+1. **The merchant-facing tracking share link (`share.lalamove.com/?<token>&...`) does NOT carry Lalamove's real order id.** `getOrderStatus` 404s on that token. The real numeric order id is the "`#<id>`" shown in the Lalamove web Records list; `getOrderStatus` on THAT id returns full order data, including a `shareLink` field containing the same kind of opaque share token — confirming the two are unrelated identifier spaces.
+2. **There is no "list orders" endpoint** in the Open API (confirmed against the live API reference) — only get/create/edit/cancel-by-id, driver lookups, priority-fee, and webhook config. A poller can therefore only check ids it already knows about; it cannot discover orders on its own.
+
+The Open API does, however, expose an `ORDER_CREATED` webhook event, and it fires for an order regardless of whether it was booked via the API or the general web portal (same account, same visibility) — confirmed by successfully calling `getOrderStatus` on a web-portal-booked order using the merchant's Partner Portal API key.
+
+**Decision:** Add a webhook-driven status listener (`app/routes/webhooks.lalamove-tracking.ts`), NOT a dispatch integration:
+
+- **(Superseded design, kept for the record below the addendum)** ~~`ORDER_CREATED` → fetch the order's drop-off phone via `getOrderStatus`, phone-match against recent fulfilled Shopify orders~~ — **abandoned same-day, see the "Polling-only" addendum.**
+- `ORDER_STATUS_CHANGED` with status `COMPLETE`/`COMPLETED` → look up a tracked row and call `fulfillmentEventCreate(status: DELIVERED)` on the stored fulfillment id. Kept wired as best-effort only (see addendum — this never actually fires for this merchant's orders).
+- A fallback poller (`app/routes/internal.lalamove-poll.ts`), triggered by a Google Cloud Scheduler job (`delivery-scheduler-lalamove-poll`, every 10 minutes — cut down from 30 the same day after a live gap, see addendum) — **this is the mechanism that actually runs in practice**, not a fallback for a working webhook (see addendum).
+
+This deliberately does **not** touch dispatch: the merchant keeps booking every delivery by hand exactly as before; no order-creation, edit, or cancel call is ever made against the Lalamove API; the `markFulfilled` tracking-URL field's existing behavior is untouched.
+
+**Why this doesn't reopen ADR-1:** ADR-1 removed a **dispatch** integration — code that booked/cancelled Lalamove deliveries and wrote `lalamove.*` metafields as a competing courier-management surface. This is a **read-only status listener** with no dispatch surface, no `lalamove.*` metafield (the correlation lives in Postgres, mirroring the `MessengerThread`/`MessengerMessage` side-table pattern — never on the order), and no UI. A future agent reading ADR-1's "do not reintroduce custom Lalamove code" must read this ADR first: that guidance is about dispatch, not about listening for a courier's own completion signal.
+
+**Consequence:**
+- New Prisma model `LalamoveTracking` (migration `20260816000000_add_lalamove_tracking`, hand-written rather than `prisma migrate dev` — see `docs/known-issues.md` on the shadow-DB trap).
+- New env vars: `LALAMOVE_API_KEY`, `LALAMOVE_API_SECRET`, `LALAMOVE_MARKET` (`PH`), `LALAMOVE_ENV` (`sandbox`/`production`), `LALAMOVE_SHOP` (single-shop app — same convention as `MESSENGER_SHOP`), `LALAMOVE_POLL_SECRET`.
+
+**Status:** Accepted; deployed to production 2026-08-16 (Cloud Run revision `delivery-scheduler-00228-22m`). See the addendum immediately below for the as-shipped design, which differs from the webhook-based design above.
+
+---
+
+### ADR-16 addendum (same day, 2026-08-16) — Webhook path abandoned; polling-only, explicit Order ID entry
+
+**What changed:** the phone-matching/webhook-driven design above was designed, built, deployed, AND then disproven by a live test — all in the same session, before any merchant relied on it. Keeping the original text above (struck through) rather than rewriting history, because the reasoning trail is the point of an ADR.
+
+**What the live test showed:** with the real production Lalamove webhook registered and a merchant test delivery in progress (a real driver assigned, then cancelled), the Lalamove Partner Portal's own **"Webhook attempts" log recorded ZERO order-related events** — no `ORDER_STATUS_CHANGED`, no `DRIVER_ASSIGNED` — while an unrelated `WALLET_BALANCE_CHANGED` event delivered successfully on the exact same URL/credentials in the same window. Direct `getOrderStatus(orderId)` reads, by contrast, succeeded for that same order (both while `ON_GOING` and after `CANCELED`). Conclusion: Lalamove's push webhooks are tied to orders **placed via the API** — the docs say this explicitly only for `ORDER_CREATED`, but the observed behavior shows it holds for the other event types too, at least for this account. Reads work account-wide; pushes don't. This is a Lalamove platform characteristic, not a misconfiguration — there is nothing on our side or in the Lalamove Partner Portal UI that changes it.
+
+**Revised decision:** the correlation step is now **explicit, not inferred**. The merchant pastes the real Lalamove Order ID — found in the Lalamove app's order detail **"Additional info"** section (a plain numeric id, e.g. `3562752825958289729`; NOT the `share.lalamove.com` tracking link) — into a new optional field in the existing "Mark as fulfilled" modal, alongside the tracking number/URL already collected there. Single-order only (a bulk fulfillment of >1 order does not show the field — one courier id cannot correlate to many orders). `recordLalamoveOrderId()` (`lalamove-tracking.server.ts`) validates the id via `getOrderStatus` before storing the `LalamoveTracking` row (a mistyped id — e.g. the share-link token pasted by mistake — is caught immediately rather than silently tracking nothing), and immediately marks the order Delivered if the courier already completed by the time the id is pasted.
+
+The webhook route (`webhooks.lalamove-tracking.ts`) is left wired — it costs nothing to keep and might someday receive something — but the `ORDER_CREATED` handling and the phone-matching machinery (`matchAndRecordLalamoveOrder`, `normalizePhoneForMatch`, `findUndeliveredFulfilledOrderByPhone`) were deleted from `lalamove-tracking.server.ts` entirely, along with their unit tests, rather than left as dead code. The `internal.lalamove-poll.ts` fallback poller is unchanged in implementation but is now the **primary** mechanism, not a safety net for a working webhook — it is wired to a Google Cloud Scheduler job (`delivery-scheduler-lalamove-poll`, every 30 minutes, HTTP POST with the `x-lalamove-poll-secret` header) created the same day.
+
+**Consequence of the pivot:** trades full automation for one extra manual step per delivery (pasting the Order ID) — the merchant already visits both Shopify (to fulfill) and the Lalamove app (to get the tracking link for the customer), so this is one more field in an already-open modal, not a new surface to visit.
+
+**`recipientPhone` removed (2026-08-16, same-day follow-up).** Originally kept on `LalamoveTracking` "for audit/display purposes only" after the phone-matching logic that used it was deleted — but nothing ever actually read it (no route/loader/UI), so it was write-only customer PII with no consumer. Dropped via migration `20260816010000_drop_lalamove_tracking_recipient_phone`; `recordLalamoveOrderId()` no longer reads the drop-off stop's phone from the Lalamove order at all.
+
+**Status:** Accepted, deployed, and **live-verified end to end 2026-08-16** on real production order `#4126` — see the verification-log entry of the same date. Two further bugs surfaced and were fixed during that live test: the poller's original 2-hour staleness gate (wrong once polling became primary, not a fallback — removed, every non-delivered row is checked every cycle) and a leading `#` in a merchant-pasted Lalamove order id (the Lalamove app displays ids that way; `#` is a URL fragment delimiter, so the id silently never reached Lalamove even though it was signed — fixed by `sanitizeLalamoveOrderId()`). Feature is done.
+
+---
+
+## ADR-17 — Order panel's `DeliveryTimeline` also logs Fulfilled, Delivered, and Email-sent activity
+
+**Source:** merchant request, 2026-08-17.
+
+**Context:** `DeliveryTimeline` (`app/components/orders/panel/DeliveryTimeline.tsx`) only showed reschedule history. The merchant also wanted to see, at a glance, when an order was marked fulfilled, when it was marked Delivered, and when a customer email was sent from the panel.
+
+**Decision:**
+- **Fulfilled** and **Delivered** timestamps already exist on Shopify and were simply never fetched: `Fulfillment.createdAt` and `Fulfillment.deliveredAt` (the latter populated by the `fulfillmentEventCreate` DELIVERED event ADR-16 already writes). `GET_ORDERS_QUERY` (`app.orders.tsx`) now fetches `fulfillments(first: 5) { createdAt deliveredAt }` — no new writes, no new write-path surface.
+- **Email-sent** timestamps did not exist anywhere (customer-email-design.md decision E-5: sending wrote nothing, anywhere). Revisited E-5: a successful `sendEmail` op now writes one row to a new Postgres-only table, `EmailSendLog` (shop, shopifyOrderId, to, subject, sentAt — migration `20260817000000_add_email_send_log`), patterned directly after `LalamoveTracking`'s side-table posture. The loader does one extra `prisma.emailSendLog.findMany(...)` per page, scoped to the shop and that page's order ids, and attaches the rows as `order.emailLog`.
+- `DeliveryTimeline` merges reschedule history + fulfilled + delivered + email-sent into one chronologically-sorted activity list between the fixed "Current schedule" and "Original schedule" rows.
+
+**Consequence:** `EmailSendLog`, like `LalamoveTracking`, is an app-side log/correlation table, never Shopify delivery state — it does **not** join the "4 surfaces that mutate delivery-schedule state" contract in `docs/api.md`/`docs/architecture.md`. A log-write failure is swallowed (`console.warn`) and never turns an already-successful email send into an error response, mirroring `mirrorLalamoveOrderStatus`'s guarded-write posture.
+
+**Status:** Accepted, implemented, and **deployed to production 2026-08-17** (Cloud Run `delivery-scheduler-00235-sbv`, backend-only — no extension/config changes). The Postgres migration was already live on the single shared Neon database both `flowercart-dev` and prod (`hsrwva-nr`) use, so the deploy carried no missing-table risk. See the verification-log entries of the same date. Dev-store order **#1046** now carries all four data signals `DeliveryTimeline` needs — a real `EmailSendLog` row, `Fulfillment.createdAt`, a `delivery.reschedule_history` entry, and `Fulfillment.deliveredAt`, all within one ~13-minute window — confirmed read-only via the Shopify Admin API (Shopify plugin, switched from prod to dev). **CLOSED 2026-08-17:** the merchant tested order #1046's panel directly in their own browser (unaffected by this session's iframe-automation issue) and shared a screenshot — all four entries render correctly and in the expected chronological order: Delivered (2:41 PM) → Latest reschedule · Merchant (2:39 PM) → Marked fulfilled (2:28 PM) → Email sent to cod-test@example.com (2:28 PM) → Original schedule. Feature fully verified end to end, data layer and rendered UI both confirmed.

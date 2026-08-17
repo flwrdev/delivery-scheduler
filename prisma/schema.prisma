@@ -73,6 +73,48 @@ model MessengerMessage {
   @@index([psid, createdAt])
 }
 
+// Lalamove courier-status listener (NOT dispatch — see ADR-16). Correlates a
+// Lalamove delivery, booked manually by the merchant outside Shopify, to the
+// Shopify order/fulfillment it belongs to, so a Lalamove COMPLETE status can
+// auto-flip the Shopify fulfillment to DELIVERED. Polling-only as of the
+// ADR-16 addendum (2026-08-16): Lalamove's push webhooks never fire for
+// orders booked through the merchant's manual web flow (live-confirmed via
+// the Lalamove Partner Portal's own "Webhook attempts" log), so rows are
+// populated by recordLalamoveOrderId() — the merchant pasting the real
+// Lalamove Order ID into the "Mark as fulfilled" modal — never by webhook or
+// by parsing the merchant-facing tracking share link, which does not carry
+// the real Lalamove order id.
+model LalamoveTracking {
+  id                   String    @id @default(cuid())
+  shop                 String
+  shopifyOrderId       String
+  shopifyFulfillmentId String
+  lalamoveOrderId      String    @unique
+  status               String    @default("PENDING")
+  deliveredAt          DateTime?
+  lastPolledAt         DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([shop, deliveredAt])
+}
+
+// Customer Email send log (E-5 revisit, docs/customer-email-design.md): logs
+// that a merchant sent a customer email via the in-app compose modal, purely
+// for the order panel's DeliveryTimeline display. Same side-table posture as
+// LalamoveTracking above — an app-side log row, never Shopify delivery state,
+// so it does not join the order write-path contract in docs/api.md.
+model EmailSendLog {
+  id             String   @id @default(cuid())
+  shop           String
+  shopifyOrderId String
+  to             String
+  subject        String
+  sentAt         DateTime @default(now())
+
+  @@index([shop, shopifyOrderId])
+}
+
 model DeliveryScheduleConfig {
   id                String   @id @default(cuid())
   shop              String   @unique
