@@ -1,0 +1,14 @@
+{
+  "$schema": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/intent.json",
+  "value": {
+    "type": "string",
+    "description": "The delivery date to open in the scheduler, in YYYY-MM-DD format, interpreted in the store's delivery timezone (e.g. 2026-08-22).",
+    "mapTo": "query_param",
+    "fieldName": "date"
+  },
+  "inputSchema": {
+    "$ref": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/application/shipment.json",
+    "type": "object",
+    "properties": {}
+  }
+}

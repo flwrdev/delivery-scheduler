@@ -1,0 +1,4 @@
+{
+  "name": "Actions de planification des livraisons",
+  "description": "Ouvrir l'application Delivery Scheduler à l'endroit où la modification se fait : le panneau de livraison d'une commande pour reporter sa date ou son créneau, ou le planificateur sur une date de livraison précise pour modifier les créneaux, la capacité ou le blocage de ce jour."
+}

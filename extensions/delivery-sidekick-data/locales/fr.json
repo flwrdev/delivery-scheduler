@@ -1,0 +1,4 @@
+{
+  "name": "Données de planification des livraisons",
+  "description": "Consulter les données de planification des livraisons de l'application Delivery Scheduler : date et créneau de livraison d'une commande, réservations par rapport à la capacité pour les dates et créneaux à venir, statut de report, et les réglages de livraison de la boutique (fuseau horaire, heure limite pour le jour même, heures de préparation, fenêtre de réservation, créneaux, dates bloquées)."
+}

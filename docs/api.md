@@ -4,17 +4,20 @@
 
 This file covers every route surface, extension, webhook, service, the four auth mechanisms, and — most importantly — the **order write-path contract** (which routes actually mutate delivery state). For system topology and the data model, see [architecture.md](./architecture.md). For dated verification history, see [verification-log.md](./verification-log.md).
 
-## Five route surfaces, five different auth mechanisms
+## Six route surfaces, five different auth mechanisms
 
-Know which one you're in before writing a handler:
+Know which one you're in before writing a handler. Six surfaces, but only five
+mechanisms — the Sidekick tool routes (added 2026-08-19) reuse the embedded
+admin's session-token auth from a different, cross-origin caller:
 
 - **Embedded admin routes** (`app/routes/app.*`) — `authenticate.admin(request)`, session-cookie-based, runs inside the Shopify Admin iframe.
 - **App Proxy routes** (`app/routes/apps.schedule-rules*.ts`) — HMAC-signed by Shopify, prefix `/apps/schedule-rules` per `shopify.app.toml`, called from storefront/theme JS.
 - **Customer-account JWT routes** (`app/routes/public.customer-account.*.ts`) — verify a session token JWT passed by customer-account UI extensions; separate auth path from both of the above.
 - **Shopify webhooks** (`app/routes/webhooks.orders.*` / `webhooks.app.*`) — registered in `shopify.app.toml` `[[webhooks.subscriptions]]`, HMAC-verified by the Shopify webhook middleware. The live delivery-relevant subscription is `orders/create` (`webhooks.orders.create.ts`, the new-order delivery sync). The `orders/cancelled` subscription and its handler existed only for the removed custom Lalamove cancel flow and are gone.
+- **Sidekick tool routes** (`app/routes/sidekick.tools.*.ts`, 2026-08-19) — **the same session-token `authenticate.admin` mechanism as the embedded admin routes above**, but called by the cross-origin Sidekick sandbox instead of the Admin iframe, so every response is `cors`-wrapped. Read-only; see [Sidekick tool routes](#sidekick-tool-routes).
 - **Meta Messenger webhook** (`app/routes/webhooks.messenger.ts`) — NOT a Shopify surface: Meta signs every POST with `X-Hub-Signature-256` (HMAC-SHA256 of the raw body, app secret), verified by hand via `lib/verify-meta-signature.server.ts`. Not registered in `shopify.app.toml`; never touches `authenticate.*`. See the [Meta Messenger webhook](#meta-messenger-webhook-flowercart-messenger-agent) section.
 
-## Extensions (5 total — verified via each `shopify.extension.toml`)
+## Extensions (9 total — verified via each `shopify.extension.toml`)
 
 | Handle                         | Target                                                                                    | Status / Write capability                                          | Source                                                                                                                                                                                                                            |
 | ------------------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -24,6 +27,9 @@ Know which one you're in before writing a handler:
 | `delivery-reschedule-customer` | `customer-account.order.action.menu-item.render` + `customer-account.order.action.render` | **Write path** for customer reschedule via `/public/customer-account/reschedule`. | [src/order-action-menu-item.tsx](../extensions/delivery-reschedule-customer/src/order-action-menu-item.tsx) + [src/order-action-modal.tsx](../extensions/delivery-reschedule-customer/src/order-action-modal.tsx) |
 | `delivery-thank-you`           | `purchase.thank-you.block.render`                                                         | **Read-only.** One card: delivery schedule + a COD sentence explaining the "COD FEE" line item. Deliberately does NOT restate the total — that is `cod-fee-notice`'s row. COD detection/fee resolution in `src/cod-fee.js`. No backend call. | [src/Checkout.jsx](../extensions/delivery-thank-you/src/Checkout.jsx) + [src/cod-fee.js](../extensions/delivery-thank-you/src/cod-fee.js) |
 | `cod-fee-notice`               | `purchase.thank-you.block.render`                                                         | **Read-only.** COD-only (payment option type `paymentOnDelivery`), TWO rows: **`COD FEE`** (the fee) and **`Total with fee`** = Shopify's own Total + the fee, i.e. the cash to hand the rider. The merchant places this block in the checkout editor's **Order summary** section and drags it below `Total`; new blocks land at the top of the section, and adding it twice is how the same rows end up rendered twice. The `COD FEE` row is suppressed by `codFeeLineIsVisible()` when Shopify is already listing the real `COD FEE` line item — that line comes from `order.lineItems` (added by the order edit 7–10s after this page renders) and no extension can hide it. ⚠️ `purchase.thank-you.cart-line-list.render-after` would have put the fee row in the item list itself, but **it does not run on this shop**: a diagnostic build rendering unconditionally produced nothing on a live COD order (dev-22, order `#TA47AH0MC`, 2026-08-14). Do not reach for that target again without re-testing. `src/cod-fee.js` is a byte-identical copy of `delivery-thank-you`'s, pinned by `test/thank-you-cod-fee.test.ts`. No backend call. | [src/Checkout.jsx](../extensions/cod-fee-notice/src/Checkout.jsx) + [src/cod-fee.js](../extensions/cod-fee-notice/src/cod-fee.js) |
+| `cod-eligibility`              | Shopify Function (`payment_customization`)                                                | **Read-only w.r.t. orders.** Runs on Shopify infra; hides the manual COD method outside the NCR ZIP/city + subtotal window. No backend call, no order writes. | [src/cart_payment_methods_transform_run.ts](../extensions/cod-eligibility/src/cart_payment_methods_transform_run.ts) |
+| `delivery-sidekick-data`       | `admin.app.tools.data` (Sidekick App Data)                                                | **Read-only.** Registers three Sidekick tools (`get_delivery_booked_counts`, `get_order_delivery`, `get_schedule_config_summary`); each is a relative `fetch` onto a `/sidekick/tools/*` route (see [Sidekick tool routes](#sidekick-tool-routes)). No mutations anywhere in the chain. | [src/index.js](../extensions/delivery-sidekick-data/src/index.js) + [tools.json](../extensions/delivery-sidekick-data/tools.json) |
+| `delivery-sidekick-actions`    | `admin.app.intent.link` ×2 (Sidekick App Actions)                                         | **Deep link only — writes nothing.** Two intents, both `application/shipment`: `edit` → `/app/orders?order=<legacyId>&search=<#name>` (open an order's delivery panel to reschedule) and `create` → `/app/scheduler?date=<YYYY-MM-DD>` (open that day's capacity/override panel). Navigation only; the merchant makes the change on the page, through the existing `/app/orders` `reschedule` op or the scheduler ops. The declared `describe_open_delivery_view` tool is **not registered in App Home yet** (deferred). | [shopify.extension.toml](../extensions/delivery-sidekick-actions/shopify.extension.toml) + [intent-order-reschedule.json](../extensions/delivery-sidekick-actions/intent-order-reschedule.json) |
 
 **Walang theme app extension. Walang Checkout UI Extension (other than thank-you).** Only `./src/index.tsx` is registered in `delivery-date-editor/shopify.extension.toml` — and as of 2026-08-19 it is also the ONLY file in that `src/` folder (the formerly-unwired extra sources were removed).
 
@@ -109,6 +115,60 @@ Phase 3 (queue + Neon) of the FlowerCart Messenger agent — master context live
 
 > **Courier dispatch note:** Last-mile courier booking is handled by the **official Shopify Lalamove app**, not this app. The former custom Lalamove callback endpoint (`webhooks.lalamove.ts`) and the `orders/cancelled` webhook (which existed only to cancel a Lalamove order) were removed 2026-07-04 — see the [verification log](./verification-log.md) and [decisions.md ADR-1](./decisions.md).
 
+## Sidekick tool routes
+
+**NEW CALLER (2026-08-19), READ-ONLY.** Three JSON POST endpoints that back the
+`delivery-sidekick-data` extension's Sidekick tools. Design + scope rationale:
+[decisions.md ADR-18](./decisions.md).
+
+| Path | File | Backing service | Cost |
+| --- | --- | --- | --- |
+| `POST /sidekick/tools/booked-counts` | [sidekick.tools.booked-counts.ts](../app/routes/sidekick.tools.booked-counts.ts) | `getScheduleRulesDetailed` ([schedule-rules.server.ts](../app/services/schedule-rules.server.ts)) | Live Admin order scan (60s memo, ADR-12) |
+| `POST /sidekick/tools/order-delivery` | [sidekick.tools.order-delivery.ts](../app/routes/sidekick.tools.order-delivery.ts) | one `query SidekickOrderDelivery` in [sidekick-tools.server.ts](../app/services/sidekick-tools.server.ts) | One Admin GraphQL query, ONE order |
+| `POST /sidekick/tools/schedule-config` | [sidekick.tools.schedule-config.ts](../app/routes/sidekick.tools.schedule-config.ts) | `getScheduleRulesWithHealth` (deliberately NOT the booked-count loader) | Postgres config read only |
+
+**Auth — a new caller of an existing mechanism, and the FIRST cross-origin one.**
+All three call `authenticate.admin(request)`, joining the nine route files that
+already do. The Sidekick sandbox attaches an `Authorization` session-token
+header the same way the embedded admin iframe does, and the
+shopify-app-react-router middleware exchanges it — no new auth mechanism, and
+no new entry in the five-surfaces list beyond the surface itself. What IS new:
+the caller is a cross-origin sandbox, so every response goes through the `cors`
+helper returned by `authenticate.admin` — embedded admin routes do not need
+that, and these are the only routes here that do.
+
+A session-store failure is handled explicitly rather than left to bubble
+(`authenticateSidekickRequest` in [sidekick-tools.server.ts](../app/services/sidekick-tools.server.ts)):
+`authenticate.admin` legitimately **throws a `Response`** for the platform's own
+auth flow, which is rethrown untouched, but it also touches Prisma session
+storage behind Neon, whose cold-start timeout throws a plain `Error` that React
+Router would turn into a 500 — the exact ADR-11 Cloudflare failure. That case
+answers `200 + {ok:false}` with the CORS headers set by hand, because the `cors`
+helper is part of the value the failed call never returned.
+
+**Read-only — OUTSIDE the [§2 write-path contract](#2-actual-order-write-paths-the-only-places-that-mutate-delivery-state).**
+These routes issue **zero mutations**: no `metafieldsSet`, no `orderUpdate`, no
+tag writes, no `upsertScheduleRules`, no Prisma writes. §2's four write paths are
+unchanged by Sidekick. `test/sidekick-tools.test.ts` pins this — it asserts the
+mocked `admin.graphql` never receives a mutation string and greps the route +
+service sources for mutation/write helpers.
+
+**Response contract — ADR-11 applies.** Every upstream failure (rules loader
+throw, Admin GraphQL `errors[]`, network throw, order not found) answers
+`200 + {ok:false, error}`; invalid input answers `200 + {ok:false, error}` with a
+message written for Sidekick to relay to the merchant. Never a 5xx — Cloudflare
+replaces origin 5xx bodies with its own HTML and would break the sandbox fetch
+the same way it broke the embedded fetcher in 2026-07. Auth failures are the one
+exception: `authenticate.admin` owns those and throws its own response.
+
+**Response size.** Sidekick rejects any tool response over 4,000 tokens, so the
+routes cap every list and report what they dropped rather than truncating
+silently: 14 dates per booked-counts call (`datesOmitted`), 12 slots per date
+(`slotsOmitted`), 20 slots and 10-item samples in the config summary, and
+exactly one order per lookup. `countsMeta.status` is surfaced verbatim as
+`countsStatus` plus a plain-language `countsNote`, so Sidekick can never present
+a `partial` scan as a complete number.
+
 ## Services / lib
 
 | Module                            | File                                                                                                                  |
@@ -147,6 +207,9 @@ Every other surface in the system is read-only. Confirmed in code:
 - `order-delivery-block/src/BlockExtension.jsx` → reads only.
 - `delivery-thank-you/src/Checkout.jsx` → reads metafields via host APIs.
 - `delivery-date-editor/src/index.tsx` → reads block state + calls read endpoints.
+- `sidekick.tools.booked-counts.ts` / `sidekick.tools.order-delivery.ts` / `sidekick.tools.schedule-config.ts` → loader/query reads only; no mutation, no Prisma write. Pinned by `test/sidekick-tools.test.ts` (mocked `admin.graphql` never receives a mutation string; route + service sources are grepped for mutation and write-helper names).
+- `delivery-sidekick-data/src/index.js` → three relative `fetch` calls onto those three read-only routes.
+- `delivery-sidekick-actions` → declares no module at all; it only deep-links into `/app/orders` and `/app/scheduler`, where the merchant performs any write through the paths already listed below.
 
 The four delivery-schedule write paths (the 4th — merchant reschedule — added by Orders Ops V2 Phase 4, 2026-07-11, per ADR-10):
 

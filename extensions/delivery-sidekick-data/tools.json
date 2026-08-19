@@ -1,0 +1,417 @@
+[
+  {
+    "$schema": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/tool.json",
+    "name": "get_delivery_booked_counts",
+    "description": "Get how many delivery orders are already booked against the capacity cap for each upcoming delivery date and time slot (for example 9AM-12PM). Use for questions about how full a delivery day is, whether a date or slot is fully booked, how many slots are left, or which upcoming days still have delivery capacity. Optionally narrow to one date or a date range. Counts are live from Shopify orders and may be reported as partial.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "date": {
+          "type": "string",
+          "description": "A single delivery date in YYYY-MM-DD format. Omit for all upcoming capacity-tracked dates."
+        },
+        "start_date": {
+          "type": "string",
+          "description": "First delivery date of a range, YYYY-MM-DD. Defaults to today in the shop's delivery timezone."
+        },
+        "end_date": {
+          "type": "string",
+          "description": "Last delivery date of a range, YYYY-MM-DD. Omit for no upper bound."
+        }
+      },
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "description": "False when the request failed; read `error` for the reason."
+        },
+        "error": {
+          "type": "string",
+          "description": "Merchant-readable failure reason, present only when ok is false."
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone the delivery dates are expressed in."
+        },
+        "today": {
+          "type": "string",
+          "description": "Today's date in the shop's delivery timezone, YYYY-MM-DD."
+        },
+        "countsStatus": {
+          "type": "string",
+          "description": "Trust level of the booked numbers: ok, partial, untracked, skipped, or error.",
+          "enum": [
+            "ok",
+            "partial",
+            "untracked",
+            "skipped",
+            "error"
+          ]
+        },
+        "countsNote": {
+          "type": "string",
+          "description": "One sentence explaining how far the booked counts can be trusted. Relay this when countsStatus is not ok."
+        },
+        "countsFetchedAt": {
+          "type": "string",
+          "nullable": true,
+          "description": "When the booked counts were derived, ISO 8601."
+        },
+        "countsFromCache": {
+          "type": "boolean",
+          "description": "Whether the counts came from the 60-second in-process cache."
+        },
+        "dates": {
+          "type": "array",
+          "description": "One entry per capacity-tracked delivery date in the requested window.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "date": {
+                "type": "string",
+                "description": "Delivery date, YYYY-MM-DD."
+              },
+              "dateDisabled": {
+                "type": "boolean",
+                "description": "True when the whole date is blocked for delivery."
+              },
+              "slots": {
+                "type": "array",
+                "description": "Per time-slot capacity for this date.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "slot": {
+                      "type": "string",
+                      "description": "Time slot label, for example 9AM-12PM."
+                    },
+                    "capacity": {
+                      "type": "integer",
+                      "description": "Configured maximum deliveries for this date and slot."
+                    },
+                    "booked": {
+                      "type": "integer",
+                      "description": "Orders currently booked into this date and slot. NULL when countsStatus is \"error\" or \"skipped\" - the live scan produced no numbers, so do not state a booked figure.",
+                      "nullable": true
+                    },
+                    "remaining": {
+                      "type": "integer",
+                      "description": "capacity minus booked, floored at zero. NULL when countsStatus is \"error\" or \"skipped\".",
+                      "nullable": true
+                    },
+                    "full": {
+                      "type": "boolean",
+                      "description": "True when booked has reached capacity. NULL when countsStatus is \"error\" or \"skipped\".",
+                      "nullable": true
+                    },
+                    "blocked": {
+                      "type": "boolean",
+                      "description": "True when this slot is blocked on this date."
+                    }
+                  },
+                  "required": [
+                    "slot",
+                    "capacity"
+                  ]
+                }
+              },
+              "slotsOmitted": {
+                "type": "integer",
+                "description": "Slots on this date left out of the response for size."
+              }
+            },
+            "required": [
+              "date",
+              "slots"
+            ]
+          }
+        },
+        "datesReturned": {
+          "type": "integer",
+          "description": "Number of dates included in `dates`."
+        },
+        "datesMatched": {
+          "type": "integer",
+          "description": "Number of dates that matched the request before the size cap."
+        },
+        "datesOmitted": {
+          "type": "integer",
+          "description": "Matched dates left out for size. Tell the merchant to narrow the range when this is above zero."
+        },
+        "capacityTrackedDates": {
+          "type": "integer",
+          "description": "Total number of dates that have any capacity configured."
+        },
+        "truncatedDates": {
+          "type": "array",
+          "description": "Dates whose booked counts are a lower bound because an order-scan cap clipped them.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "untrackedRequestedDates": {
+          "type": "array",
+          "description": "Dates that were explicitly requested but have no capacity configured. These days have no per-slot cap at all - only the global rules apply.",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    }
+  },
+  {
+    "$schema": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/tool.json",
+    "name": "get_order_delivery",
+    "description": "Look up one order's scheduled delivery date, delivery time slot, reschedule status and fulfillment status by its order number, for example \"#4111\". Use whenever the merchant asks when a specific order is being delivered, which time slot it is in, whether it has been rescheduled or how many times, or whether it is still unfulfilled. Returns a single order plus a deep link to open it in the Delivery Scheduler app.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "order_name": {
+          "type": "string",
+          "description": "The order number as the merchant says it, with or without the leading hash: \"#4111\" or \"4111\"."
+        }
+      },
+      "required": [
+        "order_name"
+      ]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "description": "False when the order was not found or the lookup failed; read `error`."
+        },
+        "error": {
+          "type": "string",
+          "description": "Merchant-readable failure reason, present only when ok is false."
+        },
+        "order": {
+          "type": "object",
+          "description": "The single matched order.",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Shopify order GID."
+            },
+            "legacyId": {
+              "type": "string",
+              "description": "Numeric Shopify order id."
+            },
+            "name": {
+              "type": "string",
+              "description": "Order number, for example #4111."
+            },
+            "deliveryDate": {
+              "type": "string",
+              "nullable": true,
+              "description": "Scheduled delivery date, YYYY-MM-DD. Null when the order has no delivery schedule."
+            },
+            "deliveryTimeSlot": {
+              "type": "string",
+              "nullable": true,
+              "description": "Scheduled delivery time slot, for example 9AM-12PM."
+            },
+            "deliverySource": {
+              "type": "string",
+              "nullable": true,
+              "description": "Which field the schedule was read from: metafield, legacy_metafield or custom_attribute."
+            },
+            "deliverySyncStatus": {
+              "type": "string",
+              "nullable": true,
+              "description": "Checkout-time delivery validation outcome: \"ok\" or \"attention:<code>\"."
+            },
+            "rescheduleStatus": {
+              "type": "string",
+              "nullable": true,
+              "description": "Reschedule state for the customer self-service lock, when set."
+            },
+            "rescheduleRequestedAt": {
+              "type": "string",
+              "nullable": true,
+              "description": "When the last reschedule was requested, ISO 8601."
+            },
+            "rescheduleCount": {
+              "type": "integer",
+              "description": "Number of recorded reschedules for this order."
+            },
+            "displayFulfillmentStatus": {
+              "type": "string",
+              "nullable": true,
+              "description": "Shopify fulfillment status, for example UNFULFILLED or FULFILLED."
+            },
+            "displayFinancialStatus": {
+              "type": "string",
+              "nullable": true,
+              "description": "Shopify payment status, for example PAID or PENDING."
+            },
+            "cancelledAt": {
+              "type": "string",
+              "nullable": true,
+              "description": "When the order was cancelled, ISO 8601, or null."
+            },
+            "createdAt": {
+              "type": "string",
+              "nullable": true,
+              "description": "When the order was placed, ISO 8601."
+            },
+            "appUrl": {
+              "type": "string",
+              "description": "Relative link that opens this order's delivery panel in the Delivery Scheduler app."
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    }
+  },
+  {
+    "$schema": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/tool.json",
+    "name": "get_schedule_config_summary",
+    "description": "Get the store's delivery scheduling setup: delivery timezone, same-day order cutoff hour, preparation hours, how many days ahead customers can book, the list of delivery time slots, plus a summary of blocked delivery dates, blocked slots and which dates have capacity caps. Use for questions about the cutoff, lead time, booking window, what time slots exist, or which dates are closed for delivery. Does not include booked counts.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "description": "False when the request failed; read `error` for the reason."
+        },
+        "error": {
+          "type": "string",
+          "description": "Merchant-readable failure reason, present only when ok is false."
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone all delivery dates and the cutoff are evaluated in."
+        },
+        "cutoffHour": {
+          "type": "integer",
+          "description": "Hour of day (0-23) after which same-day delivery is no longer offered."
+        },
+        "prepHours": {
+          "type": "integer",
+          "description": "Preparation lead time in hours required before a delivery slot."
+        },
+        "maxDays": {
+          "type": "integer",
+          "description": "How many days ahead a customer can book a delivery."
+        },
+        "slots": {
+          "type": "array",
+          "description": "Configured delivery time slots.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "display": {
+                "type": "string",
+                "description": "Label shown to customers."
+              },
+              "value": {
+                "type": "string",
+                "description": "Stored slot value, for example 9AM-12PM."
+              }
+            },
+            "required": [
+              "display",
+              "value"
+            ]
+          }
+        },
+        "slotCount": {
+          "type": "integer",
+          "description": "Total number of configured slots."
+        },
+        "slotsOmitted": {
+          "type": "integer",
+          "description": "Slots left out of `slots` for size."
+        },
+        "disabledDatesCount": {
+          "type": "integer",
+          "description": "How many dates are fully closed for delivery."
+        },
+        "disabledDatesSample": {
+          "type": "array",
+          "description": "Up to ten of the closed delivery dates, earliest first.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blockedSlotDatesCount": {
+          "type": "integer",
+          "description": "How many dates have at least one blocked time slot."
+        },
+        "blockedSlotsSample": {
+          "type": "array",
+          "description": "Up to ten dates with their blocked time slots.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "date": {
+                "type": "string",
+                "description": "Delivery date, YYYY-MM-DD."
+              },
+              "slots": {
+                "type": "array",
+                "description": "Blocked slots on that date.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "date",
+              "slots"
+            ]
+          }
+        },
+        "capacityTrackedDatesCount": {
+          "type": "integer",
+          "description": "How many dates have a capacity cap configured."
+        },
+        "capacityTrackedDatesSample": {
+          "type": "array",
+          "description": "Up to ten capacity-tracked dates, earliest first.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "configHealthIssueCount": {
+          "type": "integer",
+          "description": "Number of problems detected in the stored configuration."
+        },
+        "configHealthSample": {
+          "type": "array",
+          "description": "Up to ten configuration problems, as \"field: message\".",
+          "items": {
+            "type": "string"
+          }
+        },
+        "version": {
+          "type": "integer",
+          "description": "Optimistic-concurrency version of the stored configuration."
+        }
+      },
+      "required": [
+        "ok"
+      ]
+    }
+  }
+]

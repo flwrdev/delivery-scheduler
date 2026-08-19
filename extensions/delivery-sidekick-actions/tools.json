@@ -1,0 +1,33 @@
+[
+  {
+    "$schema": "https://extensions.shopifycdn.com/shopifycloud/schemas/v1/tool.json",
+    "name": "describe_open_delivery_view",
+    "description": "Read back what the Delivery Scheduler page that was just opened is currently showing - which order's delivery panel, or which delivery date's capacity panel. Optional confirmation step only: the merchant is already on the right page once the action has run, so only call this if you need to state on screen what they are looking at. This tool never changes a delivery date, time slot or capacity.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "view": {
+          "type": "string",
+          "description": "Which page is open: \"order\" for an order's delivery panel, \"scheduler\" for a delivery date's capacity panel.",
+          "enum": ["order", "scheduler"]
+        },
+        "orderName": {
+          "type": "string",
+          "nullable": true,
+          "description": "Order number whose delivery panel is open, e.g. #4111."
+        },
+        "deliveryDate": {
+          "type": "string",
+          "nullable": true,
+          "description": "Delivery date the view is focused on, YYYY-MM-DD."
+        }
+      },
+      "required": ["view"]
+    }
+  }
+]
