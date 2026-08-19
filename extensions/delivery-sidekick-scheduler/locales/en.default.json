@@ -1,0 +1,4 @@
+{
+  "name": "Delivery scheduler day opener",
+  "description": "Open the Delivery Scheduler on a specific delivery date to edit that day's slots, capacity caps or blocked status. Navigation only — the merchant makes the change on the page."
+}
