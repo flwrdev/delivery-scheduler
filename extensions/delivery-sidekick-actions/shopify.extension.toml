@@ -7,12 +7,15 @@ handle = "delivery-sidekick-actions"
 type = "admin_link"
 uid = "9fd582ce-8a1f-988e-4c0d-ece682b5077ad73bfd67"
 
-# Deep links INTO the embedded app. Both URLs are relative to `application_url`
-# in shopify.app.toml. Neither target writes anything by itself — they only
-# navigate the merchant to the page where the change is made by hand.
-# See docs/decisions.md ADR-18.
+# Deep link INTO the embedded app, relative to `application_url` in
+# shopify.app.toml. Navigation only — nothing is written until the merchant
+# acts on the page. See docs/decisions.md ADR-18.
+#
+# An admin_link extension allows exactly ONE [[extensions.targeting]] block
+# (deploy-time validation, caught 2026-08-19) — the scheduler-date intent
+# lives in its own sibling extension, delivery-sidekick-scheduler.
 
-# ── Intent 1: open one order's delivery panel so the merchant can reschedule ──
+# ── Open one order's delivery panel so the merchant can reschedule ──
 # `?order=` opens the details panel on /app/orders (REC-7, URL-driven panel);
 # `?search=` filters the list so the order is guaranteed to be in view.
 [[extensions.targeting]]
@@ -29,18 +32,3 @@ instructions = "./instructions.md"
   type = "application/shipment"
   action = "edit"
   schema = "./intent-order-reschedule.json"
-
-# ── Intent 2: open the scheduler on a specific delivery date ──
-# `?date=` is already the scheduler's day-panel URL state.
-[[extensions.targeting]]
-target = "admin.app.intent.link"
-url = "/app/scheduler"
-tools = "./tools.json"
-instructions = "./instructions.md"
-
-  [[extensions.targeting.intents]]
-  # Same enum constraint; `create` reads as "set up delivery capacity for this
-  # date", which is what the day-override panel does.
-  type = "application/shipment"
-  action = "create"
-  schema = "./intent-scheduler-date.json"
