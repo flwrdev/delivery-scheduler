@@ -29,3 +29,24 @@ redirect_urls = [ "https://example.com/api/auth" ]
 
 [build]
 automatically_update_urls_on_dev = true
+
+[sidekick]
+extensions_summary = """
+Delivery Scheduler owns when each order is delivered: the delivery date, the
+delivery time slot (labels like 9AM-12PM), per-date capacity caps, blocked
+dates and slots, the same-day cutoff, prep lead time and booking window, and an
+order's reschedule state. None of this lives on the Shopify order by itself.
+
+Read-only data tools:
+- get_delivery_booked_counts — booked-vs-capacity per upcoming delivery date
+  and time slot; says when the counts are only partial.
+- get_order_delivery — one order's delivery date, time slot, reschedule status
+  and fulfillment status, looked up by order number.
+- get_schedule_config_summary — timezone, same-day cutoff hour, prep hours,
+  booking window, the slot list, and blocked date/slot counts.
+
+Actions (navigation only — they open the page, they never change a delivery):
+- Open an order's delivery panel to reschedule its date or time slot.
+- Open the scheduler on a specific delivery date to edit that day's slots,
+  capacity or blocked status.
+"""

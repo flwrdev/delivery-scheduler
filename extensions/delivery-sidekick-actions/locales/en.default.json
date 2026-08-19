@@ -1,0 +1,4 @@
+{
+  "name": "Delivery scheduling actions",
+  "description": "Open the Delivery Scheduler app where a delivery change is made: an order's delivery panel to reschedule its date or time slot, or the scheduler on a specific delivery date to edit that day's slots, capacity or blocked status."
+}

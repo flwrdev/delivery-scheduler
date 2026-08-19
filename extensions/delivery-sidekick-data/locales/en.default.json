@@ -1,0 +1,4 @@
+{
+  "name": "Delivery schedule data",
+  "description": "Read delivery scheduling data from the Delivery Scheduler app: an order's delivery date and time slot, booked-vs-capacity counts for upcoming delivery dates and slots, reschedule status, and the store's delivery settings (timezone, same-day cutoff, prep hours, booking window, slots, blocked dates)."
+}

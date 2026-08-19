@@ -1,0 +1,15 @@
+api_version = "2026-04"
+
+[[extensions]]
+# Change the merchant-facing name of the extension in locales/en.default.json
+name = "t:name"
+handle = "delivery-sidekick-data"
+type = "ui_extension"
+uid = "1152769e-1055-2128-f42c-4e50977f754b3d22d1e5"
+description = "t:description"
+
+[[extensions.targeting]]
+module = "./src/index.js"
+target = "admin.app.tools.data"
+tools = "./tools.json"
+instructions = "./instructions.md"
