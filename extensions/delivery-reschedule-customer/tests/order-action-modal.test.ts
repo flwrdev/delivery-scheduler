@@ -134,9 +134,10 @@ async function waitForRulesLoaded() {
 }
 
 /**
- * Drives the two fields the way the customer does. Each change rebuilds the
- * whole modal (the extension re-renders by replacing the children of
- * document.body), so the select is re-queried AFTER the date change.
+ * Drives the two fields the way the customer does. The modal updates in place —
+ * the same s-date-field / s-select nodes survive every state change, which is
+ * what keeps focus in the field being typed in — so the select is re-queried
+ * after the date change purely to read its refreshed options.
  */
 function pickDateAndSlot(date: string, slot: string) {
   const dateField = document.body.querySelector(

@@ -34,9 +34,12 @@ function texts() {
 }
 
 beforeEach(() => {
-  // The block installs a 1s polling interval it never clears. Faking only the
-  // interval timers keeps it inert between tests without touching Date.now(),
-  // which the pending-sync freshness window depends on.
+  // The block runs one 1s interval for its whole life. Every tick re-reads
+  // shopify.storage (local, no network) so a handoff written AFTER the first
+  // render is still noticed; only a tick that finds a fresh handoff also
+  // refetches the backend. Faking just the interval timers lets a test drive
+  // that tick on purpose and keeps it inert otherwise, without touching
+  // Date.now(), which the pending-sync freshness window depends on.
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   extension.setUp();
   // Quiet 200 with no `delivery` key: the direct read reports "nothing fresher
@@ -144,5 +147,49 @@ describe("delivery-date-editor order-status block", () => {
     ]);
     // The handoff also carries the confirmed status, so the badge appears.
     expect(document.body.querySelector("s-badge")).not.toBeNull();
+  });
+
+  it("picks up a handoff written after the block has already rendered", async () => {
+    // The reschedule modal and this block sit on the SAME customer-account page,
+    // and the block is not re-activated when the modal closes. So the only thing
+    // that can notice the handoff the modal just wrote is the storage read on the
+    // poll tick — which is why that read must keep running even when there was
+    // nothing pending at first render.
+    setSubscribable(extension.shopify.appMetafields, [
+      metafield("custom", "date", "2026-09-02"),
+      metafield("custom", "time_slot", "9AM-12PM"),
+    ]);
+
+    await extension.render();
+
+    expect(texts()).toEqual(["Date", "2026-09-02", "Time slot", "9AM-12PM"]);
+
+    // A tick with an empty storage changes nothing — and, the point of the
+    // split cadence, it must NOT hit the network: only the local storage read
+    // runs while nothing is pending. This pins the backend gate itself, not
+    // just the storage half — an unconditional refetch-every-tick would pass
+    // every other assertion in this file.
+    const idleFetchCalls = (extension.fetch as ReturnType<typeof vi.fn>).mock
+      .calls.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(texts()).toEqual(["Date", "2026-09-02", "Time slot", "9AM-12PM"]);
+    expect(
+      (extension.fetch as ReturnType<typeof vi.fn>).mock.calls.length,
+    ).toBe(idleFetchCalls);
+
+    // ...and now the modal lands its optimistic handoff mid-life.
+    await extension.shopify.storage.write(
+      `delivery-reschedule-sync:${ORDER_ID}`,
+      {
+        date: "2026-09-09",
+        timeSlot: "3PM-6PM",
+        status: "confirmed",
+        updatedAt: Date.now(),
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(texts()).toEqual(["Date", "2026-09-09", "Time slot", "3PM-6PM"]);
   });
 });
