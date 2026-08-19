@@ -122,7 +122,9 @@ function RescheduleStatusAction({ info }) {
           {info.requestedAt && (
             <s-stack direction="block" gap="small">
               <s-text color="subdued">Updated at</s-text>
-              <s-text>{info.requestedAt}</s-text>
+              <s-text>
+                {formatRescheduledAt(info.requestedAt, info.shopTimezone)}
+              </s-text>
             </s-stack>
           )}
         </s-stack>
@@ -155,7 +157,9 @@ function RescheduleStatusAction({ info }) {
           {info.requestedAt && (
             <s-stack direction="block" gap="small">
               <s-text color="subdued">Requested at</s-text>
-              <s-text>{info.requestedAt}</s-text>
+              <s-text>
+                {formatRescheduledAt(info.requestedAt, info.shopTimezone)}
+              </s-text>
             </s-stack>
           )}
         </s-stack>
