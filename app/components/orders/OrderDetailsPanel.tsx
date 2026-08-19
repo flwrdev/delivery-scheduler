@@ -253,11 +253,6 @@ export function OrderDetailsPanel({
           <DeliverySection order={order} />
 
           <Divider />
-          <DeliveryTimeline order={order} />
-          {/* DeliveryTimeline renders null (and the divider above still
-              separates Delivery from Items) when there is no reschedule
-              signal — no duplicate divider needed. */}
-
           <ItemsSection order={order} />
 
           <Divider />
@@ -352,6 +347,10 @@ export function OrderDetailsPanel({
                 </Text>
               )}
           </BlockStack>
+
+          {/* Rendered last: its own leading Divider + heading show up only
+              when the order actually has reschedule/activity signal. */}
+          <DeliveryTimeline order={order} />
         </div>
       </div>
     </>

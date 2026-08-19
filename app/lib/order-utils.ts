@@ -589,14 +589,13 @@ export function formatTimelineDelivery(date: string, timeSlot: string): string {
   return `${formattedDate} (${timeSlot})`;
 }
 
-export function formatTimelineTimestamp(value: string): string {
+// Clock time only, deliberately no date — the timeline column it feeds
+// (DeliveryTimeline) shows nothing but the time, by design.
+export function formatTimelineTime(value: string): string {
   if (value === "—") return "Requested time not recorded";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
+  return date.toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
   });
