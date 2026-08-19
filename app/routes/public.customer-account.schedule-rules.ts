@@ -10,6 +10,7 @@ declare const process: {
 
 type ScheduleRulesRequestBody = {
   sessionToken?: unknown;
+  orderId?: unknown;
 };
 
 type SessionTokenPayload = {
@@ -82,6 +83,7 @@ async function parseRequestBody(request: Request): Promise<ScheduleRulesRequestB
 
     return {
       sessionToken: searchParams.get("sessionToken"),
+      orderId: searchParams.get("orderId"),
     };
   }
 
@@ -89,6 +91,7 @@ async function parseRequestBody(request: Request): Promise<ScheduleRulesRequestB
     const formData = await request.formData();
     return {
       sessionToken: formData.get("sessionToken"),
+      orderId: formData.get("orderId"),
     };
   }
 
@@ -185,7 +188,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const { admin } = await unauthenticated.admin(shop);
     // Return the same server-calculated rules used by other delivery surfaces so the
     // customer-account reschedule UI stays aligned with live capacity and blackout data.
-    const rules = await getScheduleRulesWithBookedCounts(shop, admin);
+    // excludeOrderId keeps this in parity with the reschedule submit path (which already
+    // excludes the order's own current booking, DEF-14) — otherwise a slot this order
+    // already occupies can read as "full" here even though picking it back would succeed.
+    const rules = await getScheduleRulesWithBookedCounts(shop, admin, {
+      excludeOrderId: isNonEmptyString(body.orderId) ? body.orderId : undefined,
+    });
 
     return jsonResponse(request, {
       ok: true,

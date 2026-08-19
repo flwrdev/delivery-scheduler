@@ -52,17 +52,6 @@ sa marketing repo mula dito.
 ```bash
 npm run dev        # shopify app dev against the DEV app (default, safe); does NOT auto-apply migrations
 npm run dev:prod-preview # shopify app dev against the PROD app config (read-only preview; automatically_update_urls_on_dev=false there)
-npm run build      # react-router build
-npm run start      # react-router-serve ./build/server/index.js
-npm run typecheck  # react-router typegen && tsc --noEmit
-npm run lint       # eslint, cached
-npm test           # vitest run (all tests, single run)
-npm run test:watch # vitest watch mode
-npm run setup      # prisma generate && prisma migrate deploy (run after any new migration)
-npx prisma studio  # inspect Postgres data locally
-
-npx vitest run test/verify-app-proxy.server.test.ts   # run a single vitest file
-npx playwright test --config e2e/playwright.config.ts # e2e (separate from vitest; live side effects)
 
 # Production deploys (merchant go required — stop-and-ask gate):
 gcloud run deploy delivery-scheduler --source . --region us-central1   # backend (project lalamove-map)

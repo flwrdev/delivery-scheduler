@@ -1,4 +1,5 @@
-import { Badge, BlockStack, Text } from "@shopify/polaris";
+import type { ReactNode } from "react";
+import { Badge, BlockStack, Divider, InlineStack, Text } from "@shopify/polaris";
 import {
   type Order,
   type RescheduleTimelineEvent,
@@ -11,9 +12,33 @@ import {
   getDeliveredAt,
   getEmailSentEvents,
   formatTimelineDelivery,
-  formatTimelineTimestamp,
+  formatTimelineTime,
   formatTimelineStatus,
 } from "../../../lib/order-utils";
+
+// Puts the time in its own right-aligned column instead of inline with the
+// label/status text — mirrors Shopify's native order-activity timeline,
+// where the clock time sits apart from the event copy (not stacked into
+// it). Deliberately clock-time-only (no date) and kept visually quiet
+// (bodyXs + subdued) so it reads as a light annotation, not a headline.
+function TimelineRow({
+  time,
+  children,
+}: {
+  time: string;
+  children: ReactNode;
+}) {
+  return (
+    <InlineStack align="space-between" blockAlign="start" wrap={false} gap="200">
+      <BlockStack gap="050">{children}</BlockStack>
+      <span className="odp-timeline-time">
+        <Text as="span" variant="bodyXs" tone="subdued">
+          {time}
+        </Text>
+      </span>
+    </InlineStack>
+  );
+}
 
 function sourceLabel(source: string): string | null {
   const s = source.trim().toLowerCase();
@@ -58,8 +83,9 @@ function buildActivityEvents(order: Order): ActivityEvent[] {
 /**
  * At-a-glance reschedule history: original schedule (order-time
  * customAttributes), each recorded change (from → to, who, when), and the
- * current/approved schedule (canonical custom.* metafields). Renders nothing
- * when the order has no reschedule signal.
+ * current/approved schedule (canonical custom.* metafields). Rendered at the
+ * bottom of the panel, below Tags. Renders nothing (including its own
+ * leading divider) when the order has no reschedule signal.
  */
 export function DeliveryTimeline({ order }: { order: Order }) {
   const events = getRescheduleTimelineEvents(order);
@@ -90,123 +116,116 @@ export function DeliveryTimeline({ order }: { order: Order }) {
     getDeliveryTimeValue(order),
   );
   const currentStatus = order.rescheduleStatus?.value?.trim() || "";
+  // Skip the redundant "Original schedule" row when it's identical to
+  // "Current schedule" (order was never actually rescheduled) — showing the
+  // same date/slot twice reads as confusing duplication, not information.
+  const showOriginalSchedule = originalDelivery !== currentDelivery;
 
   return (
-    <BlockStack gap="300">
-      <Text as="h3" variant="headingSm">
-        Delivery timeline
-      </Text>
-      <ul className="odp-timeline">
-        <li className="odp-timeline-item odp-timeline-item--current">
-          <BlockStack gap="050">
-            <Text as="span" variant="bodySm" tone="subdued">
-              Current schedule{currentStatus ? ` · ${currentStatus}` : ""}
-            </Text>
-            <Text as="span" fontWeight="medium">
-              {currentDelivery}
-            </Text>
-          </BlockStack>
-        </li>
-        {hasRescheduleTag(order) && events.length === 0 && (
-          <li className="odp-timeline-item">
-            <Text as="span" tone="subdued">
-              Rescheduled — history not yet recorded
-            </Text>
+    <>
+      <Divider />
+      <BlockStack gap="300">
+        <Text as="h3" variant="headingSm">
+          Delivery timeline
+        </Text>
+        <ul className="odp-timeline">
+          <li className="odp-timeline-item odp-timeline-item--current">
+            <BlockStack gap="050">
+              <Text as="span" variant="bodySm" tone="subdued">
+                Current schedule{currentStatus ? ` · ${currentStatus}` : ""}
+              </Text>
+              <Text as="span" fontWeight="medium">
+                {currentDelivery}
+              </Text>
+            </BlockStack>
           </li>
-        )}
-        {activityEvents.map((item, index) => {
-          if (item.kind === "reschedule") {
-            const rescheduleIndex = activityEvents
-              .slice(0, index)
-              .filter((e) => e.kind === "reschedule").length;
-            const event = item.event;
-            const from = formatTimelineDelivery(
-              event.fromDate,
-              event.fromTimeSlot,
-            );
-            const to = formatTimelineDelivery(event.date, event.timeSlot);
-            const source = sourceLabel(event.source);
+          {hasRescheduleTag(order) && events.length === 0 && (
+            <li className="odp-timeline-item">
+              <Text as="span" tone="subdued">
+                Rescheduled — history not yet recorded
+              </Text>
+            </li>
+          )}
+          {activityEvents.map((item, index) => {
+            if (item.kind === "reschedule") {
+              const rescheduleIndex = activityEvents
+                .slice(0, index)
+                .filter((e) => e.kind === "reschedule").length;
+              const event = item.event;
+              const from = formatTimelineDelivery(
+                event.fromDate,
+                event.fromTimeSlot,
+              );
+              const to = formatTimelineDelivery(event.date, event.timeSlot);
+              const source = sourceLabel(event.source);
+              return (
+                <li
+                  className="odp-timeline-item"
+                  key={`reschedule-${event.requestedAt}-${event.date}-${event.timeSlot}-${index}`}
+                >
+                  <TimelineRow time={formatTimelineTime(event.requestedAt)}>
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      {rescheduleIndex === 0
+                        ? "Latest reschedule"
+                        : `Reschedule ${events.length - rescheduleIndex}`}
+                      {source ? " · " : ""}
+                      {source && (
+                        <Badge size="small" tone={source === "Merchant" ? "info" : undefined}>
+                          {source}
+                        </Badge>
+                      )}
+                    </Text>
+                    <Text as="span">
+                      {from !== "—" ? `${from} → ${to}` : to}
+                    </Text>
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      {formatTimelineStatus(event.status)}
+                    </Text>
+                  </TimelineRow>
+                </li>
+              );
+            }
+            if (item.kind === "fulfilled") {
+              return (
+                <li className="odp-timeline-item" key={`fulfilled-${item.timestamp}`}>
+                  <TimelineRow time={formatTimelineTime(item.timestamp)}>
+                    <Text as="span">Marked fulfilled</Text>
+                  </TimelineRow>
+                </li>
+              );
+            }
+            if (item.kind === "delivered") {
+              return (
+                <li className="odp-timeline-item" key={`delivered-${item.timestamp}`}>
+                  <TimelineRow time={formatTimelineTime(item.timestamp)}>
+                    <Text as="span">Delivered</Text>
+                  </TimelineRow>
+                </li>
+              );
+            }
             return (
               <li
                 className="odp-timeline-item"
-                key={`reschedule-${event.requestedAt}-${event.date}-${event.timeSlot}-${index}`}
+                key={`email-${item.timestamp}-${item.to}`}
               >
-                <BlockStack gap="050">
-                  <Text as="span" variant="bodySm" tone="subdued">
-                    {rescheduleIndex === 0
-                      ? "Latest reschedule"
-                      : `Reschedule ${events.length - rescheduleIndex}`}
-                    {source ? " · " : ""}
-                    {source && (
-                      <Badge size="small" tone={source === "Merchant" ? "info" : undefined}>
-                        {source}
-                      </Badge>
-                    )}
-                  </Text>
-                  <Text as="span">
-                    {from !== "—" ? `${from} → ${to}` : to}
-                  </Text>
-                  <Text as="span" variant="bodySm" tone="subdued">
-                    {formatTimelineTimestamp(event.requestedAt)} ·{" "}
-                    {formatTimelineStatus(event.status)}
-                  </Text>
-                </BlockStack>
+                <TimelineRow time={formatTimelineTime(item.timestamp)}>
+                  <Text as="span">Email sent to {item.to}</Text>
+                </TimelineRow>
               </li>
             );
-          }
-          if (item.kind === "fulfilled") {
-            return (
-              <li className="odp-timeline-item" key={`fulfilled-${item.timestamp}`}>
-                <BlockStack gap="050">
-                  <Text as="span" variant="bodySm" tone="subdued">
-                    Marked fulfilled
-                  </Text>
-                  <Text as="span">
-                    {formatTimelineTimestamp(item.timestamp)}
-                  </Text>
-                </BlockStack>
-              </li>
-            );
-          }
-          if (item.kind === "delivered") {
-            return (
-              <li className="odp-timeline-item" key={`delivered-${item.timestamp}`}>
-                <BlockStack gap="050">
-                  <Text as="span" variant="bodySm" tone="subdued">
-                    Delivered
-                  </Text>
-                  <Text as="span">
-                    {formatTimelineTimestamp(item.timestamp)}
-                  </Text>
-                </BlockStack>
-              </li>
-            );
-          }
-          return (
-            <li
-              className="odp-timeline-item"
-              key={`email-${item.timestamp}-${item.to}`}
-            >
+          })}
+          {showOriginalSchedule && (
+            <li className="odp-timeline-item">
               <BlockStack gap="050">
                 <Text as="span" variant="bodySm" tone="subdued">
-                  Email sent to {item.to}
+                  Original schedule
                 </Text>
-                <Text as="span">
-                  {formatTimelineTimestamp(item.timestamp)}
-                </Text>
+                <Text as="span">{originalDelivery}</Text>
               </BlockStack>
             </li>
-          );
-        })}
-        <li className="odp-timeline-item">
-          <BlockStack gap="050">
-            <Text as="span" variant="bodySm" tone="subdued">
-              Original schedule
-            </Text>
-            <Text as="span">{originalDelivery}</Text>
-          </BlockStack>
-        </li>
-      </ul>
-    </BlockStack>
+          )}
+        </ul>
+      </BlockStack>
+    </>
   );
 }

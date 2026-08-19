@@ -365,7 +365,14 @@ async function fetchScheduleRules(
   shopifyApi: ShopifyActionApi,
 ): Promise<DeliveryScheduleRules> {
   const sessionToken = await shopifyApi.sessionToken.get();
-  const requestBody = new URLSearchParams({ sessionToken });
+  // Excludes this order's own current booking from the returned capacity
+  // counts, same as the reschedule submit path — otherwise a slot this order
+  // already occupies can read as "full" in the picker even though picking it
+  // back would actually succeed.
+  const requestBody = new URLSearchParams({
+    sessionToken,
+    orderId: shopifyApi.orderId,
+  });
 
   const response = await fetch(SCHEDULE_RULES_URL, {
     method: 'POST',

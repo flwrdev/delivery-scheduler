@@ -141,10 +141,31 @@
   height: 8px;
   border-radius: 50%;
   background: var(--p-color-border, #c9cccf);
+  z-index: 1;
 }
 
 .odp-timeline-item--current::before {
   background: var(--p-color-text-success, #29845a);
+}
+
+/* Connecting rail: runs from this item's dot down through the flex gap to
+   the next item's dot, so the list reads as one continuous timeline. */
+.odp-timeline-item:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 14px;
+  bottom: calc(-1 * var(--p-space-300, 12px));
+  width: 2px;
+  background: var(--p-color-border-secondary, #ebebeb);
+}
+
+/* Timestamp column: kept apart from the event copy so it never wraps or
+   gets swallowed into the sentence next to it. */
+.odp-timeline-time {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Items */
