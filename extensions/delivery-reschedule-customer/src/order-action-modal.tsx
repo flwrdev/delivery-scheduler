@@ -33,9 +33,16 @@ export default async function renderRescheduleModal() {
     disallowDates: '' as string,
   };
 
+  // The action shell, the form fields and the buttons are built ONCE and then
+  // updated in place — a full rebuild per state change (i.e. per keystroke)
+  // would destroy and re-create the s-date-field / s-select the customer is
+  // typing in, losing focus and the native date picker mid-entry.
   const rerender = () => {
-    document.body.replaceChildren(buildAction(state, shopifyApi, rerender));
+    view.update();
   };
+
+  const view = buildRescheduleView(state, shopifyApi, rerender);
+  document.body.replaceChildren(view.action);
 
   applyAvailabilityState(state);
   void loadScheduleRules(state, shopifyApi, rerender);
@@ -98,22 +105,37 @@ function getShopifyApi() {
   return (globalThis as unknown as { shopify: ShopifyActionApi }).shopify;
 }
 
-function buildAction(
+type RescheduleView = {
+  action: HTMLElement;
+  update: () => void;
+};
+
+/**
+ * Builds the modal once and hands back an `update()` that reconciles the parts
+ * that actually change (intro copy, banners, field errors/disabled/value, the
+ * slot options, the confirm button) against the kept element references. No
+ * framework here on purpose — this is vanilla DOM, so "reconcile" means direct
+ * property writes, guarded so an unchanged value never touches the control.
+ */
+function buildRescheduleView(
   state: RescheduleState,
   shopifyApi: ShopifyActionApi,
   rerender: () => void,
-) {
-  if (state.confirmedDate) {
-    return buildSuccessAction(state, shopifyApi);
-  }
-
+): RescheduleView {
   const action = createElement('s-customer-account-action', {
     heading: 'Reschedule Delivery',
   });
 
+  // The action element itself is the modal chrome (Shopify sizes and slots it),
+  // so the query container wraps the CONTENT. It lets the form below respond to
+  // the width the modal actually gets — narrow inline panel on the redesigned
+  // single-column order page, wider dialog on desktop — without inventing
+  // columns the surface does not have.
+  const queryContainer = createElement('s-query-container', {});
+
   const stack = createElement('s-stack', {
     direction: 'block',
-    gap: 'base',
+    gap: '@container (inline-size > 400px) base, small-300',
   });
 
   // The one-online-reschedule policy rides inside the intro sentence
@@ -121,33 +143,15 @@ function buildAction(
   // The backend enforces the limit via the `resched` tag; this only sets
   // the expectation before the customer submits.
   const intro = document.createElement('s-text');
-  intro.textContent = state.isLoadingRules
-    ? 'Loading available delivery dates and time slots.'
-    : 'Select a new delivery date and time slot. You can reschedule your delivery only once, so please choose carefully.';
-  stack.append(intro);
 
-  if (state.submitError) {
-    const banner = createElement('s-banner', { tone: 'critical' });
-    banner.textContent = state.submitError;
-    stack.append(banner);
-  }
-
-  if (state.availabilityMessage) {
-    const banner = createElement('s-banner', { tone: 'critical' });
-    banner.textContent = state.availabilityMessage;
-    stack.append(banner);
-  }
+  // Both banners are created up front but stay OUT of the DOM until they have
+  // something to say, so `querySelector('s-banner')` never finds an empty one.
+  const errorBanner = createElement('s-banner', { tone: 'critical' });
+  const availabilityBanner = createElement('s-banner', { tone: 'critical' });
 
   const dateField = createElement('s-date-field', {
     label: 'New delivery date',
-    allow: `${state.minDate}--${state.maxDate}`,
   });
-  setOptionalAttribute(dateField, 'disallow', state.disallowDates);
-  if (state.isLoadingRules || state.isSubmitting) {
-    dateField.setAttribute('disabled', '');
-  }
-  setOptionalAttribute(dateField, 'error', state.dateError);
-  setElementValue(dateField, state.date);
   dateField.addEventListener('change', (event) => {
     state.date = getEventValue(event);
     state.dateError = '';
@@ -156,40 +160,23 @@ function buildAction(
     applyAvailabilityState(state);
     rerender();
   });
-  stack.append(dateField);
 
   const select = createElement('s-select', {
     label: 'Time slot',
   });
-  if (
-    state.isLoadingRules ||
-    state.isSubmitting ||
-    !state.date ||
-    !state.availableSlots.length
-  ) {
-    select.setAttribute('disabled', '');
-  }
-  setOptionalAttribute(select, 'error', state.timeError);
   select.addEventListener('change', (event) => {
     state.timeSlot = getEventValue(event);
     state.timeError = '';
     state.submitError = '';
     rerender();
   });
-  select.append(createOption('', getTimeSlotPlaceholder(state)));
-  for (const option of state.availableSlots) {
-    select.append(createOption(option.value, option.display));
-  }
-  setElementValue(select, state.timeSlot);
-  stack.append(select);
+
+  stack.append(intro, dateField, select);
+  queryContainer.append(stack);
 
   const confirmButton = createElement('s-button', {
     slot: 'primary-action',
   });
-  if (state.isSubmitting || state.isLoadingRules) {
-    confirmButton.setAttribute('loading', '');
-    confirmButton.setAttribute('disabled', '');
-  }
   confirmButton.textContent = 'Confirm';
   confirmButton.addEventListener('click', async () => {
     await submitReschedule(state, shopifyApi, rerender);
@@ -203,35 +190,116 @@ function buildAction(
     shopifyApi.close();
   });
 
-  action.append(stack, confirmButton, cancelButton);
-  return action;
-}
+  action.append(queryContainer, confirmButton, cancelButton);
 
-function buildSuccessAction(state: RescheduleState, shopifyApi: ShopifyActionApi) {
-  const action = createElement('s-customer-account-action', {
-    heading: 'Delivery Rescheduled',
-  });
-  const stack = createElement('s-stack', {
-    direction: 'block',
-    gap: 'base',
-  });
-  const banner = createElement('s-banner', { tone: 'success' });
-  const slotLabel =
-    state.rules.slots.find((option) => option.value === state.confirmedSlot)?.display ??
-    state.confirmedSlot;
-  banner.textContent = `Your delivery has been rescheduled to ${formatDisplayDate(state.confirmedDate)} (${slotLabel}).`;
-  stack.append(banner);
+  // Rebuilding the options resets the select, so only do it when the offered
+  // slots (or the placeholder) actually changed.
+  let renderedOptionsSignature: string | null = null;
+  let isConfirmed = false;
 
-  const doneButton = createElement('s-button', {
-    slot: 'primary-action',
-  });
-  doneButton.textContent = 'Done';
-  doneButton.addEventListener('click', () => {
-    shopifyApi.close();
-  });
+  const syncBanner = (banner: HTMLElement, message: string, before: HTMLElement) => {
+    if (!message) {
+      banner.remove();
+      return;
+    }
 
-  action.append(stack, doneButton);
-  return action;
+    banner.textContent = message;
+    if (banner.parentNode !== stack) {
+      stack.insertBefore(banner, before);
+    }
+  };
+
+  const syncSlotOptions = () => {
+    const placeholder = getTimeSlotPlaceholder(state);
+    const signature = JSON.stringify([placeholder, state.availableSlots]);
+
+    if (signature === renderedOptionsSignature) {
+      return;
+    }
+
+    renderedOptionsSignature = signature;
+    select.replaceChildren(
+      createOption('', placeholder),
+      ...state.availableSlots.map((option) => createOption(option.value, option.display)),
+    );
+  };
+
+  const showConfirmed = () => {
+    if (isConfirmed) {
+      return;
+    }
+
+    isConfirmed = true;
+    action.setAttribute('heading', 'Delivery Rescheduled');
+
+    const successStack = createElement('s-stack', {
+      direction: 'block',
+      gap: '@container (inline-size > 400px) base, small-300',
+    });
+    const banner = createElement('s-banner', { tone: 'success' });
+    const slotLabel =
+      state.rules.slots.find((option) => option.value === state.confirmedSlot)?.display ??
+      state.confirmedSlot;
+    banner.textContent = `Your delivery has been rescheduled to ${formatDisplayDate(state.confirmedDate)} (${slotLabel}).`;
+    successStack.append(banner);
+
+    // The form is done with — swap the whole content, and the form's two
+    // buttons, for the confirmation. Focus retention no longer matters here.
+    queryContainer.replaceChildren(successStack);
+    confirmButton.remove();
+    cancelButton.remove();
+
+    const doneButton = createElement('s-button', {
+      slot: 'primary-action',
+    });
+    doneButton.textContent = 'Done';
+    doneButton.addEventListener('click', () => {
+      shopifyApi.close();
+    });
+    action.append(doneButton);
+  };
+
+  const update = () => {
+    if (state.confirmedDate) {
+      showConfirmed();
+      return;
+    }
+
+    intro.textContent = state.isLoadingRules
+      ? 'Loading available delivery dates and time slots.'
+      : 'Select a new delivery date and time slot. You can reschedule your delivery only once, so please choose carefully.';
+
+    // Banners live between the intro and the date field, submit error first.
+    syncBanner(availabilityBanner, state.availabilityMessage, dateField);
+    syncBanner(
+      errorBanner,
+      state.submitError,
+      availabilityBanner.parentNode === stack ? availabilityBanner : dateField,
+    );
+
+    dateField.setAttribute('allow', `${state.minDate}--${state.maxDate}`);
+    setOptionalAttribute(dateField, 'disallow', state.disallowDates);
+    dateField.toggleAttribute('disabled', state.isLoadingRules || state.isSubmitting);
+    setOptionalAttribute(dateField, 'error', state.dateError);
+    setElementValue(dateField, state.date);
+
+    select.toggleAttribute(
+      'disabled',
+      state.isLoadingRules ||
+        state.isSubmitting ||
+        !state.date ||
+        !state.availableSlots.length,
+    );
+    setOptionalAttribute(select, 'error', state.timeError);
+    syncSlotOptions();
+    setElementValue(select, state.timeSlot);
+
+    const isBusy = state.isSubmitting || state.isLoadingRules;
+    confirmButton.toggleAttribute('loading', isBusy);
+    confirmButton.toggleAttribute('disabled', isBusy);
+  };
+
+  return { action, update };
 }
 
 async function submitReschedule(
@@ -578,16 +646,27 @@ function createOption(value: string, label: string) {
 function setOptionalAttribute(element: HTMLElement, name: string, value: string) {
   if (value) {
     element.setAttribute(name, value);
+    return;
   }
+
+  // Update-in-place: the element outlives the state that set the attribute,
+  // so an empty value has to clear it explicitly.
+  element.removeAttribute(name);
 }
 
 function setElementValue(element: HTMLElement, value: string) {
   const control = element as HTMLElement & { value?: string };
 
-  control.value = value;
+  // Only touch the control when it genuinely differs — an update triggered by
+  // another field must not rewrite (and so reset) the one being typed in.
+  if (control.value !== value) {
+    control.value = value;
+  }
 
   if (value) {
-    element.setAttribute('value', value);
+    if (element.getAttribute('value') !== value) {
+      element.setAttribute('value', value);
+    }
     return;
   }
 

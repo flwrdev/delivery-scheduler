@@ -13,6 +13,68 @@ export default async function renderOrderStatusBlock() {
     latestDelivery: null as OrderDeliverySnapshot | null,
   };
 
+  // ONE persistent root per activation, and the only write this file ever makes to
+  // document.body. Everything below re-renders by replacing the children of this
+  // container, never the body — so the container query context (and, on the real
+  // surface, the block's scroll position) survives every re-render.
+  //
+  // s-query-container is here for the customer-account redesign: the order-status
+  // page is single-column and inline, so its children can size themselves with
+  // `@container (inline-size > Npx) wide, narrow` attribute values instead of
+  // guessing at a viewport width. It deliberately does NOT introduce columns —
+  // the surface is single-column by design.
+  const root = document.createElement('s-query-container');
+  document.body.replaceChildren(root);
+
+  // Split-cadence poll. The tick itself is ALWAYS on for the life of the block,
+  // but only its cheap half runs unconditionally:
+  //
+  //   - storage read (local, no network) — every tick, forever. The reschedule
+  //     modal and this block live on the SAME customer-account page, and the
+  //     block does NOT re-activate when the modal closes, so this read is the
+  //     only thing that notices the `delivery-reschedule-sync:` handoff appearing
+  //     after the block has already rendered. Stopping it would lose the
+  //     optimistic update until a manual refresh — which is the whole reason
+  //     this poll exists.
+  //   - backend read (network) — only while a fresh handoff is outstanding, and
+  //     it stops again the moment that handoff resolves or ages out. The original
+  //     code fetched the backend every second for the whole life of the page.
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let isPollInFlight = false;
+  let hasPendingHandoff = false;
+
+  const startPolling = () => {
+    // The handle is kept so arming is idempotent within this activation —
+    // repeated calls install at most one interval. (A re-activation gets a
+    // fresh closure and its own interval; the target has no teardown hook.)
+    if (pollTimer !== null) {
+      return;
+    }
+
+    pollTimer = setInterval(() => {
+      void pollOnce();
+    }, RESCHEDULE_SYNC_POLL_MS);
+  };
+
+  const pollOnce = async () => {
+    // Skip the tick outright if the previous one has not settled: at a 1s period a
+    // slow backend would otherwise stack overlapping fetches on top of each other.
+    if (isPollInFlight) {
+      return;
+    }
+
+    isPollInFlight = true;
+    try {
+      await syncPendingRescheduleFromStorage();
+
+      if (hasPendingHandoff) {
+        await syncLatestDelivery();
+      }
+    } finally {
+      isPollInFlight = false;
+    }
+  };
+
   const render = () => {
     const metafields = state.metafields;
     const attributes = state.attributes;
@@ -50,6 +112,9 @@ export default async function renderOrderStatusBlock() {
       state.pendingSync = null;
       pendingSync = null;
       void clearPendingRescheduleSync(api.storage, order.id);
+      // The handoff resolved — stop hitting the backend. The storage half of the
+      // tick keeps running, ready for the next handoff.
+      hasPendingHandoff = false;
     }
 
     // Prefer the optimistic handoff and the direct server read over the host snapshot
@@ -65,7 +130,7 @@ export default async function renderOrderStatusBlock() {
     const cardMessage = attrs['Card Message'] ?? null;
 
     if (!deliveryDate && !deliveryTime) {
-      document.body.replaceChildren();
+      root.replaceChildren();
       return;
     }
 
@@ -76,8 +141,11 @@ export default async function renderOrderStatusBlock() {
     const orderLabel = order?.name ? ` · ${order.name}` : '';
     section.setAttribute('heading', `Delivery Schedule${orderLabel}`);
 
+    // One design-token gap on the parent spaces every labelled value, tightened
+    // a step on a narrow container (the inline order-status card on a phone).
     const content = createElement('s-stack', {
       direction: 'block',
+      gap: '@container (inline-size > 400px) base, small-300',
     });
 
     if (deliveryDate) {
@@ -100,7 +168,7 @@ export default async function renderOrderStatusBlock() {
     }
 
     section.append(content);
-    document.body.replaceChildren(section);
+    root.replaceChildren(section);
   };
 
   const syncPendingRescheduleFromStorage = async () => {
@@ -108,6 +176,12 @@ export default async function renderOrderStatusBlock() {
       api.storage,
       state.order?.id ?? null,
     );
+
+    // Gate the backend half of the tick. `readPendingRescheduleSync` already
+    // deletes a marker older than RESCHEDULE_SYNC_MAX_AGE_MS and answers null, so
+    // the freshness cap doubles as a stop condition: the fetches end right after
+    // that final clear instead of running for the life of the page.
+    hasPendingHandoff = nextPendingSync !== null;
 
     if (isSamePendingRescheduleSync(state.pendingSync, nextPendingSync)) {
       return;
@@ -147,10 +221,7 @@ export default async function renderOrderStatusBlock() {
 
   await syncPendingRescheduleFromStorage();
   await syncLatestDelivery();
-  setInterval(() => {
-    void syncPendingRescheduleFromStorage();
-    void syncLatestDelivery();
-  }, RESCHEDULE_SYNC_POLL_MS);
+  startPolling();
 
   render();
 }
@@ -195,14 +266,6 @@ type ExtensionSubscribable<T> = {
 type ExtensionStorage = {
   read: <T = unknown>(key: string) => Promise<T | null>;
   delete: (key: string) => Promise<void>;
-};
-
-const CONTACT_BLOCK_BODY_TEXT = {
-  fontFamily: 'Nunito, sans-serif',
-  fontSize: '14px',
-  fontWeight: '400',
-  lineHeight: '21px',
-  color: 'rgb(0, 0, 0)',
 };
 
 function getMetafieldValue(
@@ -435,69 +498,27 @@ function createElement(
 }
 
 function createLabeledValue(label: string, value: string) {
+  // Typography and color are the design system's job — never pin a literal
+  // color here: a hard-coded black reads as invisible text on a dark
+  // customer-account theme. `color="subdued"` on the label and the default
+  // tone on the value give the visual hierarchy while
+  // following the surface's own palette.
   const group = createElement('s-stack', {
     direction: 'block',
-  });
-  setInlineStyle(group, {
-    display: 'block',
-    margin: '0 0 16px',
+    gap: 'small-100',
   });
 
-  const labelText = document.createElement('s-text');
+  const labelText = createElement('s-text', { color: 'subdued' });
   labelText.textContent = label;
-  applyContactBlockBodyStyle(labelText);
 
   const valueText = document.createElement('s-text');
   valueText.textContent = value;
-  applyContactBlockBodyStyle(valueText);
-  appendInlineStyle(valueText, {
-    marginTop: '8px',
-  });
+  // No design-system equivalent, so this is the file's only inline style.
+  // Applied to every value; it matters for the free-text card message, which
+  // can carry a long unbroken string that would otherwise widen the block past
+  // the card on a narrow container.
+  valueText.setAttribute('style', 'overflow-wrap:anywhere');
 
   group.append(labelText, valueText);
   return group;
-}
-
-function applyContactBlockBodyStyle(element: HTMLElement) {
-  setInlineStyle(element, {
-    display: 'block',
-    margin: '0',
-    fontFamily: CONTACT_BLOCK_BODY_TEXT.fontFamily,
-    fontSize: CONTACT_BLOCK_BODY_TEXT.fontSize,
-    fontWeight: CONTACT_BLOCK_BODY_TEXT.fontWeight,
-    lineHeight: CONTACT_BLOCK_BODY_TEXT.lineHeight,
-    color: CONTACT_BLOCK_BODY_TEXT.color,
-    wordBreak: 'break-word',
-    overflowWrap: 'break-word',
-  });
-}
-
-function setInlineStyle(
-  element: HTMLElement,
-  styles: Record<string, string>,
-) {
-  element.setAttribute('style', inlineStyle(styles));
-}
-
-function appendInlineStyle(
-  element: HTMLElement,
-  styles: Record<string, string>,
-) {
-  const currentStyle = element.getAttribute('style');
-  const nextStyle = inlineStyle(styles);
-
-  element.setAttribute(
-    'style',
-    currentStyle ? `${currentStyle};${nextStyle}` : nextStyle,
-  );
-}
-
-function inlineStyle(styles: Record<string, string>) {
-  return Object.entries(styles)
-    .map(([name, value]) => `${toKebabCase(name)}:${value}`)
-    .join(';');
-}
-
-function toKebabCase(value: string) {
-  return value.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`);
 }
