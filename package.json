@@ -18,12 +18,13 @@
     "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
     "shopify": "shopify",
     "test": "vitest run",
+    "test:extensions": "vitest run --config vitest.extensions.config.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test --config e2e/playwright.config.ts",
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit && tsc -p tsconfig.extension-tests.json --noEmit"
   },
   "type": "module",
   "workspaces": [
@@ -58,6 +59,7 @@
     "@playwright/test": "^1.59.1",
     "@shopify/api-codegen-preset": "^2.0.0",
     "@shopify/polaris-types": "1.0.1",
+    "@shopify/ui-extensions-tester": "2026.4.4",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/eslint": "^9.6.1",
