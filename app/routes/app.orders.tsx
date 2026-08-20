@@ -407,6 +407,39 @@ export const loader = async ({
     order.emailLog = emailLogByOrderId.get(order.id) ?? [];
   }
 
+  // Occasion-reminder conversions (ADR-19): a row whose convertedOrderId is
+  // one of this page's orders means THAT order came from a reminder email —
+  // surfaced in the panel's DeliveryTimeline. Read-only Postgres lookup.
+  const conversionRows =
+    orderIds.length > 0
+      ? await prisma.occasionReminder.findMany({
+          where: { shop: session.shop, convertedOrderId: { in: orderIds } },
+          select: {
+            convertedOrderId: true,
+            touch: true,
+            occasionType: true,
+            sentAt: true,
+          },
+        })
+      : [];
+  const conversionsByOrderId = new Map<
+    string,
+    { touch: string; occasionType: string; sentAt: string | null }[]
+  >();
+  for (const row of conversionRows) {
+    if (!row.convertedOrderId) continue;
+    const list = conversionsByOrderId.get(row.convertedOrderId) ?? [];
+    list.push({
+      touch: row.touch,
+      occasionType: row.occasionType,
+      sentAt: row.sentAt ? row.sentAt.toISOString() : null,
+    });
+    conversionsByOrderId.set(row.convertedOrderId, list);
+  }
+  for (const order of orders) {
+    order.reminderConversions = conversionsByOrderId.get(order.id) ?? [];
+  }
+
   return Response.json(
     {
       orders,

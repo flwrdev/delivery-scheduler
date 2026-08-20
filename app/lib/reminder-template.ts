@@ -19,14 +19,14 @@ export interface ReminderTemplateVars {
 }
 
 export const REMINDER_TEMPLATE_TOKENS: Array<{ token: keyof ReminderTemplateVars; hint: string }> = [
-  { token: "name", hint: "pangalan ng bumili (billing → shipping fallback)" },
-  { token: "recipient", hint: "pangalan ng padadalhan (shipping name)" },
-  { token: "occasion", hint: 'napansing okasyon o "your special day"' },
-  { token: "date", hint: "petsa ng okasyon, hal. August 25" },
-  { token: "weekday", hint: "araw sa Filipino, hal. Sabado" },
-  { token: "past_date", hint: "petsa noong nakaraang taon, hal. August 25, 2025" },
-  { token: "product", hint: 'binili noon, hal. Classic Red Roses (o "flowers")' },
-  { token: "cutoff", hint: "same-day cutoff mula sa scheduler config, hal. 2 PM" },
+  { token: "name", hint: "buyer's first name (billing, falls back to shipping)" },
+  { token: "recipient", hint: "recipient's name (shipping name)" },
+  { token: "occasion", hint: 'detected occasion, or "your special day"' },
+  { token: "date", hint: "occasion date, e.g. August 25" },
+  { token: "weekday", hint: "Filipino weekday, e.g. Sabado" },
+  { token: "past_date", hint: "last year's date, e.g. August 25, 2025" },
+  { token: "product", hint: 'last year\'s items, e.g. Classic Red Roses (falls back to "flowers")' },
+  { token: "cutoff", hint: "same-day cutoff from Delivery Scheduler settings, e.g. 2 PM" },
   { token: "discount_code", hint: "ANNIV200" },
   { token: "discount_label", hint: "₱200 off" },
   { token: "store_url", hint: "https://flowercart.store" },
