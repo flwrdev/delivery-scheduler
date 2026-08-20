@@ -46,6 +46,9 @@ const ORDER_PAGE_SIZE = 250;
 const MAX_PAGES = 5;
 export const MAX_SENDS_PER_RUN = 50;
 const MAX_SEND_ATTEMPTS = 3;
+// Conversion attribution sweep bounds (read-only orders searches per night).
+const MAX_CONVERSION_CHECKS_PER_RUN = 40;
+const CONVERSION_LOOKBACK_DAYS = 35;
 
 const DEFAULT_TIMEZONE = "Asia/Manila";
 const DEFAULT_CUTOFF_HOUR = 14;
@@ -345,6 +348,7 @@ export interface ReminderScanSummary {
   skippedExisting: number;
   skippedDuplicateOccasion: number;
   skippedReordered: number;
+  converted: number;
   failed: number;
   truncated: boolean;
 }
@@ -361,6 +365,7 @@ function emptySummary(): ReminderScanSummary {
     skippedExisting: 0,
     skippedDuplicateOccasion: 0,
     skippedReordered: 0,
+    converted: 0,
     failed: 0,
     truncated: false,
   };
@@ -629,12 +634,27 @@ export async function runReminderScan(options: {
           select: { sentAt: true },
         });
         const since = sibling?.sentAt ?? row.suggestedAt;
-        if (await hasOrderedSince(admin, email, since)) {
+        const reorder = await hasOrderedSince(admin, email, since);
+        if (reorder.ordered) {
+          // The skipped 2nd email IS a conversion signal — stamp this row and
+          // credit the 7d sibling that did the convincing.
+          const stamp = { convertedAt: new Date(), convertedOrderId: reorder.orderId };
           await prisma.occasionReminder.update({
             where: { id: row.id },
-            data: { status: REMINDER_STATUS.skippedReordered },
+            data: { status: REMINDER_STATUS.skippedReordered, ...stamp },
+          });
+          await prisma.occasionReminder.updateMany({
+            where: {
+              shop,
+              shopifyOrderId: row.shopifyOrderId,
+              occasionYear: row.occasionYear,
+              touch: "7d",
+              convertedAt: null,
+            },
+            data: stamp,
           });
           summary.skippedReordered++;
+          summary.converted++;
           continue;
         }
       }
@@ -648,15 +668,24 @@ export async function runReminderScan(options: {
         break;
       }
 
-      const draft = buildReminderDraft({
-        touch: row.touch as ReminderTouch,
-        occasionType: row.occasionType,
-        occasionDate: dateToISO(row.occasionDate),
-        customerFirstName: row.customerFirstName,
-        recipientName: row.recipientHint,
-        productTitles: row.productTitles,
-        cutoffHour,
-      });
+      // Merchant template overrides from ReminderConfig — blank falls back to
+      // the built-in draft per field.
+      const override =
+        row.touch === "7d"
+          ? { subject: config.subject7d, body: config.body7d }
+          : { subject: config.subject3d, body: config.body3d };
+      const draft = buildReminderDraft(
+        {
+          touch: row.touch as ReminderTouch,
+          occasionType: row.occasionType,
+          occasionDate: dateToISO(row.occasionDate),
+          customerFirstName: row.customerFirstName,
+          recipientName: row.recipientHint,
+          productTitles: row.productTitles,
+          cutoffHour,
+        },
+        override,
+      );
       const body = appendReminderFooter(draft.body, optOutUrl);
 
       const result = await sendCustomerEmail({ to: email, subject: draft.subject, textBody: body });
@@ -700,25 +729,63 @@ export async function runReminderScan(options: {
     }
   }
 
+  // ── Conversion sweep: stamp SENT rows whose customer has since ordered.
+  // Skips rows sent < ~20h ago (nothing to find yet) and rows older than the
+  // lookback window (stale attribution is worse than none). Bounded per run.
+  const nowMs = (options.now ?? new Date()).getTime();
+  const sweepRows = await prisma.occasionReminder.findMany({
+    where: {
+      shop,
+      status: REMINDER_STATUS.sent,
+      convertedAt: null,
+      sentAt: {
+        gte: new Date(nowMs - CONVERSION_LOOKBACK_DAYS * 24 * 60 * 60 * 1000),
+        lte: new Date(nowMs - 20 * 60 * 60 * 1000),
+      },
+    },
+    take: MAX_CONVERSION_CHECKS_PER_RUN,
+  });
+  for (const row of sweepRows) {
+    try {
+      if (!row.customerEmail || !row.sentAt) continue;
+      const result = await hasOrderedSince(admin, row.customerEmail, row.sentAt);
+      if (result.ordered) {
+        await prisma.occasionReminder.update({
+          where: { id: row.id },
+          data: { convertedAt: new Date(), convertedOrderId: result.orderId },
+        });
+        summary.converted++;
+      }
+    } catch (error) {
+      console.warn(
+        `[reminder-scan] conversion check for ${row.id} threw: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
   return summary;
 }
 
 // Did this customer place any (non-cancelled) order since `since`? Uses the
-// orders email: search filter — a read-only query.
+// orders email: search filter — a read-only query. Returns the order id so
+// conversions can be attributed, not just detected.
 async function hasOrderedSince(
   admin: AdminGraphQLClient,
   email: string,
   since: Date,
-): Promise<boolean> {
+): Promise<{ ordered: boolean; orderId: string | null }> {
   const quoted = safeSearchValue(email);
-  if (!quoted) return false;
+  if (!quoted) return { ordered: false, orderId: null };
   const sinceISO = since.toISOString();
   const resp = await admin.graphql(REORDER_CHECK_QUERY, {
     variables: { query: `email:${quoted} created_at:>=${sinceISO} -status:cancelled` },
   });
   const json = await parseGraphQLJson(resp);
-  const edges = (json.data as { orders?: { edges?: unknown[] } })?.orders?.edges ?? [];
-  return edges.length > 0;
+  const edges =
+    (json.data as { orders?: { edges?: Array<{ node?: { id?: string } }> } })?.orders?.edges ?? [];
+  return { ordered: edges.length > 0, orderId: edges[0]?.node?.id ?? null };
 }
 
 // ─── Small date helpers (DATE column ↔ ISO string) ───────────────────────────

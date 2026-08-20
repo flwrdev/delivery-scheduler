@@ -14,6 +14,11 @@
 // fallback shipping name; recipient = shipping/delivery name from the order
 // details — NEVER parsed out of the card message (~70% failure measured).
 
+import {
+  renderReminderTemplate,
+  type ReminderTemplateVars,
+} from "../lib/reminder-template";
+
 export const REMINDER_DISCOUNT_CODE = "ANNIV200";
 export const REMINDER_DISCOUNT_LABEL = "₱200 off";
 export const STORE_URL = "https://flowercart.store";
@@ -57,6 +62,32 @@ export function formatMonthDay(dateISO: string): string {
   return `${MONTHS[parts.month - 1]} ${parts.day}`;
 }
 
+// "August 25, 2025" — last year's date for the {past_date} token.
+export function formatMonthDayYear(dateISO: string): string {
+  const parts = parseISO(dateISO);
+  if (!parts) return dateISO;
+  return `${MONTHS[parts.month - 1]} ${parts.day}, ${parts.year}`;
+}
+
+const FILIPINO_WEEKDAYS = [
+  "Linggo", "Lunes", "Martes", "Miyerkules", "Huwebes", "Biyernes", "Sabado",
+];
+
+// Filipino weekday for the {weekday} token ("… na sa Sabado").
+export function formatFilipinoWeekday(dateISO: string): string {
+  const parts = parseISO(dateISO);
+  if (!parts) return "";
+  const utcNoon = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12));
+  return FILIPINO_WEEKDAYS[utcNoon.getUTCDay()];
+}
+
+// The occasion date minus one year — the {past_date} source (Feb 29 → Feb 28).
+function pastYearISO(dateISO: string): string {
+  const [year, month, day] = dateISO.split("-");
+  if (month === "02" && day === "29") return `${Number(year) - 1}-02-28`;
+  return `${Number(year) - 1}-${month}-${day}`;
+}
+
 // cutoffHour 14 → "2 PM" (brand voice: the real cutoff, from live config).
 export function formatCutoffLabel(cutoffHour: number): string {
   const hour = Number.isInteger(cutoffHour) && cutoffHour >= 0 && cutoffHour <= 23 ? cutoffHour : 14;
@@ -74,7 +105,47 @@ function occasionText(occasionType: string): string {
   return OCCASION_FALLBACK; // "other" | "generic"
 }
 
-export function buildReminderDraft(input: ReminderDraftInput): ReminderDraft {
+// Template variables with the fallback words already baked in — shared by the
+// built-in drafts, merchant-template rendering, and the editor's preview vars.
+export function buildTemplateVars(input: ReminderDraftInput): ReminderTemplateVars {
+  return {
+    name: input.customerFirstName?.trim() || "",
+    recipient: input.recipientName?.trim() || RECIPIENT_FALLBACK,
+    occasion: occasionText(input.occasionType),
+    date: formatMonthDay(input.occasionDate),
+    weekday: formatFilipinoWeekday(input.occasionDate),
+    past_date: formatMonthDayYear(pastYearISO(input.occasionDate)),
+    product: input.productTitles?.trim() || PRODUCT_FALLBACK,
+    cutoff: formatCutoffLabel(input.cutoffHour),
+    discount_code: REMINDER_DISCOUNT_CODE,
+    discount_label: REMINDER_DISCOUNT_LABEL,
+    store_url: STORE_URL,
+  };
+}
+
+// Merchant overrides from ReminderConfig — null/blank falls back per-field to
+// the built-in draft.
+export interface ReminderTemplateOverride {
+  subject?: string | null;
+  body?: string | null;
+}
+
+export function buildReminderDraft(
+  input: ReminderDraftInput,
+  override?: ReminderTemplateOverride,
+): ReminderDraft {
+  const builtIn = buildBuiltInDraft(input);
+  const customSubject = override?.subject?.trim();
+  const customBody = override?.body?.trim();
+  if (!customSubject && !customBody) return builtIn;
+  const vars = buildTemplateVars(input);
+  return {
+    subject: customSubject ? renderReminderTemplate(customSubject, vars) : builtIn.subject,
+    body: customBody ? renderReminderTemplate(customBody, vars) : builtIn.body,
+  };
+}
+
+function buildBuiltInDraft(input: ReminderDraftInput): ReminderDraft {
   const monthDay = formatMonthDay(input.occasionDate);
   const occasion = occasionText(input.occasionType);
   const occasionKnown = input.occasionType === "anniversary" || input.occasionType === "birthday";

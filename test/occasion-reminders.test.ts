@@ -31,6 +31,8 @@ interface Row {
   priorYearsSent: number;
   suggestedAt: Date;
   sentAt: Date | null;
+  convertedAt: Date | null;
+  convertedOrderId: string | null;
   updatedAt: Date;
 }
 
@@ -49,9 +51,12 @@ interface ReminderWhere {
   touch?: string;
   status?: string;
   shopifyOrderId?: string;
+  occasionYear?: number;
   id?: string;
   attemptCount?: { lt: number };
   occasionDate?: DateCond;
+  sentAt?: DateCond;
+  convertedAt?: null | { not: null };
   customerEmail?: { equals: string; mode?: string };
   shop_shopifyOrderId_occasionYear_touch?: {
     shop: string;
@@ -73,7 +78,14 @@ const fake = vi.hoisted(() => {
     reminders: Row[];
     suppressions: SuppressionRow[];
     emailLogs: Array<Record<string, string>>;
-    config: { shop: string; enabled: boolean };
+    config: {
+      shop: string;
+      enabled: boolean;
+      subject7d?: string | null;
+      body7d?: string | null;
+      subject3d?: string | null;
+      body3d?: string | null;
+    };
     idSeq: number;
   }
   const state: State = {
@@ -138,6 +150,8 @@ const fake = vi.hoisted(() => {
           priorYearsSent: 0,
           suggestedAt: new Date("2026-08-21T00:00:00Z"),
           sentAt: null,
+          convertedAt: null,
+          convertedOrderId: null,
           customerEmail: null,
           customerFirstName: null,
           recipientHint: null,
@@ -157,6 +171,11 @@ const fake = vi.hoisted(() => {
           if (where.attemptCount?.lt !== undefined && !(r.attemptCount < where.attemptCount.lt))
             return false;
           if (where.occasionDate && !matchesDate(r.occasionDate, where.occasionDate)) return false;
+          if (where.sentAt && (!r.sentAt || !matchesDate(r.sentAt, where.sentAt))) return false;
+          if ("convertedAt" in where) {
+            if (where.convertedAt === null && r.convertedAt !== null) return false;
+            if (where.convertedAt && r.convertedAt === null) return false;
+          }
           return true;
         });
         rows = rows.sort((a, b) => a.occasionDate.getTime() - b.occasionDate.getTime());
@@ -193,6 +212,10 @@ const fake = vi.hoisted(() => {
           if (where.shop && row.shop !== where.shop) continue;
           if (where.status && row.status !== where.status) continue;
           if (where.shopifyOrderId && row.shopifyOrderId !== where.shopifyOrderId) continue;
+          if (where.occasionYear !== undefined && row.occasionYear !== where.occasionYear) continue;
+          if (where.touch && row.touch !== where.touch) continue;
+          if ("convertedAt" in where && where.convertedAt === null && row.convertedAt !== null)
+            continue;
           if (
             where.customerEmail?.equals &&
             (row.customerEmail ?? "").toLowerCase() !== where.customerEmail.equals.toLowerCase()
@@ -358,6 +381,8 @@ function seedReminder(overrides: Partial<Row> = {}): Row {
     priorYearsSent: 0,
     suggestedAt: new Date("2026-08-17T00:00:00Z"),
     sentAt: null,
+    convertedAt: null,
+    convertedOrderId: null,
     updatedAt: new Date(),
     ...overrides,
   };
@@ -503,8 +528,14 @@ describe("runReminderScan", () => {
     const summary = await runReminderScan({ admin, shop: SHOP, now: NOW });
 
     expect(summary.skippedReordered).toBe(1);
+    expect(summary.converted).toBe(1);
     const row = fake.state.reminders.find((r) => r.touch === "3d")!;
     expect(row.status).toBe("SKIPPED_REORDERED");
+    expect(row.convertedAt).not.toBeNull();
+    // The 7d sibling that did the convincing gets the conversion credit too.
+    const sibling = fake.state.reminders.find((r) => r.touch === "7d")!;
+    expect(sibling.convertedAt).not.toBeNull();
+    expect(sibling.convertedOrderId).toBe("gid://shopify/Order/9");
     expect(sendCustomerEmailMock).not.toHaveBeenCalled();
     const reorderCall = calls.find((c) => c.query.includes("OccasionReminderReorderCheck"))!;
     expect(String(reorderCall.variables?.query)).toContain('email:"juan@example.com"');
@@ -606,6 +637,52 @@ describe("runReminderScan", () => {
     expect(fake.state.reminders[0].attemptCount).toBe(3);
   });
 
+  it("uses the merchant's saved template override with rendered tokens", async () => {
+    fake.state.config.subject7d = "Balik na si {recipient} sa {date}!";
+    fake.state.config.body7d = "Hi {name}, {occasion} ni {recipient} sa {date}. Code: {discount_code}";
+    const { admin } = makeAdmin({ orders: [orderNode()] });
+    await runReminderScan({ admin, shop: SHOP, now: NOW });
+
+    const [{ subject, textBody }] = sendCustomerEmailMock.mock.calls[0];
+    expect(subject).toBe("Balik na si Maria sa August 28!");
+    expect(textBody).toContain("Hi Juan, birthday ni Maria sa August 28. Code: ANNIV200");
+    // The unsubscribe footer is appended even over a custom template.
+    expect(textBody).toContain("Unsubscribe: https://app.flowercart.test/public/reminder-unsubscribe?token=");
+  });
+
+  it("conversion sweep stamps a SENT row once the customer orders again", async () => {
+    seedReminder({
+      touch: "7d",
+      status: "SENT",
+      sentAt: new Date("2026-08-18T21:00:00Z"), // >20h old, within lookback
+      occasionDate: new Date("2026-08-25T00:00:00.000Z"),
+    });
+    const { admin } = makeAdmin({ reorderHit: true });
+    const summary = await runReminderScan({ admin, shop: SHOP, now: NOW });
+
+    expect(summary.converted).toBe(1);
+    const row = fake.state.reminders[0];
+    expect(row.convertedAt).not.toBeNull();
+    expect(row.convertedOrderId).toBe("gid://shopify/Order/9");
+
+    // Second run: already stamped — no re-check, no double count.
+    const second = await runReminderScan({ admin, shop: SHOP, now: NOW });
+    expect(second.converted).toBe(0);
+  });
+
+  it("conversion sweep skips rows sent less than ~20h ago", async () => {
+    seedReminder({
+      touch: "7d",
+      status: "SENT",
+      sentAt: new Date("2026-08-21T00:00:00Z"), // 2h before NOW
+      occasionDate: new Date("2026-08-25T00:00:00.000Z"),
+    });
+    const { admin, calls } = makeAdmin({ reorderHit: true });
+    const summary = await runReminderScan({ admin, shop: SHOP, now: NOW });
+    expect(summary.converted).toBe(0);
+    expect(calls.some((c) => c.query.includes("OccasionReminderReorderCheck"))).toBe(false);
+  });
+
   it("holds all sends when the unsubscribe secret is missing", async () => {
     vi.stubEnv("REMINDER_UNSUBSCRIBE_SECRET", "");
     seedReminder();
@@ -647,6 +724,7 @@ describe("read-only guard", () => {
       "app/services/occasion-reminders.server.ts",
       "app/services/occasion-detection.server.ts",
       "app/services/reminder-copy.server.ts",
+      "app/lib/reminder-template.ts",
       "app/routes/internal.reminder-scan.ts",
       "app/routes/public.reminder-unsubscribe.ts",
       "app/routes/app.reminders.tsx",

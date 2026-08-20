@@ -142,6 +142,11 @@ model OccasionReminder {
   priorYearsSent     Int       @default(0)
   suggestedAt        DateTime  @default(now())
   sentAt             DateTime?
+  // Conversion attribution (2026-08-21 addendum): stamped when the customer
+  // places a (non-cancelled) order after this reminder was sent — via the
+  // nightly sweep or the 3d re-order skip. Read-only orders search only.
+  convertedAt        DateTime?
+  convertedOrderId   String?
   updatedAt          DateTime  @updatedAt
 
   @@unique([shop, shopifyOrderId, occasionYear, touch])
@@ -170,6 +175,15 @@ model ReminderSuppression {
 model ReminderConfig {
   shop      String   @id
   enabled   Boolean  @default(false)
+  // Merchant-editable email templates (2026-08-21 addendum). Null = use the
+  // built-in defaults in reminder-copy.server.ts. Token syntax: {name},
+  // {recipient}, {occasion}, {date}, {weekday}, {past_date}, {product},
+  // {cutoff}, {discount_code}, {discount_label}, {store_url}. The unsubscribe
+  // footer is ALWAYS server-appended after rendering — edits cannot strip it.
+  subject7d String?
+  body7d    String?
+  subject3d String?
+  body3d    String?
   updatedAt DateTime @updatedAt
 }
 
