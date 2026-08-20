@@ -24,11 +24,14 @@ import {
   Checkbox,
   Divider,
   InlineStack,
+  Icon,
   Layout,
   Page,
   Text,
   TextField,
+  Tooltip,
 } from "@shopify/polaris";
+import { InfoIcon } from "@shopify/polaris-icons";
 import { TitleBar } from "@shopify/app-bridge-react";
 import type { OccasionReminder } from "@prisma/client";
 import { authenticate } from "../shopify.server";
@@ -133,7 +136,6 @@ export const loader = async ({ request }: { request: Request }) => {
     emailConfigured: Boolean(
       process.env.EMAIL_SMTP_USER?.trim() && process.env.EMAIL_SMTP_PASSWORD?.trim(),
     ),
-    unsubscribeConfigured: Boolean(process.env.REMINDER_UNSUBSCRIBE_SECRET?.trim()),
     suppressionCount,
     discountCode: REMINDER_DISCOUNT_CODE,
     discountLabel: REMINDER_DISCOUNT_LABEL,
@@ -192,7 +194,7 @@ export const action = async ({ request }: { request: Request }) => {
         const raw = String(form.get(key) ?? "").trim();
         if (!raw) return null;
         if (raw.length > max) {
-          return { error: `${key}: lampas sa ${max} characters (${raw.length}).` };
+          return { error: `${key}: must be ${max} characters or fewer (currently ${raw.length}).` };
         }
         return raw;
       };
@@ -218,23 +220,23 @@ export const action = async ({ request }: { request: Request }) => {
 
     if (op === "suppress") {
       const reminderId = String(form.get("reminderId") ?? "");
-      if (!reminderId) return { ok: false, op, error: "Walang reminder id." };
+      if (!reminderId) return { ok: false, op, error: "Missing reminder id." };
       const row = await prisma.occasionReminder.findUnique({ where: { id: reminderId } });
       if (!row || row.shop !== shop) {
-        return { ok: false, op, error: "Hindi nahanap ang reminder." };
+        return { ok: false, op, error: "Reminder not found." };
       }
       if (!row.customerEmail) {
-        return { ok: false, op, error: "Walang email ang reminder na ito." };
+        return { ok: false, op, error: "This reminder has no email address." };
       }
       await recordSuppression(shop, row.customerEmail, "all", "merchant");
       return { ok: true, op };
     }
 
-    return { ok: false, op, error: "Hindi kilalang action." };
+    return { ok: false, op, error: "Unknown action." };
   } catch (error) {
     // ADR-11: never bubble a raw 5xx through the embedded fetcher.
     console.error("[reminders] action failed:", error);
-    return { ok: false, op, error: "Nag-error — subukan ulit." };
+    return { ok: false, op, error: "Something went wrong. Try again." };
   }
 };
 
@@ -251,7 +253,7 @@ function statusBadge(status: string): { tone: "success" | "attention" | "critica
     case "FAILED":
       return { tone: "critical", label: "Failed" };
     case "SKIPPED_REORDERED":
-      return { tone: "info", label: "Skipped — umorder na" };
+      return { tone: "info", label: "Skipped (reordered)" };
     case "SUPPRESSED":
       return { tone: undefined, label: "Suppressed" };
     default:
@@ -259,20 +261,31 @@ function statusBadge(status: string): { tone: "success" | "attention" | "critica
   }
 }
 
+// Label-above-value, matching the Orders Operations KPI cards.
 function StatBlock({ label, value }: { label: string; value: string }) {
   return (
-    <Box minWidth="110px">
+    <Box minWidth="120px">
       <BlockStack gap="050">
-        <Text as="p" variant="headingLg">{value}</Text>
         <Text as="p" tone="subdued" variant="bodySm">{label}</Text>
+        <Text as="p" variant="headingLg">{value}</Text>
       </BlockStack>
     </Box>
   );
 }
 
+// Long explanations live in hover tooltips (merchant request 2026-08-21:
+// one-glance scannable page; paragraphs live behind Polaris info icons).
+function InfoTip({ content }: { content: string }) {
+  return (
+    <Tooltip content={content} width="wide">
+      <Icon source={InfoIcon} tone="subdued" accessibilityLabel="More information" />
+    </Tooltip>
+  );
+}
+
 function TemplateEditor({
   title,
-  help,
+  tooltip,
   subject,
   body,
   onSubject,
@@ -280,7 +293,7 @@ function TemplateEditor({
   disabled,
 }: {
   title: string;
-  help: string;
+  tooltip: string;
   subject: string;
   body: string;
   onSubject: (v: string) => void;
@@ -291,8 +304,10 @@ function TemplateEditor({
   const previewBody = renderReminderTemplate(body, SAMPLE_TEMPLATE_VARS);
   return (
     <BlockStack gap="300">
-      <Text as="h3" variant="headingSm">{title}</Text>
-      <Text as="p" tone="subdued" variant="bodySm">{help}</Text>
+      <InlineStack gap="150" blockAlign="center">
+        <Text as="h3" variant="headingSm">{title}</Text>
+        <InfoTip content={tooltip} />
+      </InlineStack>
       <TextField
         label="Subject"
         value={subject}
@@ -309,12 +324,12 @@ function TemplateEditor({
         multiline={8}
         disabled={disabled}
         maxLength={TEMPLATE_BODY_MAX}
-        helpText="Awtomatikong idinadagdag ang unsubscribe footer sa dulo — hindi ito pwedeng matanggal."
+        helpText="Unsubscribe footer is added automatically."
       />
       <Box background="bg-surface-secondary" padding="300" borderRadius="200">
         <BlockStack gap="100">
           <Text as="p" variant="bodySm" fontWeight="semibold">
-            Preview (sample data: si Juan → kay Maria, anniversary, Aug 25)
+            Preview · sample data
           </Text>
           <Text as="p" variant="bodySm" fontWeight="medium">{previewSubject}</Text>
           <div style={{ whiteSpace: "pre-wrap", fontSize: "12px", lineHeight: "1.5" }}>
@@ -346,8 +361,8 @@ export default function RemindersPage() {
 
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data?.ok) {
-      if (fetcher.data.op === "saveConfig") setSavedBanner("Na-save na. Susundin ito ng susunod na nightly run.");
-      if (fetcher.data.op === "saveTemplates") setSavedBanner("Na-save ang templates. Gagamitin na sa susunod na sends.");
+      if (fetcher.data.op === "saveConfig") setSavedBanner("Saved. The next nightly run will use this.");
+      if (fetcher.data.op === "saveTemplates") setSavedBanner("Templates saved. They apply starting with the next send.");
     }
   }, [fetcher.state, fetcher.data]);
 
@@ -400,33 +415,25 @@ export default function RemindersPage() {
             {actionError ? <Banner tone="critical">{actionError}</Banner> : null}
             {!data.emailConfigured ? (
               <Banner tone="warning">
-                Hindi pa naka-configure ang SMTP email — walang reminder na
-                maipapadala hangga&apos;t hindi ito naaayos.
-              </Banner>
-            ) : null}
-            {!data.unsubscribeConfigured ? (
-              <Banner tone="warning">
-                Walang REMINDER_UNSUBSCRIBE_SECRET — naka-hold ang sends dahil
-                bawal magpadala nang walang gumaganang unsubscribe link.
+                Email isn&apos;t configured. Reminders can&apos;t send.
               </Banner>
             ) : null}
             {!enabled ? (
               <Banner tone="info">
-                Nakapatay ang reminders — walang email na ipapadala. Buksan ang
-                toggle sa baba kapag handa ka na.
+                Reminders are off. No emails will be sent.
               </Banner>
             ) : null}
 
             <Card>
               <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">Performance</Text>
+                <InlineStack gap="150" blockAlign="center">
+                  <Text as="h2" variant="headingMd">Performance</Text>
+                  <InfoTip content="Converted = occasions where the customer ordered again after a reminder (checked nightly, up to 35 days after sending). Converted orders are also marked in each order's Delivery timeline on Orders Operations. ANNIV200 uses = store-wide redemptions of the code." />
+                </InlineStack>
                 <InlineStack gap="600" wrap>
-                  <StatBlock label="7-day emails sent" value={String(data.stats.sent7d)} />
-                  <StatBlock label="3-day emails sent" value={String(data.stats.sent3d)} />
-                  <StatBlock
-                    label="Converted (umorder ulit)"
-                    value={String(data.stats.convertedOccasions)}
-                  />
+                  <StatBlock label="Sent · 7-day" value={String(data.stats.sent7d)} />
+                  <StatBlock label="Sent · 3-day" value={String(data.stats.sent3d)} />
+                  <StatBlock label="Converted" value={String(data.stats.convertedOccasions)} />
                   <StatBlock
                     label="Conversion rate"
                     value={
@@ -434,7 +441,7 @@ export default function RemindersPage() {
                     }
                   />
                   <StatBlock
-                    label={`${data.discountCode} redemptions`}
+                    label={`${data.discountCode} uses`}
                     value={
                       data.stats.discountUsageCount === null
                         ? "—"
@@ -444,36 +451,27 @@ export default function RemindersPage() {
                   <StatBlock label="Unsubscribed" value={String(data.suppressionCount)} />
                   <StatBlock label="Failed" value={String(data.stats.failedCount)} />
                 </InlineStack>
-                <Text as="p" tone="subdued" variant="bodySm">
-                  Ang &quot;Converted&quot; ay bawat okasyon kung saan umorder ulit ang customer
-                  pagkatapos ma-email (chine-check gabi-gabi, hanggang 35 araw pagkatapos
-                  ipadala). Ang {data.discountCode} count ay kabuuang redemptions ng code sa
-                  buong store.
-                </Text>
               </BlockStack>
             </Card>
 
             <Card>
               <BlockStack gap="400">
                 <InlineStack align="space-between" blockAlign="center">
-                  <Text as="h2" variant="headingMd">
-                    Occasion reminder emails
-                  </Text>
+                  <InlineStack gap="150" blockAlign="center">
+                    <Text as="h2" variant="headingMd">
+                      Occasion reminder emails
+                    </Text>
+                    <InfoTip
+                      content={`Emails go out 7 and 3 days before last year's occasion comes around again. The 3-day email carries ${data.discountCode} (${data.discountLabel}) and is skipped when the customer has already reordered. Repeats yearly until the customer unsubscribes.`}
+                    />
+                  </InlineStack>
                   <Badge tone={enabled ? "success" : "critical"}>
                     {enabled ? "Active" : "Off"}
                   </Badge>
                 </InlineStack>
-                <Text as="p" tone="subdued">
-                  Awtomatikong nag-e-email sa mga customer 7 at 3 araw bago
-                  maulit ang okasyon ng order nila noong nakaraang taon. Ang
-                  3-day email ay may {data.discountLabel} code (
-                  {data.discountCode}) at nila-laktawan kapag umorder na ulit
-                  ang customer. Umuulit ito taon-taon hangga&apos;t hindi
-                  nag-u-unsubscribe ang customer.
-                </Text>
                 <Checkbox
-                  label="I-enable ang nightly reminder sends"
-                  helpText="Kill switch ito — kapag naka-off, tumatakbo pa rin ang scan schedule pero walang email na aalis."
+                  label="Enable nightly reminder sends"
+                  helpText="When off, no emails are sent."
                   checked={enabled}
                   onChange={setEnabled}
                 />
@@ -487,15 +485,13 @@ export default function RemindersPage() {
 
             <Card>
               <BlockStack gap="400">
-                <Text as="h2" variant="headingMd">Email templates</Text>
-                <Text as="p" tone="subdued" variant="bodySm">
-                  I-edit ang subject at body ng dalawang email — gagamitin agad
-                  sa susunod na sends, walang deploy na kailangan. Mga variable
-                  na pwedeng gamitin: {tokenLegend}
-                </Text>
+                <InlineStack gap="150" blockAlign="center">
+                  <Text as="h2" variant="headingMd">Email templates</Text>
+                  <InfoTip content={`Changes apply from the next send, no deploy needed. Variables: ${tokenLegend}`} />
+                </InlineStack>
                 <TemplateEditor
-                  title="1st email — 7 araw bago ang okasyon"
-                  help='Kapag kilala ang recipient AT ang okasyon, awtomatikong nagiging mas personal ang built-in subject ("Maria&apos;s anniversary is coming up"). Kapag ni-customize mo ang subject dito, ang tekstong ito na ang laging gagamitin.'
+                  title="1st email · 7 days before"
+                  tooltip='When the recipient and occasion are known, the built-in subject becomes personal ("Maria&apos;s anniversary is coming up"). A custom subject is always used as written.'
                   subject={subject7d}
                   body={body7d}
                   onSubject={setSubject7d}
@@ -504,8 +500,8 @@ export default function RemindersPage() {
                 />
                 <Divider />
                 <TemplateEditor
-                  title="2nd email — 3 araw bago (may discount, ni-la-laktawan kapag umorder na)"
-                  help={`Dito nakalagay ang ${data.discountCode} (${data.discountLabel}). Siguraduhing aktibo ang code sa Discounts bago ito ipangako.`}
+                  title="2nd email · 3 days before, with discount"
+                  tooltip={`Carries ${data.discountCode} (${data.discountLabel}); skipped when the customer has already reordered. Keep the code active in Discounts.`}
                   subject={subject3d}
                   body={body3d}
                   onSubject={setSubject3d}
@@ -514,7 +510,7 @@ export default function RemindersPage() {
                 />
                 <InlineStack align="end" gap="200">
                   <Button onClick={handleResetTemplates} disabled={saving}>
-                    Balik sa built-in default
+                    Reset to built-in default
                   </Button>
                   <Button variant="primary" onClick={handleSaveTemplates} loading={saving}>
                     Save templates
@@ -530,13 +526,13 @@ export default function RemindersPage() {
                     Activity
                   </Text>
                   <Text as="span" tone="subdued" variant="bodySm">
-                    {data.suppressionCount} naka-unsubscribe
+                    {data.suppressionCount} unsubscribed
                   </Text>
                 </InlineStack>
                 {data.reminders.length === 0 ? (
                   <Text as="p" tone="subdued">
-                    Wala pang reminder — mapupuno ito pagkatapos ng unang
-                    nightly scan.
+                    No reminders yet. This fills up after the first nightly
+                    scan.
                   </Text>
                 ) : (
                   <BlockStack gap="200">
@@ -563,8 +559,8 @@ export default function RemindersPage() {
                               </Text>
                             </InlineStack>
                             <Text as="span" tone="subdued" variant="bodySm">
-                              {row.customerFirstName ?? "—"} · {row.customerEmail ?? "walang email"}
-                              {row.recipientName ? ` · para kay ${row.recipientName}` : ""}
+                              {row.customerFirstName ?? "—"} · {row.customerEmail ?? "no email"}
+                              {row.recipientName ? ` · for ${row.recipientName}` : ""}
                               {" · Order "}
                               {row.orderIdTail}
                             </Text>

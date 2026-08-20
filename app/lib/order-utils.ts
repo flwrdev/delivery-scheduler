@@ -99,6 +99,13 @@ export interface Order {
   lineItems: { edges: { node: LineItem }[] } | null;
   fulfillments: { createdAt: string; deliveredAt: string | null }[] | null;
   emailLog: { sentAt: string; to: string }[];
+  // Occasion-reminder conversions (ADR-19): reminder rows whose convertedOrderId
+  // is THIS order — i.e. this order exists because a reminder email worked.
+  reminderConversions?: {
+    touch: string;
+    occasionType: string;
+    sentAt: string | null;
+  }[];
 }
 
 export type BadgeTone =
@@ -654,4 +661,10 @@ export function getEmailSentEvents(
   order: Order,
 ): { sentAt: string; to: string }[] {
   return order.emailLog || [];
+}
+
+export function getReminderConversionEvents(
+  order: Order,
+): { touch: string; occasionType: string; sentAt: string | null }[] {
+  return order.reminderConversions || [];
 }

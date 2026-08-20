@@ -11,6 +11,7 @@ import {
   getFulfilledAt,
   getDeliveredAt,
   getEmailSentEvents,
+  getReminderConversionEvents,
   formatTimelineDelivery,
   formatTimelineTime,
   formatTimelineStatus,
@@ -51,7 +52,13 @@ type ActivityEvent =
   | { kind: "reschedule"; timestamp: string; event: RescheduleTimelineEvent }
   | { kind: "fulfilled"; timestamp: string }
   | { kind: "delivered"; timestamp: string }
-  | { kind: "email"; timestamp: string; to: string };
+  | { kind: "email"; timestamp: string; to: string }
+  | {
+      kind: "reminderConversion";
+      timestamp: string;
+      touch: string;
+      occasionType: string;
+    };
 
 function timeValue(timestamp: string): number {
   const parsed = Date.parse(timestamp);
@@ -73,6 +80,17 @@ function buildActivityEvents(order: Order): ActivityEvent[] {
 
   for (const { sentAt, to } of getEmailSentEvents(order)) {
     events.push({ kind: "email", timestamp: sentAt, to });
+  }
+
+  // This order exists because an occasion reminder email worked (ADR-19) —
+  // timestamped with when that reminder was sent.
+  for (const { touch, occasionType, sentAt } of getReminderConversionEvents(order)) {
+    events.push({
+      kind: "reminderConversion",
+      timestamp: sentAt ?? "",
+      touch,
+      occasionType,
+    });
   }
 
   return events.sort(
@@ -199,6 +217,30 @@ export function DeliveryTimeline({ order }: { order: Order }) {
                 <li className="odp-timeline-item" key={`delivered-${item.timestamp}`}>
                   <TimelineRow time={formatTimelineTime(item.timestamp)}>
                     <Text as="span">Delivered</Text>
+                  </TimelineRow>
+                </li>
+              );
+            }
+            if (item.kind === "reminderConversion") {
+              return (
+                <li
+                  className="odp-timeline-item"
+                  key={`reminder-conversion-${item.touch}-${item.timestamp}`}
+                >
+                  <TimelineRow time={formatTimelineTime(item.timestamp)}>
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      Occasion reminder{" "}
+                      <Badge size="small" tone="success">
+                        Converted
+                      </Badge>
+                    </Text>
+                    <Text as="span">
+                      Repeat order from the {item.touch === "7d" ? "7-day" : "3-day"}{" "}
+                      reminder email
+                      {item.occasionType !== "generic"
+                        ? ` (${item.occasionType})`
+                        : ""}
+                    </Text>
                   </TimelineRow>
                 </li>
               );
