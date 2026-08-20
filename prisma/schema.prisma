@@ -115,6 +115,64 @@ model EmailSendLog {
   @@index([shop, shopifyOrderId])
 }
 
+// Occasion reminder emails (auto-send retention feature): app-side reminder
+// rows — never Shopify delivery state, so none of these three models join the
+// order write-path contract in docs/api.md §2. Same side-table posture as
+// LalamoveTracking / EmailSendLog above. Rows recur yearly via roll-forward
+// (a SENT 7d row seeds next year's occasionYear rows), so the Shopify order
+// search only ever looks one year back.
+model OccasionReminder {
+  id                 String    @id @default(cuid())
+  shop               String
+  shopifyOrderId     String
+  occasionDate       DateTime  @db.Date // the UPCOMING occurrence being reminded about
+  occasionYear       Int
+  occasionType       String // "anniversary" | "birthday" | "other" | "generic"
+  touch              String // "7d" | "3d" — which reminder in the pair this is
+  detectSource       String // "card_message" | "order_note" | "none"
+  customerEmail      String?
+  customerFirstName  String?
+  recipientHint      String? // parsed greeting name ("Maria"); null when unclear
+  cardMessageExcerpt String? // <=140 chars; live reader = /app/reminders activity card
+  productTitles      String? // for the "same bouquet?" copy
+  status             String    @default("PENDING") // PENDING | SENT | SUPPRESSED | FAILED | SKIPPED_REORDERED
+  attemptCount       Int       @default(0)
+  // Consecutive prior years this occasion was reminded (0 = first year;
+  // +1 per roll-forward) — feeds the year-aware copy line.
+  priorYearsSent     Int       @default(0)
+  suggestedAt        DateTime  @default(now())
+  sentAt             DateTime?
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([shop, shopifyOrderId, occasionYear, touch])
+  @@index([shop, status, occasionDate])
+}
+
+// Unsubscribe / do-not-remind list. scope "all" silences every reminder for
+// the email; scope "order:<shopifyOrderId>" silences just that occasion chain.
+// Checked at scan AND at send time, and it cuts the yearly roll-forward.
+model ReminderSuppression {
+  id        String   @id @default(cuid())
+  shop      String
+  email     String // stored lowercased
+  scope     String   @default("all") // "all" | "order:<shopifyOrderId>"
+  source    String   @default("unsubscribe_link") // | "merchant"
+  createdAt DateTime @default(now())
+
+  @@unique([shop, email, scope])
+  @@index([shop, email])
+}
+
+// Kill switch for the nightly reminder scan — enabled=false (the default)
+// means the scan short-circuits and no email ever leaves, even with the
+// Cloud Scheduler job live. Touch offsets (7d/3d) are code constants, not
+// config, per merchant decision 2026-08-21.
+model ReminderConfig {
+  shop      String   @id
+  enabled   Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+}
+
 model DeliveryScheduleConfig {
   id                String   @id @default(cuid())
   shop              String   @unique

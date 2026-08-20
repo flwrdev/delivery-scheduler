@@ -166,6 +166,13 @@ the order has no customer email) → `sendCustomerEmail(...)` → typed response
 
 ## 7. Out of scope (future enhancements, in likely order)
 
+> **2026-08-21 update:** the "delivery reminder" idea in #1 shipped in a
+> bigger form as the **occasion reminder emails** feature (ADR-19) — an
+> automated second caller of `sendCustomerEmail` with its own template module
+> ([`reminder-copy.server.ts`](../app/services/reminder-copy.server.ts)),
+> suppression/unsubscribe layer, and `EmailSendLog` reuse. See
+> [api.md § Occasion reminder emails](./api.md) for the route/auth detail.
+
 1. **Template presets** (reschedule confirmation / delay notice / delivery
    reminder) prefilled from order data — natural once the modal exists.
 2. **Communications page** — the merchant's planned dedicated page (decongest

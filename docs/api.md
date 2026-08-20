@@ -98,6 +98,20 @@ Matching/write logic: [lalamove-tracking.server.ts](../app/services/lalamove-tra
 
 Env: `LALAMOVE_API_KEY`, `LALAMOVE_API_SECRET`, `LALAMOVE_MARKET` (`PH`), `LALAMOVE_ENV` (`sandbox`/`production`), `LALAMOVE_SHOP` (single-shop app, same convention as `MESSENGER_SHOP`), `LALAMOVE_POLL_SECRET`. All required for the listener to do anything; a missing key degrades to a logged no-op, never a 5xx.
 
+## Occasion reminder emails (ADR-19 — nightly auto-send, zero order writes)
+
+Nightly scan+send for the occasion reminder feature ([occasion-reminders.server.ts](../app/services/occasion-reminders.server.ts)): finds orders whose delivery date recurs in 7 or 3 days (last-year orders via a `created_at:`-range orders search — deliberately NOT `metafields.custom.date:`, which the orders query silently ignores; older years roll forward from the app's own `OccasionReminder` rows) and auto-sends the merchant's reminder template through `sendCustomerEmail`. The 3-day email carries the `ANNIV200` code and is skipped when the customer has re-ordered since the 7-day send (an `email:`-scoped orders search). Sends are HELD whenever `REMINDER_UNSUBSCRIBE_SECRET`/`SHOPIFY_APP_URL` is missing — never an email without a working opt-out link.
+
+| Path | File | Auth |
+| --- | --- | --- |
+| `POST /internal/reminder-scan` | [internal.reminder-scan.ts](../app/routes/internal.reminder-scan.ts) | Shared-secret header (`x-reminder-scan-secret` vs `REMINDER_SCAN_SECRET`), timing-safe compare — same pattern as the Lalamove poller. Triggered by the Google Cloud Scheduler job `delivery-scheduler-reminder-scan` (daily, 21:00 UTC = 05:00 Asia/Manila). |
+| `GET /public/reminder-unsubscribe` | [public.reminder-unsubscribe.ts](../app/routes/public.reminder-unsubscribe.ts) | Signed HMAC token in `?token=` (keyed with `REMINDER_UNSUBSCRIBE_SECRET`) — clicked from the email footer; no session. Invalid tokens get the same generic 200 page (no enumeration oracle). |
+| `/app/reminders` | [app.reminders.tsx](../app/routes/app.reminders.tsx) | `authenticate.admin` (embedded page) — kill-switch toggle + activity feed + merchant Suppress. |
+
+**Everything here is read-only against Shopify** — orders searches only, no mutations; the writes are Postgres rows (`OccasionReminder`, `ReminderSuppression`, `ReminderConfig`, plus the same `EmailSendLog` audit row the `sendEmail` op writes) — so this feature sits OUTSIDE the §2 write-path contract, same posture as `sendEmail`. Machine-enforced: the read-only grep guard in [test/occasion-reminders.test.ts](../test/occasion-reminders.test.ts) fails the suite if any reminder source ever grows a mutation string. Email copy lives in [reminder-copy.server.ts](../app/services/reminder-copy.server.ts) (the merchant's own template — see [brand-voice.md](./brand-voice.md)); occasion keyword detection in [occasion-detection.server.ts](../app/services/occasion-detection.server.ts).
+
+Env: `REMINDER_SCAN_SECRET`, `REMINDER_SHOP` (single-shop convention), `REMINDER_UNSUBSCRIBE_SECRET`; reuses `EMAIL_SMTP_*`/`EMAIL_FROM_NAME` and `SHOPIFY_APP_URL`. The `ReminderConfig.enabled` kill switch defaults to OFF — deploying + scheduling alone sends nothing until the merchant flips it on at `/app/reminders`.
+
 ## Meta Messenger webhook (FlowerCart Messenger agent)
 
 | Path | File | Auth |
