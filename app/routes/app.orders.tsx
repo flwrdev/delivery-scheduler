@@ -292,6 +292,8 @@ type LoaderData = {
   timeWindowParam: string;
   tabParam: string;
   sortParam: string;
+  /** Google Maps key for the Edit-details address search; "" hides the field. */
+  mapsApiKey: string;
 };
 
 export const loader = async ({
@@ -450,6 +452,7 @@ export const loader = async ({
       timeWindowParam,
       tabParam,
       sortParam,
+      mapsApiKey: process.env.GOOGLE_MAPS_API_KEY ?? "",
     } satisfies LoaderData,
     { headers: { "Cache-Control": "no-store" } },
   );
@@ -2198,6 +2201,7 @@ function Extension() {
         open={activeModal === "editDetails" && selectedOrder !== null}
         onClose={closeModal}
         order={selectedOrder}
+        mapsApiKey={loaderData.mapsApiKey}
       />
       <AddTagsModal
         open={activeModal === "addTags"}

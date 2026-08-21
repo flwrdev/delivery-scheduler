@@ -20,10 +20,11 @@ import type { AdminGraphQLClient } from "./order-delivery-metafields.server";
 //     "clear this field" must be an explicit "", never an omitted key —
 //     omitting it is a silent no-op that still reports success.
 //   · `zip: ""` is REJECTED for PH addresses ("Enter a postal code") and the
-//     rejection kills the WHOLE mutation. The ZIP is therefore NOT editable
-//     here at all — it is carried forward like the recipient name. It cannot
-//     be cleared, it is almost never the thing that's wrong, and having it in
-//     the form only slowed the merchant down.
+//     rejection kills the WHOLE mutation. The ZIP therefore has no manual form
+//     field and can never be cleared. It IS conditionally writable since the
+//     Places address search landed: when the picked address carries a postal
+//     code the modal submits it, a blank submission is treated as absent, and
+//     absent means the stored ZIP is carried forward like the recipient name.
 //   · The read field is `countryCodeV2`; the write field is `countryCode`.
 //
 // The carry-forward of the non-editable fields (firstName, lastName, company,
@@ -38,6 +39,7 @@ const SHOPIFY_ORDER_GID_RE = /^gid:\/\/shopify\/Order\/\d+$/;
 export const MAX_ADDRESS_LINE_LENGTH = 255;
 export const MAX_CITY_LENGTH = 128;
 export const MAX_PHONE_LENGTH = 32;
+export const MAX_ZIP_LENGTH = 16;
 
 /**
  * The current address as READ from Shopify. Note `countryCodeV2` — the read
@@ -60,12 +62,17 @@ export interface OrderShippingAddressSnapshot {
   phone?: string | null;
 }
 
-/** The four fields the merchant may actually change. */
+/**
+ * The fields the merchant may actually change. `zip` is special: it has no
+ * manual input — it only arrives when the Places address search supplied a
+ * postal code — and it is either absent or non-empty, never "".
+ */
 export interface OrderContactPatch {
   address1: string;
   address2: string;
   city: string;
   phone: string;
+  zip?: string;
 }
 
 /** Response shape of the `editDetails` op — read by the EditDetailsModal fetcher. */
@@ -166,6 +173,12 @@ export function validateOrderContactPatch(
       message: `Phone must be ${MAX_PHONE_LENGTH} characters or fewer.`,
     };
   }
+  if (trimmed(patch.zip).length > MAX_ZIP_LENGTH) {
+    return {
+      ok: false,
+      message: `ZIP must be ${MAX_ZIP_LENGTH} characters or fewer.`,
+    };
+  }
   return { ok: true };
 }
 
@@ -176,9 +189,10 @@ export function validateOrderContactPatch(
  * things (see the measured behaviour at the top of this file):
  *
  *   · Carry-forward fields — omitted when blank. They are never being cleared,
- *     and `countryCode` is an enum where "" is invalid. `zip` is one of these:
- *     it can't be cleared (Shopify rejects an empty PH postal code and fails
- *     the whole mutation), so it is re-sent as-is and never exposed to edit.
+ *     and `countryCode` is an enum where "" is invalid. `zip` is one of these
+ *     unless the patch carries a replacement from the address search: it can't
+ *     be cleared (Shopify rejects an empty PH postal code and fails the whole
+ *     mutation), so a blank patch zip means "keep the stored one".
  *   · Clearable editable fields (address2, phone) — ALWAYS sent, even empty,
  *     because "" is the only thing that actually clears them. Omitting a
  *     blank one is a silent no-op that still reports success.
@@ -207,7 +221,9 @@ export function buildNextShippingAddress(
   putIfPresent("provinceCode", current?.provinceCode);
   // Read side is countryCodeV2, write side is countryCode.
   putIfPresent("countryCode", current?.countryCodeV2);
-  putIfPresent("zip", current?.zip);
+  // The address search may supply a new ZIP; without one the stored ZIP is
+  // carried forward. Either way a blank zip is never sent.
+  putIfPresent("zip", trimmed(patch.zip) || current?.zip);
 
   // Editable.
   putIfPresent("address1", patch.address1);
@@ -223,11 +239,14 @@ export function hasContactChanges(
   current: OrderShippingAddressSnapshot | null,
   patch: OrderContactPatch,
 ): boolean {
+  const patchZip = trimmed(patch.zip);
   return (
     trimmed(current?.address1) !== trimmed(patch.address1) ||
     trimmed(current?.address2) !== trimmed(patch.address2) ||
     trimmed(current?.city) !== trimmed(patch.city) ||
-    trimmed(current?.phone) !== trimmed(patch.phone)
+    trimmed(current?.phone) !== trimmed(patch.phone) ||
+    // An absent/blank patch zip is "keep the stored one" — never a change.
+    (patchZip !== "" && patchZip !== trimmed(current?.zip))
   );
 }
 
@@ -262,6 +281,10 @@ export async function handleEditDetailsOp(
     city: String(fd.get("city") || ""),
     phone: String(fd.get("phone") || ""),
   };
+  // A blank/whitespace zip is treated as absent — it must never reach the
+  // mutation as "" (that fails the whole save for PH addresses).
+  const zipRaw = String(fd.get("zip") || "").trim();
+  if (zipRaw) patch.zip = zipRaw;
 
   const check = validateOrderContactPatch(patch);
   if (!check.ok) {
