@@ -75,3 +75,9 @@ name = "Reschedule Status"
   [order.metafields.app.reschedule_status.access]
   admin = "merchant_read_write"
 
+# Required once sidekick-eligible extensions exist (the delivery-sidekick-*
+# trio) — a release is rejected without it. Kept byte-identical to the same
+# block in shopify.app.toml so DEV and PROD describe the app the same way.
+[sidekick]
+extensions_summary = "Delivery Scheduler owns delivery dates, time slots, per-date capacity, blocked dates and reschedules. Data tools answer: an order's delivery date/slot/reschedule status, booked counts vs capacity per date, and the schedule config (cutoff, prep time, slots). Actions open the app where changes are made by hand: an order's delivery panel to reschedule it, or the scheduler on a date to edit capacity/blocked slots. All tools are read-only; actions only navigate."
+
