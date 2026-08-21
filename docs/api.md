@@ -267,7 +267,9 @@ E-5 revisit).
 The panel's Actions menu → "Edit details" posts the `editDetails` op, handled by
 [`update-order-contact.server.ts`](../app/services/update-order-contact.server.ts).
 Single order, four editable fields: `address1`, `address2`, `city`, and the
-**receiver** phone (`shippingAddress.phone`). One `orderUpdate(input: {shippingAddress})`
+**receiver** phone (`shippingAddress.phone`) — plus an optional `zip` that only the
+modal's Google Places address search can supply (2026-08-21; no manual ZIP input
+exists). One `orderUpdate(input: {shippingAddress})`
 call; requires `write_orders`, which the app already holds — **no scope change, no
 reinstall**. Design facts (ADR-15):
 
@@ -282,10 +284,11 @@ reinstall**. Design facts (ADR-15):
     keys, empty or not.
   - **`zip: ""` is rejected** ("Enter a postal code" — PH requires one) and the
     rejection **fails the whole mutation**, taking any street/city edit in the same
-    submit down with it. The ZIP is therefore **not editable at all** — it is a
-    carry-forward field like the recipient name, shown read-only in the modal's
-    "Kept as is" line. It can't be cleared, it is rarely the field that's wrong, and
-    a form row for it only cost the merchant time.
+    submit down with it. The ZIP therefore has **no manual form row** — it shows in
+    the modal's "Kept as is" line. Since 2026-08-21 it is *conditionally* writable:
+    when the modal's Places address search returns a postal code, the modal submits
+    it and `buildNextShippingAddress()` uses it; a blank/absent `zip` always means
+    "carry the stored one forward". A blank zip can never reach the mutation.
   - The carry-forward set is `firstName`/`lastName`/`company`/`provinceCode`/
     `countryCode`/`zip`. Given merge semantics it is belt-and-braces rather than
     load-bearing, and it is kept on purpose — the *documented* contract is overwrite,
@@ -315,6 +318,16 @@ reinstall**. Design facts (ADR-15):
   (ADR-11).
 - Accepted limits: no concurrency guard (last write wins, same posture as REC-5 on the
   reschedule path), and no delivery-fee re-pricing on a city change.
+- **Address search (2026-08-21)**: the modal's "Search address" field is Google
+  Places (New) via the Maps JS SDK, wrapped in
+  [app/lib/google-places.client.ts](../app/lib/google-places.client.ts) — PH-restricted,
+  Metro-Manila-biased, session-token billing, `addressComponents` the only fetched
+  field. Entirely client-side sugar: it just fills the same form fields (`address1`,
+  `address2` when a unit is known, `city`, and the optional `zip` above), so the write
+  path and auth are unchanged. The key rides the orders loader as
+  `mapsApiKey` (`GOOGLE_MAPS_API_KEY`, browser-exposed by design — restrict by HTTP
+  referrer); an empty key or a failed SDK load hides the field and the manual form
+  keeps working.
 
 None of these generic mutations are part of the delivery sync contract — none write `custom.date`, `custom.time_slot`, `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date`, `$app.reschedule_status`, `$app.reschedule_requested_at`, `delivery.reschedule_history`, or the `Delivery Date` / `Delivery Time` customAttributes. (The former bouquet-photo pipeline — `stagedUploadsCreate` + `fileCreate` + a `custom.bouquet_photo` `orderUpdate` — was **removed 2026-07-12**; the feature was descoped from Orders Ops V2, see audit §F.)
 

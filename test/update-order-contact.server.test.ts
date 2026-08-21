@@ -68,6 +68,14 @@ describe("validateOrderContactPatch", () => {
       false,
     );
   });
+
+  it("rejects an over-long ZIP but allows an absent one", () => {
+    expect(validateOrderContactPatch(patch({ zip: "x".repeat(17) })).ok).toBe(
+      false,
+    );
+    expect(validateOrderContactPatch(patch({ zip: "1226" })).ok).toBe(true);
+    expect(validateOrderContactPatch(patch()).ok).toBe(true);
+  });
 });
 
 describe("buildNextShippingAddress", () => {
@@ -81,16 +89,37 @@ describe("buildNextShippingAddress", () => {
     expect(next.zip).toBe("1630");
   });
 
-  // The ZIP is not on the form at all: Shopify rejects an empty PH postal code
-  // and fails the whole mutation with it, so it can only ever be carried
-  // through from the stored address.
-  it("takes the ZIP from the stored address, never from the form", () => {
+  // The ZIP has no manual form field. It reaches the patch only when the
+  // Places address search supplied a postal code; absent/blank means the
+  // stored ZIP is carried forward, because `zip: ""` fails the whole PH
+  // mutation.
+  it("carries the stored ZIP forward when the patch has none", () => {
     const next = buildNextShippingAddress(CURRENT, patch());
     expect(next.zip).toBe(CURRENT.zip);
-    // A form value can't reach it — OrderContactPatch has no zip field, and
-    // an extra key on the object must not leak into the input either.
-    const smuggled = { ...patch(), zip: "9999" } as OrderContactPatch;
-    expect(buildNextShippingAddress(CURRENT, smuggled).zip).toBe("1630");
+  });
+
+  it("takes a ZIP the address search supplied", () => {
+    const next = buildNextShippingAddress(CURRENT, patch({ zip: "1226" }));
+    expect(next.zip).toBe("1226");
+  });
+
+  it("treats a blank patch ZIP as absent — never sends an empty zip", () => {
+    for (const zip of ["", "   "]) {
+      expect(buildNextShippingAddress(CURRENT, patch({ zip })).zip).toBe(
+        "1630",
+      );
+    }
+    const noStored: OrderShippingAddressSnapshot = { ...CURRENT, zip: null };
+    expect(
+      buildNextShippingAddress(noStored, patch({ zip: "" })),
+    ).not.toHaveProperty("zip");
+  });
+
+  it("writes a searched ZIP even when the stored address had none", () => {
+    const noStored: OrderShippingAddressSnapshot = { ...CURRENT, zip: null };
+    expect(buildNextShippingAddress(noStored, patch({ zip: "1226" })).zip).toBe(
+      "1226",
+    );
   });
 
   it("omits the ZIP when the stored address has none", () => {
@@ -242,8 +271,14 @@ describe("hasContactChanges", () => {
     ["address2", { address2: "Unit 4B" }],
     ["city", { city: "Quezon City" }],
     ["phone", { phone: "09171234567" }],
+    ["zip", { zip: "1226" }],
   ])("detects an edited %s", (_field, over) => {
     expect(hasContactChanges(CURRENT, patch(over))).toBe(true);
+  });
+
+  it("ignores a blank or unchanged patch ZIP", () => {
+    expect(hasContactChanges(CURRENT, patch({ zip: "" }))).toBe(false);
+    expect(hasContactChanges(CURRENT, patch({ zip: " 1630 " }))).toBe(false);
   });
 
   it("detects a cleared field", () => {
