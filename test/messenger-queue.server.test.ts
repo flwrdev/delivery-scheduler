@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   enqueueMessengerEchoTask,
   enqueueMessengerFollowUpTask,
+  enqueueSupportChatTask,
   MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE,
 } from "../app/services/messenger-queue.server";
 
@@ -217,6 +218,67 @@ describe("enqueueMessengerFollowUpTask (delayed abandoned-order reminder)", () =
       orderKey: "k",
       delaySeconds: 60,
     });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.notConfigured).toBe(true);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("enqueueSupportChatTask / resolveSupportChatWorkerUrl", () => {
+  const fetchMock = vi.fn();
+  const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    fetchMock.mockReset();
+    consoleErrorSpy.mockClear();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("derives the worker URL from MESSENGER_WORKER_URL by path-swapping when SUPPORT_CHAT_WORKER_URL is unset", async () => {
+    stubConfiguredEnv();
+    fetchMock.mockImplementation(async (url: string | URL) => {
+      if (String(url) === METADATA_TOKEN_URL) {
+        return jsonResponse({ access_token: "oauth-token" });
+      }
+      return jsonResponse({ name: `${QUEUE_PATH}/tasks/sc-1` });
+    });
+
+    const result = await enqueueSupportChatTask({ jobId: "job-1" });
+    expect(result.ok).toBe(true);
+
+    const [tasksUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(String(tasksUrl)).toContain(QUEUE_PATH);
+
+    const [, tasksInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const requestBody = JSON.parse(String(tasksInit.body)) as {
+      task: { httpRequest: { url: string } };
+    };
+    expect(requestBody.task.httpRequest.url).toBe("https://app.example.com/webhooks/support-chat/worker");
+  });
+
+  it("returns notConfigured (never the unswapped Messenger worker URL) when MESSENGER_WORKER_URL doesn't match the expected path", async () => {
+    vi.stubEnv("MESSENGER_TASKS_QUEUE_PATH", QUEUE_PATH);
+    vi.stubEnv("MESSENGER_WORKER_URL", "https://app.example.com/webhooks/some-other-worker");
+    vi.stubEnv("MESSENGER_WORKER_SECRET", WORKER_SECRET);
+
+    const result = await enqueueSupportChatTask({ jobId: "job-2" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.notConfigured).toBe(true);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+
+  it("returns notConfigured without any network call when env vars are missing", async () => {
+    const result = await enqueueSupportChatTask({ jobId: "job-3" });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.notConfigured).toBe(true);

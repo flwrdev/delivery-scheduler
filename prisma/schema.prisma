@@ -52,9 +52,29 @@ model MessengerThread {
   // carried on the draft order as both a custom attribute and a tag
   // (mo-key-<uuid>). Check-before-create searches drafts by that tag.
   conversationOrderKey String?
+  // SUPERSEDED (2026-08-21): the anti-guessing lockout moved to the
+  // channel-agnostic LookupAttempt model below, because this column pair is
+  // keyed by psid and the web channels (customer-account/storefront) never
+  // create a MessengerThread row. Left in place — dropping columns is
+  // destructive — but no longer read or written by order-lookup.server.ts.
+  lookupFailures    Int                @default(0)
+  lookupLockedAt    DateTime?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   messages          MessengerMessage[]
+}
+
+// Channel-agnostic order-lookup anti-guessing guard (2026-08-21 addendum —
+// see order-lookup.server.ts). Keyed by the resolved agent thread key (psid
+// on Messenger, customer GID or anonymous conversation id on the web
+// surfaces) so the lockout works the same regardless of which channel the
+// customer is guessing from, and does not depend on a MessengerThread row
+// existing for that key.
+model LookupAttempt {
+  key       String    @id
+  failures  Int       @default(0)
+  lockedAt  DateTime?
+  updatedAt DateTime  @updatedAt
 }
 
 model MessengerMessage {
@@ -185,6 +205,53 @@ model ReminderConfig {
   subject3d String?
   body3d    String?
   updatedAt DateTime @updatedAt
+}
+
+// Support chat (customer-account extension backend, agent-core phase 2):
+// enqueue-then-poll job records for a customer-account chat turn. Neon holds
+// the CONVERSATION + JOB STATUS only — same posture as MessengerThread/
+// MessengerMessage (never the order; order state lives on the Shopify order).
+// id is the customerGid today (one thread per signed-in customer); a future
+// anonymous/storefront surface can seed a conversation uuid instead.
+model SupportChatThread {
+  id          String   @id
+  shop        String
+  customerGid String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  messages SupportChatMessage[]
+  jobs     SupportChatJob[]
+}
+
+model SupportChatMessage {
+  id        String   @id @default(cuid())
+  threadId  String
+  role      String // "customer" | "assistant"
+  bodyJson  String // JSON: { text } for a customer turn, { blocks } for an assistant turn
+  createdAt DateTime @default(now())
+
+  thread SupportChatThread @relation(fields: [threadId], references: [id])
+
+  @@index([threadId, createdAt])
+}
+
+// One row per POST /api/support-chat call. The extension polls this by id
+// (never by threadId) so a different customer's jobId cannot be guessed into
+// leaking someone else's conversation — the poll route ALSO re-checks the
+// caller's own verified customerGid against the job's thread before answering.
+model SupportChatJob {
+  id         String   @id // jobId returned to the client, crypto.randomUUID()
+  threadId   String
+  status     String   @default("pending") // "pending" | "done" | "failed"
+  blocksJson String?
+  error      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  thread SupportChatThread @relation(fields: [threadId], references: [id])
+
+  @@index([threadId, createdAt])
 }
 
 model DeliveryScheduleConfig {
