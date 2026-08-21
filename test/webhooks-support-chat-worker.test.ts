@@ -11,12 +11,14 @@ const {
   getJobMock,
   completeJobMock,
   failJobMock,
+  skipJobMock,
   loadHistoryMock,
   runAgentTurnMock,
 } = vi.hoisted(() => ({
   getJobMock: vi.fn(),
   completeJobMock: vi.fn(),
   failJobMock: vi.fn(),
+  skipJobMock: vi.fn(),
   loadHistoryMock: vi.fn(),
   runAgentTurnMock: vi.fn(),
 }));
@@ -25,6 +27,7 @@ vi.mock("../app/services/support-chat.server", () => ({
   getSupportChatJob: getJobMock,
   completeSupportChatJob: completeJobMock,
   failSupportChatJob: failJobMock,
+  skipSupportChatJob: skipJobMock,
   loadSupportChatHistory: loadHistoryMock,
 }));
 
@@ -84,6 +87,7 @@ beforeEach(() => {
   loadHistoryMock.mockResolvedValue([customerTurn("magkano po delivery sa Makati?")]);
   completeJobMock.mockResolvedValue(undefined);
   failJobMock.mockResolvedValue(undefined);
+  skipJobMock.mockResolvedValue(undefined);
   runAgentTurnMock.mockResolvedValue({
     ok: true,
     reply: { blocks: [{ type: "text", text: "Around P250 po." }] },
@@ -194,5 +198,64 @@ describe("webhooks.support-chat_.worker action — order-commitment guard", () =
 
     expect(res.status).toBe(200);
     expect(runAgentTurnMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The LLM turn is only well-formed when the transcript ends on the customer.
+// An assistant tail (a retry after the assistant row already landed, or two
+// interleaved turns) is read by Anthropic as a PREFILL to continue — the
+// customer would get a mangled half-sentence. Retrying re-loads the identical
+// rows, so this must close 200, never 503.
+describe("webhooks.support-chat_.worker action — history-shape guard", () => {
+  function assistantTurn(text: string) {
+    return { role: "assistant", content: [{ type: "text", text }] };
+  }
+
+  it("does not call runAgentTurn when the history ends on an assistant turn", async () => {
+    loadHistoryMock.mockResolvedValue([
+      customerTurn("magkano po delivery sa Makati?"),
+      assistantTurn("Around P250 po."),
+    ]);
+
+    const res = await callAction(makeTaskRequest({ jobId: JOB_ID }));
+
+    expect(res.status).toBe(200);
+    expect(runAgentTurnMock).not.toHaveBeenCalled();
+    expect(completeJobMock).not.toHaveBeenCalled();
+    expect(skipJobMock).toHaveBeenCalledWith(JOB_ID);
+  });
+
+  it("does not call runAgentTurn on an empty history", async () => {
+    loadHistoryMock.mockResolvedValue([]);
+
+    const res = await callAction(makeTaskRequest({ jobId: JOB_ID }));
+
+    expect(res.status).toBe(200);
+    expect(runAgentTurnMock).not.toHaveBeenCalled();
+    expect(completeJobMock).not.toHaveBeenCalled();
+    expect(skipJobMock).toHaveBeenCalledWith(JOB_ID);
+  });
+
+  it("never answers 503 for a malformed transcript — a retry cannot fix it", async () => {
+    loadHistoryMock.mockResolvedValue([assistantTurn("Kumusta po!")]);
+
+    const res = await callAction(makeTaskRequest({ jobId: JOB_ID }));
+
+    expect(res.status).toBe(200);
+    expect(failJobMock).not.toHaveBeenCalled();
+  });
+
+  it("still runs the turn when the assistant tail is followed by a customer turn", async () => {
+    loadHistoryMock.mockResolvedValue([
+      customerTurn("hi po"),
+      assistantTurn("Kumusta po! Ano po ang maitutulong ko?"),
+      customerTurn("may sunflower po ba kayo?"),
+    ]);
+
+    const res = await callAction(makeTaskRequest({ jobId: JOB_ID }));
+
+    expect(res.status).toBe(200);
+    expect(runAgentTurnMock).toHaveBeenCalledTimes(1);
+    expect(skipJobMock).not.toHaveBeenCalled();
   });
 });

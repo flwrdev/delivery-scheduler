@@ -218,6 +218,100 @@ describe("lookupOrderByNameAndZip", () => {
   });
 });
 
+// MAJOR fix: the caller cannot tell a real wrong guess from an outage by
+// reading the error string (that indistinguishability is deliberate), so every
+// failure carries a machine-readable `reason`. Only "mismatch" is a real guess.
+describe("lookupOrderByNameAndZip — failure reason discriminant", () => {
+  it("a wrong ZIP on an existing order is reason=mismatch", async () => {
+    graphqlMock.mockResolvedValueOnce(jsonResponse({ data: { orders: { nodes: [orderNode()] } } }));
+    const result = await lookupOrderByNameAndZip({ orderName: "#3979", zip: "9999" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("mismatch");
+  });
+
+  it("a wrong ORDER NUMBER (short page) is reason=mismatch", async () => {
+    graphqlMock.mockResolvedValueOnce(jsonResponse({ data: { orders: { nodes: [] } } }));
+    const result = await lookupOrderByNameAndZip({ orderName: "#0000", zip: "1300" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("mismatch");
+  });
+
+  it("ANTI-ENUMERATION: the mismatch error string is byte-identical for a wrong order number vs a wrong zip", async () => {
+    graphqlMock.mockResolvedValueOnce(jsonResponse({ data: { orders: { nodes: [orderNode()] } } }));
+    const wrongZip = await lookupOrderByNameAndZip({ orderName: "#3979", zip: "9999" });
+
+    graphqlMock.mockResolvedValueOnce(jsonResponse({ data: { orders: { nodes: [] } } }));
+    const wrongOrderNumber = await lookupOrderByNameAndZip({ orderName: "#0000", zip: "1300" });
+
+    expect(wrongZip.ok).toBe(false);
+    expect(wrongOrderNumber.ok).toBe(false);
+    if (wrongZip.ok || wrongOrderNumber.ok) return;
+    // Same bytes, same reason — the customer (and the LLM) learns nothing about
+    // which half was wrong; only the lockout accounting can tell them apart.
+    expect(wrongOrderNumber.error).toBe(wrongZip.error);
+    expect(wrongOrderNumber.reason).toBe(wrongZip.reason);
+  });
+
+  it("a FULL page with no exact match is reason=ambiguous (inconclusive, not a wrong guess)", async () => {
+    const nodes = Array.from({ length: 25 }, (_, i) => orderNode({ name: `#${1000 + i}` }));
+    graphqlMock.mockResolvedValueOnce(jsonResponse({ data: { orders: { nodes } } }));
+    const result = await lookupOrderByNameAndZip({ orderName: "#100", zip: "1300" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("ambiguous");
+    expect(result.ambiguous).toBe(true);
+  });
+
+  it("a missing field is reason=invalid_input (a prompting issue, not a guess)", async () => {
+    const noOrder = await lookupOrderByNameAndZip({ orderName: "", zip: "1300" });
+    expect(noOrder.ok).toBe(false);
+    if (noOrder.ok) return;
+    expect(noOrder.reason).toBe("invalid_input");
+
+    const noZip = await lookupOrderByNameAndZip({ orderName: "#3979", zip: "" });
+    expect(noZip.ok).toBe(false);
+    if (noZip.ok) return;
+    expect(noZip.reason).toBe("invalid_input");
+    expect(adminMock).not.toHaveBeenCalled();
+  });
+
+  it("MESSENGER_SHOP unset is reason=upstream, never the customer's fault", async () => {
+    vi.stubEnv("MESSENGER_SHOP", "");
+    const result = await lookupOrderByNameAndZip({ orderName: "#3979", zip: "1300" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("upstream");
+  });
+
+  it("an unavailable Admin client is reason=upstream", async () => {
+    adminMock.mockRejectedValueOnce(new Error("no offline session"));
+    const result = await lookupOrderByNameAndZip({ orderName: "#3979", zip: "1300" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("upstream");
+  });
+
+  it("a GraphQL errors[] body is reason=upstream", async () => {
+    graphqlMock.mockResolvedValueOnce(
+      jsonResponse({ errors: [{ message: "Throttled" }] }, 200),
+    );
+    const result = await lookupOrderByNameAndZip({ orderName: "#3979", zip: "1300" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("upstream");
+  });
+
+  it("a thrown GraphQL call is reason=upstream", async () => {
+    graphqlMock.mockRejectedValueOnce(new Error("socket hang up"));
+    const result = await lookupOrderByNameAndZip({ orderName: "#3979", zip: "1300" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("upstream");
+  });
+});
+
 describe("lookupOrdersByCustomerId", () => {
   it("happy path: extracts the numeric id and queries by customer_id", async () => {
     graphqlMock.mockResolvedValueOnce(jsonResponse({ data: { orders: { nodes: [orderNode()] } } }));
@@ -234,6 +328,42 @@ describe("lookupOrdersByCustomerId", () => {
     const result = await lookupOrdersByCustomerId("not-a-gid");
     expect(result.ok).toBe(false);
     expect(adminMock).not.toHaveBeenCalled();
+  });
+
+  it("REDACTION: never returns an address, a zip, or a phone number", async () => {
+    graphqlMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: {
+          orders: {
+            nodes: [
+              orderNode({
+                shippingAddress: { zip: "1300", address1: "255 Kawit St", phone: "09624224085" },
+              }),
+            ],
+          },
+        },
+      }),
+    );
+    const result = await lookupOrdersByCustomerId("gid://shopify/Customer/778899");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const serialized = JSON.stringify(result.orders);
+    expect(serialized).not.toContain("Kawit");
+    expect(serialized).not.toContain("09624224085");
+    expect(serialized).not.toContain("1300");
+  });
+
+  it("a malformed gid is reason=invalid_input; an upstream failure is reason=upstream", async () => {
+    const malformed = await lookupOrdersByCustomerId("not-a-gid");
+    expect(malformed.ok).toBe(false);
+    if (malformed.ok) return;
+    expect(malformed.reason).toBe("invalid_input");
+
+    graphqlMock.mockRejectedValueOnce(new Error("socket hang up"));
+    const upstream = await lookupOrdersByCustomerId("gid://shopify/Customer/778899");
+    expect(upstream.ok).toBe(false);
+    if (upstream.ok) return;
+    expect(upstream.reason).toBe("upstream");
   });
 
   it("zero orders: ok:true with an empty list", async () => {

@@ -1,21 +1,15 @@
 import type { ActionFunctionArgs } from "react-router";
 
 import { verifyMetaWebhookSignature } from "../lib/verify-meta-signature.server";
-import { CUSTOMER_ACCOUNT_CAPABILITIES, runAgentTurn } from "../services/agent-core.server";
-import type { AgentChannel } from "../services/agent-core.server";
 import { MESSENGER_WORKER_SIGNATURE_HEADER } from "../services/messenger-queue.server";
-import {
-  completeSupportChatJob,
-  failSupportChatJob,
-  getSupportChatJob,
-  loadSupportChatHistory,
-} from "../services/support-chat.server";
+import { failSupportChatJob, getSupportChatJob } from "../services/support-chat.server";
+import { runSupportChatTurn } from "../services/support-chat-turn.server";
 
 // Cloud Tasks worker for the support chat backend (agent-core phase 2).
 // Mirrors webhooks.messenger_.worker.ts exactly — same signature scheme, same
 // status contract with Cloud Tasks (it retries on any non-2xx):
 //   200 — done, or retrying can never help (unknown job, already processed,
-//         malformed payload, LLM not configured)
+//         malformed payload, LLM not configured, malformed history)
 //   503 — transient failure; retry with backoff
 //
 // Auth: HMAC-SHA256 over the raw body (sha256=<hex>) keyed with
@@ -30,50 +24,11 @@ import {
 // Log hygiene: jobId, thread id (customerGid), statuses, tool names, error
 // strings — NEVER message text or LLM output.
 //
-// ORDER-COMMITMENT GUARD (below): ordering is Messenger-only in v1
-// (CUSTOMER_ACCOUNT_CAPABILITIES.ordering === false), and the deterministic
-// CONFIRM_ORDER_ interception lives in the Messenger adapter alone. The
-// extension no longer renders a Confirm button at all, but a commitment payload
-// can still arrive here as ordinary typed/forged text — and ordinary text goes
-// straight to the LLM. So we short-circuit it BEFORE the model ever sees it:
-// walang LLM call, walang tools, isang malinaw na sagot lang.
-
-// Matches "CONFIRM_ORDER_<key>" / "EDIT_ORDER" with or without the Messenger
-// [TAP] prefix, case-insensitively.
-const ORDER_COMMITMENT_PATTERN = /^\s*(?:\[TAP\]\s*)?(?:CONFIRM_ORDER_|EDIT_ORDER)/i;
-
-const ORDERING_UNAVAILABLE_TEXT = [
-  "Pasensya na po — hindi pa pwedeng mag-place o mag-edit ng order dito sa chat na ito. 🌸",
-  "",
-  "Pwede po kayong mag-order sa https://flowercart.store, o kausapin kami sa Messenger page namin kung gusto niyo ng tulong habang pumipili.",
-  "",
-  "Dito naman, kaya ko pa rin sagutin ang mga tanong niyo tungkol sa bouquets, delivery dates, delivery fees, at status ng order niyo.",
-].join("\n");
-
-/**
- * The newest customer turn in the loaded history — that is the message this job
- * was minted for (the POST route records it before enqueueing).
- */
-function latestCustomerText(messages: Array<{ role: string; content: unknown }>): string {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.role !== "user") {
-      continue;
-    }
-    if (!Array.isArray(message.content)) {
-      return "";
-    }
-    return message.content
-      .filter(
-        (block): block is { type: "text"; text: string } =>
-          (block as { type?: unknown })?.type === "text" &&
-          typeof (block as { text?: unknown }).text === "string",
-      )
-      .map((block) => block.text)
-      .join("\n");
-  }
-  return "";
-}
+// THE TURN ITSELF LIVES IN support-chat-turn.server.ts — both pre-LLM guards
+// (history must end on a customer turn; order-commitment payloads never reach
+// the model) and the runAgentTurn call are shared with the inline fallback in
+// api.support-chat.tsx, so the two execution paths can't drift apart again.
+// This route only owns the Cloud Tasks half: signature, job status, HTTP code.
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   if (request.method !== "POST") {
@@ -120,40 +75,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const threadId = job.threadId;
-    const messages = await loadSupportChatHistory(threadId);
+    const verdict = await runSupportChatTurn({ jobId, threadId });
 
-    // Defence in depth — an order-commitment payload never reaches the LLM.
-    if (ORDER_COMMITMENT_PATTERN.test(latestCustomerText(messages))) {
-      console.warn(
-        `[support-chat-worker] order-commitment payload blocked jobId=${jobId} thread=${threadId}`,
+    if (verdict.status === "done") {
+      console.log(
+        `[support-chat-worker] done jobId=${jobId} thread=${threadId} intercepted=${verdict.intercepted}`,
       );
-      await completeSupportChatJob(jobId, threadId, [
-        { type: "text", text: ORDERING_UNAVAILABLE_TEXT },
-      ]);
       return new Response(null, { status: 200 });
     }
 
-    const channel: AgentChannel = {
-      kind: "customer-account",
-      identity: { type: "customer", customerGid: threadId },
-      supports: CUSTOMER_ACCOUNT_CAPABILITIES,
-      threadId,
-    };
-    const result = await runAgentTurn({ channel, messages });
-
-    if (result.ok) {
-      await completeSupportChatJob(jobId, threadId, result.reply.blocks);
-      console.log(`[support-chat-worker] done jobId=${jobId} thread=${threadId}`);
+    if (verdict.status === "skipped") {
+      // A malformed transcript is not a transient fault — a retry re-loads the
+      // exact same rows. Close it 200 so Cloud Tasks stops.
+      console.log(
+        `[support-chat-worker] closed jobId=${jobId} thread=${threadId} skip=${verdict.reason}`,
+      );
       return new Response(null, { status: 200 });
     }
 
-    if (result.notConfigured) {
+    if (verdict.notConfigured) {
       console.error(`[support-chat-worker] LLM not configured — failing jobId=${jobId}`);
-      await failSupportChatJob(jobId, result.error);
+      await failSupportChatJob(jobId, verdict.error);
       return new Response(null, { status: 200 });
     }
 
-    console.warn(`[support-chat-worker] transient failure jobId=${jobId}: ${result.error}`);
+    console.warn(`[support-chat-worker] transient failure jobId=${jobId}: ${verdict.error}`);
     return new Response(null, { status: 503 });
   } catch (error) {
     console.warn(
