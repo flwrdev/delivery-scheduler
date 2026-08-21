@@ -26,8 +26,9 @@ vi.mock("../app/db.server", () => ({ default: prismaMock }));
 import { DEFAULT_DELIVERY_SCHEDULE_RULES } from "../app/lib/delivery-availability";
 import {
   executeAgentTool,
-  getAvailableDeliverySlots,
+  LOOKUP_MY_ORDERS_TOOL,
   MESSENGER_AGENT_TOOLS,
+  getAvailableDeliverySlots,
   resolveDeliveryDate,
 } from "../app/services/messenger-agent-tools.server";
 
@@ -152,6 +153,210 @@ describe("executeAgentTool — lookup_order dispatch (channel-agnostic lockout w
     expect(prismaMock.lookupAttempt.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ where: { key: THREAD_ID } }),
     );
+  });
+
+  // MAJOR fix: an outage is not a wrong guess. Before this, a Shopify blip or
+  // an unset MESSENGER_SHOP burned an attempt and could lock a blameless
+  // customer out of order support for 30 minutes.
+  it("does NOT record a failure when the lookup fails UPSTREAM (thrown GraphQL)", async () => {
+    prismaMock.lookupAttempt.findUnique.mockResolvedValueOnce({ lockedAt: null }); // isLookupLocked
+    graphqlMock.mockRejectedValueOnce(new Error("socket hang up"));
+
+    const result = (await executeAgentTool(
+      "lookup_order",
+      { order_number: "3979", zip: "1300" },
+      NOW_MANILA_NOON_SAT,
+      { threadId: THREAD_ID },
+    )) as { ok: boolean; reason?: string };
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("upstream");
+    expect(prismaMock.lookupAttempt.upsert).not.toHaveBeenCalled();
+  });
+
+  it("does NOT record a failure when MESSENGER_SHOP is unset (upstream config, not a guess)", async () => {
+    vi.stubEnv("MESSENGER_SHOP", "");
+    prismaMock.lookupAttempt.findUnique.mockResolvedValueOnce({ lockedAt: null });
+
+    const result = (await executeAgentTool(
+      "lookup_order",
+      { order_number: "3979", zip: "1300" },
+      NOW_MANILA_NOON_SAT,
+      { threadId: THREAD_ID },
+    )) as { ok: boolean; reason?: string };
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("upstream");
+    expect(prismaMock.lookupAttempt.upsert).not.toHaveBeenCalled();
+  });
+
+  it("does NOT record a failure for an AMBIGUOUS miss (full page, inconclusive search)", async () => {
+    prismaMock.lookupAttempt.findUnique.mockResolvedValueOnce({ lockedAt: null });
+    const nodes = Array.from({ length: 25 }, (_, i) => ({
+      name: `#${1000 + i}`,
+      shippingAddress: { zip: "1300" },
+    }));
+    graphqlMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { orders: { nodes } } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const result = (await executeAgentTool(
+      "lookup_order",
+      { order_number: "100", zip: "1300" },
+      NOW_MANILA_NOON_SAT,
+      { threadId: THREAD_ID },
+    )) as { ok: boolean; reason?: string };
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("ambiguous");
+    expect(prismaMock.lookupAttempt.upsert).not.toHaveBeenCalled();
+  });
+
+  it("DOES record a failure for a real MISMATCH (wrong zip on an existing order)", async () => {
+    prismaMock.lookupAttempt.findUnique.mockResolvedValueOnce({ lockedAt: null }); // isLookupLocked
+    prismaMock.lookupAttempt.findUnique.mockResolvedValueOnce({ failures: 0, lockedAt: null });
+    prismaMock.lookupAttempt.upsert.mockResolvedValueOnce({});
+    graphqlMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          data: { orders: { nodes: [{ name: "#3979", shippingAddress: { zip: "1300" } }] } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const result = (await executeAgentTool(
+      "lookup_order",
+      { order_number: "3979", zip: "9999" },
+      NOW_MANILA_NOON_SAT,
+      { threadId: THREAD_ID },
+    )) as { ok: boolean; reason?: string };
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("mismatch");
+    expect(prismaMock.lookupAttempt.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { key: THREAD_ID } }),
+    );
+  });
+});
+
+// MINOR fix: on an authenticated surface Shopify already proved who the
+// customer is, so they must never be made to recite an order number + zip (nor
+// be lockout-able for getting it wrong).
+describe("executeAgentTool — lookup_my_orders (authenticated surfaces)", () => {
+  const graphqlMock = vi.fn();
+  const CUSTOMER_GID = "gid://shopify/Customer/778899";
+
+  beforeEach(() => {
+    vi.stubEnv("MESSENGER_SHOP", "hsrwva-nr.myshopify.com");
+    adminMock.mockReset();
+    adminMock.mockResolvedValue({ admin: { graphql: graphqlMock } });
+    graphqlMock.mockReset();
+    prismaMock.lookupAttempt.findUnique.mockReset();
+    prismaMock.lookupAttempt.upsert.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is a no-input tool definition (the customer id NEVER comes from the LLM)", () => {
+    expect(LOOKUP_MY_ORDERS_TOOL.name).toBe("lookup_my_orders");
+    expect(LOOKUP_MY_ORDERS_TOOL.input_schema.properties).toEqual({});
+    expect(LOOKUP_MY_ORDERS_TOOL.input_schema.required).toEqual([]);
+    // It is NOT part of the Messenger registry — Messenger has no verified GID.
+    expect(MESSENGER_AGENT_TOOLS.map((t) => t.name)).not.toContain("lookup_my_orders");
+  });
+
+  it("fails designed when the turn carries no verified customerGid", async () => {
+    const result = (await executeAgentTool("lookup_my_orders", {}, NOW_MANILA_NOON_SAT, {
+      threadId: "conv-1",
+    })) as { ok: boolean };
+    expect(result.ok).toBe(false);
+    expect(adminMock).not.toHaveBeenCalled();
+  });
+
+  it("looks the orders up by the CONTEXT's customer id and never burns a lockout attempt", async () => {
+    graphqlMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          data: {
+            orders: {
+              nodes: [
+                {
+                  name: "#3979",
+                  createdAt: "2026-08-02T16:00:00Z",
+                  displayFinancialStatus: "PAID",
+                  displayFulfillmentStatus: "FULFILLED",
+                  shippingAddress: { zip: "1300", address1: "255 Kawit St", phone: "09624224085" },
+                  customAttributes: [
+                    { key: "Delivery Date", value: "2026-08-03" },
+                    { key: "Delivery Time", value: "3PM-6PM" },
+                  ],
+                  fulfillments: [
+                    { trackingInfo: [{ number: "TRK123", url: "https://track.example.com/TRK123" }] },
+                  ],
+                },
+              ],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const result = (await executeAgentTool("lookup_my_orders", {}, NOW_MANILA_NOON_SAT, {
+      threadId: CUSTOMER_GID,
+      customerGid: CUSTOMER_GID,
+    })) as { ok: boolean; orders?: Array<Record<string, unknown>> };
+
+    expect(result.ok).toBe(true);
+    expect(result.orders?.[0]).toMatchObject({
+      name: "#3979",
+      financialStatus: "PAID",
+      fulfillmentStatus: "FULFILLED",
+      deliveryDate: "2026-08-03",
+      deliveryTime: "3PM-6PM",
+      trackingUrl: "https://track.example.com/TRK123",
+    });
+    const vars = (graphqlMock.mock.calls[0][1] as { variables: { query: string } }).variables;
+    expect(vars.query).toBe("customer_id:778899");
+    // No anti-guessing counter: there is nothing to guess here.
+    expect(prismaMock.lookupAttempt.findUnique).not.toHaveBeenCalled();
+    expect(prismaMock.lookupAttempt.upsert).not.toHaveBeenCalled();
+  });
+
+  it("REDACTION: never returns an address, a zip, or a phone number", async () => {
+    graphqlMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          data: {
+            orders: {
+              nodes: [
+                {
+                  name: "#3979",
+                  shippingAddress: { zip: "1300", address1: "255 Kawit St", phone: "09624224085" },
+                },
+              ],
+            },
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const result = (await executeAgentTool("lookup_my_orders", {}, NOW_MANILA_NOON_SAT, {
+      customerGid: CUSTOMER_GID,
+    })) as { ok: boolean; orders?: unknown };
+
+    expect(result.ok).toBe(true);
+    const serialized = JSON.stringify(result.orders);
+    expect(serialized).not.toContain("Kawit");
+    expect(serialized).not.toContain("09624224085");
+    expect(serialized).not.toContain("1300");
   });
 });
 

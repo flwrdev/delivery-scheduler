@@ -29,6 +29,7 @@ import {
   clearLookupFailures,
   isLookupLocked,
   lookupOrderByNameAndZip,
+  lookupOrdersByCustomerId,
   recordLookupFailure,
 } from "./order-lookup.server";
 import type { LlmToolDefinition } from "./messenger-llm.server";
@@ -534,6 +535,35 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
   },
 ];
 
+/**
+ * The AUTHENTICATED replacement for `lookup_order` (extensions phase 3).
+ *
+ * WHY it is not in MESSENGER_AGENT_TOOLS: it only makes sense on a surface where
+ * Shopify has ALREADY proven who the customer is (the customer-account session
+ * token's `sub` claim). It is offered INSTEAD of `lookup_order` there — an
+ * authenticated customer must never be asked to recite an order number and a
+ * zip, and must never be lockout-able, kaya walang anti-guessing counter dito:
+ * there is nothing to guess. The tool list swap lives in agent-core.server.ts.
+ *
+ * No input parameters on purpose: the customer GID comes from the session, from
+ * AgentToolContext — NEVER from the LLM, which could otherwise hand us someone
+ * else's id.
+ */
+export const LOOKUP_MY_ORDERS_TOOL: LlmToolDefinition = {
+  name: "lookup_my_orders",
+  description:
+    "Look up THIS signed-in customer's own recent orders. Takes NO input — the customer is already " +
+    "logged in, so never ask them for an order number, a zip code, or an email address; just call " +
+    "this. Returns each order's number, payment status, fulfillment status, delivery date/time, and " +
+    "a tracking link/number if the order has shipped. NEVER reveal addresses, phone numbers, or " +
+    "payment details from an order — status, delivery schedule, and tracking only.",
+  input_schema: {
+    type: "object",
+    properties: {},
+    required: [],
+  },
+};
+
 export interface AgentToolContext {
   /** The Messenger thread the turn belongs to (needed by stateful tools). */
   psid?: string;
@@ -544,6 +574,12 @@ export interface AgentToolContext {
    * working byte-for-byte; `threadId` wins when both are present.
    */
   threadId?: string;
+  /**
+   * The VERIFIED Shopify customer GID of the turn, set by agent-core only when
+   * `channel.identity.type === "customer"` (i.e. a real session token proved
+   * it). This is the only source lookup_my_orders reads — never tool input.
+   */
+  customerGid?: string;
 }
 
 /** Dispatch a tool call from the orchestrator loop. Never throws. */
@@ -620,19 +656,33 @@ export async function executeAgentTool(
       const orderNumber = raw.order_number ?? "";
       const zip = raw.zip ?? "";
       const result = await lookupOrderByNameAndZip({ orderName: orderNumber, zip });
-      // Only count REAL guesses toward the lockout — not a call missing one
-      // of the two fields (that is a prompting issue, not a guessing
-      // attempt), and not an `ambiguous` miss (the search page came back
-      // full, so a real match could still exist just past the page boundary
-      // — that is an inconclusive search, not proof of a wrong guess).
-      if (orderNumber.trim() && zip.trim()) {
-        if (result.ok) {
-          await clearLookupFailures(key);
-        } else if (!result.ambiguous) {
-          await recordLookupFailure(key);
-        }
+      // Only a REAL wrong guess burns an attempt (MAJOR fix). The result's
+      // `reason` is the source of truth, never the `error` string — that string
+      // is identical for a wrong order number and a wrong zip on purpose.
+      //   - "upstream"      Shopify down / MESSENGER_SHOP unset / GraphQL threw:
+      //                     an outage must NEVER lock a blameless customer out
+      //                     of order support for 30 minutes.
+      //   - "ambiguous"     full search page, no exact match — inconclusive, so
+      //                     the real order may sit past the page boundary.
+      //   - "invalid_input" a missing field: a prompting issue, not a guess.
+      if (result.ok) {
+        await clearLookupFailures(key);
+      } else if (result.reason === "mismatch") {
+        await recordLookupFailure(key);
+      } else {
+        console.log(`[order-lookup] lookup failure not counted reason=${result.reason}`);
       }
       return result;
+    }
+    if (name === "lookup_my_orders") {
+      // Authenticated surfaces only. The GID comes from the session-verified
+      // channel identity — walang lockout dito dahil walang hinuhulaan: Shopify
+      // already proved who this is.
+      const customerGid = context.customerGid;
+      if (!customerGid) {
+        return { ok: false, error: "lookup_my_orders needs a signed-in customer." };
+      }
+      return await lookupOrdersByCustomerId(customerGid);
     }
     if (name === "update_order") {
       // Channel-agnostic key: the shared agent core passes threadId, the live

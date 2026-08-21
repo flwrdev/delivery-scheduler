@@ -1,16 +1,13 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
-import { CUSTOMER_ACCOUNT_CAPABILITIES, runAgentTurn } from "../services/agent-core.server";
-import type { AgentChannel } from "../services/agent-core.server";
 import { enqueueSupportChatTask } from "../services/messenger-queue.server";
 import {
-  completeSupportChatJob,
   createSupportChatJob,
   ensureSupportChatThread,
   failSupportChatJob,
-  loadSupportChatHistory,
   recordCustomerTurn,
 } from "../services/support-chat.server";
+import { runSupportChatTurn } from "../services/support-chat-turn.server";
 import { authenticate } from "../shopify.server";
 
 // Support chat backend for the Shopify customer-account chat extension
@@ -101,20 +98,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       // Local dev fallback — no queue, process inline (same posture as
       // webhooks.messenger.ts). The extension still polls, but the job is
       // already done by the time it does.
+      //
+      // Same shared turn the Cloud Tasks worker runs, guards included — this
+      // path used to call runAgentTurn directly and so missed the
+      // order-commitment interception entirely. There is no retry here (walang
+      // queue), kaya ANY failure marks the job failed; the HTTP answer stays
+      // 200 + ok:true because the jobId itself was minted successfully (ADR-11).
       console.log(`[support-chat] queue not configured — processing jobId=${jobId} inline`);
-      const channel: AgentChannel = {
-        kind: "customer-account",
-        identity: { type: "customer", customerGid },
-        supports: CUSTOMER_ACCOUNT_CAPABILITIES,
-        threadId: customerGid,
-      };
-      const messages = await loadSupportChatHistory(customerGid);
-      const result = await runAgentTurn({ channel, messages });
-      if (result.ok) {
-        await completeSupportChatJob(jobId, customerGid, result.reply.blocks);
-      } else {
-        console.warn(`[support-chat] inline turn failed jobId=${jobId}: ${result.error}`);
-        await failSupportChatJob(jobId, result.error);
+      const verdict = await runSupportChatTurn({ jobId, threadId: customerGid });
+      if (verdict.status === "failed") {
+        console.warn(`[support-chat] inline turn failed jobId=${jobId}: ${verdict.error}`);
+        await failSupportChatJob(jobId, verdict.error);
+      } else if (verdict.status === "skipped") {
+        console.warn(`[support-chat] inline turn skipped jobId=${jobId} reason=${verdict.reason}`);
       }
       return cors(Response.json({ ok: true, jobId }));
     }

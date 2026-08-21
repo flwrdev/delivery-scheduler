@@ -13,6 +13,7 @@ const {
   getJobMock,
   completeJobMock,
   failJobMock,
+  skipJobMock,
   loadHistoryMock,
   enqueueMock,
   runAgentTurnMock,
@@ -24,6 +25,7 @@ const {
   getJobMock: vi.fn(),
   completeJobMock: vi.fn(),
   failJobMock: vi.fn(),
+  skipJobMock: vi.fn(),
   loadHistoryMock: vi.fn(),
   enqueueMock: vi.fn(),
   runAgentTurnMock: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock("../app/services/support-chat.server", () => ({
   getSupportChatJob: getJobMock,
   completeSupportChatJob: completeJobMock,
   failSupportChatJob: failJobMock,
+  skipSupportChatJob: skipJobMock,
   loadSupportChatHistory: loadHistoryMock,
 }));
 
@@ -91,6 +94,16 @@ async function readJson(res: unknown): Promise<Record<string, unknown>> {
   return (await (res as Response).json()) as Record<string, unknown>;
 }
 
+// The inline fallback re-loads the transcript it just appended to, so a
+// realistic default history ends on the customer's turn.
+function customerTurn(text: string) {
+  return { role: "user", content: [{ type: "text", text }] };
+}
+
+function assistantTurn(text: string) {
+  return { role: "assistant", content: [{ type: "text", text }] };
+}
+
 beforeEach(() => {
   vi.stubEnv("MESSENGER_SHOP", SHOP);
   customerAccountMock.mockReset();
@@ -100,6 +113,7 @@ beforeEach(() => {
   getJobMock.mockReset();
   completeJobMock.mockReset();
   failJobMock.mockReset();
+  skipJobMock.mockReset();
   loadHistoryMock.mockReset();
   enqueueMock.mockReset();
   runAgentTurnMock.mockReset();
@@ -109,7 +123,8 @@ beforeEach(() => {
   createJobMock.mockResolvedValue({ jobId: "job-1" });
   completeJobMock.mockResolvedValue(undefined);
   failJobMock.mockResolvedValue(undefined);
-  loadHistoryMock.mockResolvedValue([]);
+  skipJobMock.mockResolvedValue(undefined);
+  loadHistoryMock.mockResolvedValue([customerTurn("hi")]);
   enqueueMock.mockResolvedValue({ ok: true, taskName: "projects/p/locations/l/queues/q/tasks/t" });
 });
 
@@ -288,6 +303,101 @@ describe("api.support-chat action (POST)", () => {
     const json = await readJson(res);
     expect((res as Response).status).toBe(200);
     expect(json).toEqual({ ok: false, reason: "invalid_body" });
+  });
+});
+
+// The inline fallback (local dev, no Cloud Tasks) runs the SAME shared turn the
+// worker runs — support-chat-turn.server.ts. Both pre-LLM guards must therefore
+// fire on this path too; they used to cover the worker only.
+describe("api.support-chat action (POST) — inline fallback shares the worker's guards", () => {
+  function inlineDev() {
+    authOk();
+    enqueueMock.mockResolvedValue({
+      ok: false,
+      notConfigured: true,
+      error: "Messenger queue is not configured on this environment.",
+    });
+    runAgentTurnMock.mockResolvedValue({
+      ok: true,
+      reply: { blocks: [{ type: "text", text: "Sure po!" }] },
+      toolsUsed: [],
+    });
+  }
+
+  async function postInline(message: string) {
+    return postAction({
+      request: makePostRequest({ message }),
+      params: {},
+      context: {},
+    } as never);
+  }
+
+  const blockedPayloads = [
+    "CONFIRM_ORDER_b3f1c0de",
+    "[TAP] CONFIRM_ORDER_b3f1c0de",
+    "  confirm_order_b3f1c0de",
+    "EDIT_ORDER",
+  ];
+
+  for (const payload of blockedPayloads) {
+    it(`intercepts ${JSON.stringify(payload)} before the LLM on the inline path`, async () => {
+      inlineDev();
+      loadHistoryMock.mockResolvedValue([customerTurn(payload)]);
+
+      const res = await postInline(payload);
+      const json = await readJson(res);
+
+      expect((res as Response).status).toBe(200);
+      expect(json).toEqual({ ok: true, jobId: "job-1" });
+      expect(runAgentTurnMock).not.toHaveBeenCalled();
+      expect(completeJobMock).toHaveBeenCalledTimes(1);
+      const blocks = completeJobMock.mock.calls[0][2] as Array<{ type: string; text: string }>;
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0].type).toBe("text");
+      expect(blocks[0].text).toContain("https://flowercart.store");
+      expect(blocks[0].text).toContain("Messenger");
+      expect(failJobMock).not.toHaveBeenCalled();
+    });
+  }
+
+  it("does not call runAgentTurn inline when the history ends on an assistant turn", async () => {
+    inlineDev();
+    loadHistoryMock.mockResolvedValue([customerTurn("hi po"), assistantTurn("Kumusta po!")]);
+
+    const res = await postInline("hi po");
+    const json = await readJson(res);
+
+    expect((res as Response).status).toBe(200);
+    expect(json).toEqual({ ok: true, jobId: "job-1" });
+    expect(runAgentTurnMock).not.toHaveBeenCalled();
+    expect(completeJobMock).not.toHaveBeenCalled();
+    expect(skipJobMock).toHaveBeenCalledWith("job-1");
+  });
+
+  it("does not call runAgentTurn inline on an empty history", async () => {
+    inlineDev();
+    loadHistoryMock.mockResolvedValue([]);
+
+    const res = await postInline("hi po");
+
+    expect((res as Response).status).toBe(200);
+    expect(runAgentTurnMock).not.toHaveBeenCalled();
+    expect(completeJobMock).not.toHaveBeenCalled();
+    expect(skipJobMock).toHaveBeenCalledWith("job-1");
+  });
+
+  it("lets an ordinary message through inline, guards and all", async () => {
+    inlineDev();
+    loadHistoryMock.mockResolvedValue([customerTurn("pwede ko na po ba i-confirm ang order ko?")]);
+
+    const res = await postInline("pwede ko na po ba i-confirm ang order ko?");
+
+    expect((res as Response).status).toBe(200);
+    expect(runAgentTurnMock).toHaveBeenCalledTimes(1);
+    expect(skipJobMock).not.toHaveBeenCalled();
+    expect(completeJobMock).toHaveBeenCalledWith("job-1", CUSTOMER_GID, [
+      { type: "text", text: "Sure po!" },
+    ]);
   });
 });
 

@@ -12,7 +12,10 @@
 // order's shippingAddress.zip. Wrong order number and wrong zip return the
 // EXACT SAME generic failure string, so a guesser (trying zips against a
 // known order number, or vice versa) learns nothing about which half they
-// got right.
+// got right. The CALLER still needs to tell a real wrong guess apart from an
+// infrastructure failure (else a Shopify outage locks out a blameless
+// customer), so every failure also carries a machine-readable `reason` —
+// see LookupFailureReason below. The `error` string stays identical.
 //
 // Also exports lookupOrdersByCustomerId for surfaces that already have a
 // verified Shopify customer session (customer account, logged-in storefront)
@@ -49,17 +52,34 @@ export interface MessengerOrderTracking {
   trackingCompany?: string;
 }
 
+/**
+ * WHY a machine-readable failure discriminant (MAJOR fix): the customer-facing
+ * `error` string is DELIBERATELY the same for a wrong order number and a wrong
+ * zip (anti-enumeration — see the header), so the caller cannot tell a real
+ * wrong guess apart from a Shopify outage / unset MESSENGER_SHOP / Neon blip by
+ * reading the string. Without this, an infrastructure failure burned a lockout
+ * attempt and could lock a completely blameless customer out of order support
+ * for 30 minutes. Only `mismatch` is a real guess:
+ *   - "mismatch"      the order genuinely does not match (wrong number OR wrong
+ *                     zip — indistinguishable ON PURPOSE, same `error` string)
+ *   - "ambiguous"     the search page came back FULL with no exact match, so a
+ *                     real match could sit just past the page boundary — an
+ *                     inconclusive search, not proof of a wrong guess
+ *   - "invalid_input" a field was missing — a prompting issue, not a guess
+ *   - "upstream"      Shopify/admin-client/network failure — never the
+ *                     customer's fault
+ */
+export type LookupFailureReason = "mismatch" | "ambiguous" | "invalid_input" | "upstream";
+
 export type LookupOrderResult =
   | { ok: true; order: MessengerOrderTracking; note: string }
-  // `ambiguous: true` marks a "no exact match in the page" result where the
-  // page came back full (see ORDER_LOOKUP_PAGE_SIZE below) — that's an
-  // inconclusive search, not proof the guess was wrong, so callers should
-  // NOT count it toward the anti-guessing lockout.
-  | { ok: false; error: string; ambiguous?: boolean };
+  // `ambiguous: true` is kept as the legacy boolean alias of
+  // reason === "ambiguous" so older callers/tests keep reading the same flag.
+  | { ok: false; error: string; reason: LookupFailureReason; ambiguous?: boolean };
 
 export type LookupOrdersByCustomerIdResult =
   | { ok: true; orders: MessengerOrderTracking[]; note: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason: LookupFailureReason };
 
 interface AdminGraphqlClient {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
@@ -194,12 +214,16 @@ export async function lookupOrderByNameAndZip(input: {
   const zip = normalizeZip(input.zip ?? "");
 
   if (!orderName || !zip) {
-    return { ok: false, error: "Please provide both the order number and the zip code." };
+    return {
+      ok: false,
+      error: "Please provide both the order number and the zip code.",
+      reason: "invalid_input",
+    };
   }
 
   const client = await getAdminClient();
   if (!client.ok) {
-    return { ok: false, error: client.error };
+    return { ok: false, error: client.error, reason: "upstream" };
   }
 
   try {
@@ -214,6 +238,7 @@ export async function lookupOrderByNameAndZip(input: {
       return {
         ok: false,
         error: body.errors?.map((e) => e.message).join("; ") || `HTTP ${response.status}`,
+        reason: "upstream",
       };
     }
 
@@ -227,7 +252,9 @@ export async function lookupOrderByNameAndZip(input: {
       if (normalizeZip(match.shippingAddress?.zip ?? "") !== zip) {
         // The order exists — the zip is simply wrong. A real mismatch.
         console.log(`[order-lookup] name+zip lookup: zip mismatch order=${orderName}`);
-        return { ok: false, error: GENERIC_LOOKUP_FAILURE };
+        // Byte-identical `error` to the wrong-order-number path below — the
+        // `reason` is for the CALLER's lockout accounting only, never surfaced.
+        return { ok: false, error: GENERIC_LOOKUP_FAILURE, reason: "mismatch" };
       }
     } else {
       // No exact name match in the page. If the page came back FULL, this is
@@ -238,7 +265,12 @@ export async function lookupOrderByNameAndZip(input: {
       console.log(
         `[order-lookup] name+zip lookup: no match order=${orderName}${ambiguous ? " (ambiguous: page full)" : ""}`,
       );
-      return { ok: false, error: GENERIC_LOOKUP_FAILURE, ...(ambiguous ? { ambiguous: true } : {}) };
+      return {
+        ok: false,
+        error: GENERIC_LOOKUP_FAILURE,
+        reason: ambiguous ? "ambiguous" : "mismatch",
+        ...(ambiguous ? { ambiguous: true } : {}),
+      };
     }
 
     console.log(`[order-lookup] name+zip lookup matched order=${match.name}`);
@@ -249,9 +281,12 @@ export async function lookupOrderByNameAndZip(input: {
         "Share ONLY the status, delivery schedule, and tracking link/number — never an address, phone number, or payment details.",
     };
   } catch (error) {
+    // GraphQL threw / network died — infrastructure, never the customer's
+    // guess, kaya it must NOT burn a lockout attempt.
     return {
       ok: false,
       error: error instanceof Error ? error.message : "Order lookup failed.",
+      reason: "upstream",
     };
   }
 }
@@ -267,12 +302,16 @@ export async function lookupOrdersByCustomerId(
 ): Promise<LookupOrdersByCustomerIdResult> {
   const numericId = (customerGid ?? "").trim().match(/(\d+)\s*$/)?.[1];
   if (!numericId) {
-    return { ok: false, error: "That does not look like a valid customer id." };
+    return {
+      ok: false,
+      error: "That does not look like a valid customer id.",
+      reason: "invalid_input",
+    };
   }
 
   const client = await getAdminClient();
   if (!client.ok) {
-    return { ok: false, error: client.error };
+    return { ok: false, error: client.error, reason: "upstream" };
   }
 
   try {
@@ -287,6 +326,7 @@ export async function lookupOrdersByCustomerId(
       return {
         ok: false,
         error: body.errors?.map((e) => e.message).join("; ") || `HTTP ${response.status}`,
+        reason: "upstream",
       };
     }
 
@@ -303,6 +343,7 @@ export async function lookupOrdersByCustomerId(
     return {
       ok: false,
       error: error instanceof Error ? error.message : "Order lookup failed.",
+      reason: "upstream",
     };
   }
 }

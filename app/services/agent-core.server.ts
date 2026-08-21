@@ -26,6 +26,7 @@
 import { loadCodFacts } from "./cod-facts.server";
 import {
   executeAgentTool,
+  LOOKUP_MY_ORDERS_TOOL,
   MESSENGER_AGENT_TOOLS,
 } from "./messenger-agent-tools.server";
 import type {
@@ -126,7 +127,15 @@ export function isOrderUpdateResult(
 export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult> {
   const { channel } = input;
   const now = input.now ?? new Date();
-  const toolContext: AgentToolContext = input.toolContext ?? { threadId: channel.threadId };
+  // A VERIFIED customer id, or nothing. `identity.type === "customer"` means the
+  // surface already proved who this is (the customer-account session token's
+  // `sub` claim) — that is the only thing that unlocks lookup_my_orders, and it
+  // can never come from the LLM or from tool input.
+  const customerGid = channel.identity.type === "customer" ? channel.identity.customerGid : null;
+  const toolContext: AgentToolContext = {
+    ...(input.toolContext ?? { threadId: channel.threadId }),
+    ...(customerGid ? { customerGid } : {}),
+  };
 
   // ORDERING NEEDS **BOTH** GATES. `messengerOrdersEnabled()` is the global
   // deploy kill switch; `channel.supports.ordering` is the per-surface one.
@@ -140,13 +149,22 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
   // `systemContext` (the current date) rides AFTER the cache breakpoint. These
   // MUST stay two separate strings — concatenating them would move the volatile
   // date inside the cached block and kill the cache hit on every turn.
-  // (Two prefix variants now exist — ordering-on and ordering-off — but each is
-  // still byte-identical per channel, so the cache still hits.)
-  const system = buildStaticSystemPrompt(ordersEnabled, await loadCodFacts());
+  // (A handful of prefix variants now exist — ordering on/off x authenticated
+  // on/off — but each one is still byte-identical PER CHANNEL, so the cache
+  // still hits; it just means one cache entry per variant.)
+  const system = buildStaticSystemPrompt(ordersEnabled, await loadCodFacts(), !!customerGid);
   const systemContext = buildDynamicContext(now);
-  const tools: LlmToolDefinition[] = ordersEnabled
-    ? MESSENGER_AGENT_TOOLS
-    : MESSENGER_AGENT_TOOLS.filter((tool) => tool.name !== "update_order");
+  // Channel-aware tool list. Two rules:
+  //  1. update_order needs BOTH ordering gates (see above).
+  //  2. lookup_order is REPLACED by lookup_my_orders when we already know the
+  //     customer — a swap, not an addition, so an authenticated customer is
+  //     never offered the order-number+zip path (which can lock them out) for
+  //     something Shopify already told us.
+  const tools: LlmToolDefinition[] = MESSENGER_AGENT_TOOLS.flatMap((tool) => {
+    if (tool.name === "update_order" && !ordersEnabled) return [];
+    if (tool.name === "lookup_order" && customerGid) return [LOOKUP_MY_ORDERS_TOOL];
+    return [tool];
+  });
 
   // Working copy: the loop appends assistant/tool_result turns, and the caller's
   // array must not be mutated (it may be reused for a retry or for logging).

@@ -55,6 +55,14 @@ vi.mock("../app/services/messenger-agent-tools.server", () => ({
     { name: "resolve_date", description: "", input_schema: { type: "object", properties: {} } },
     { name: "update_order", description: "", input_schema: { type: "object", properties: {} } },
   ],
+  // The authenticated swap-in for lookup_order. Mirrored here because the mock
+  // must expose every export agent-core imports; the registry above has no
+  // lookup_order entry, so it is only reachable from the tests that add one.
+  LOOKUP_MY_ORDERS_TOOL: {
+    name: "lookup_my_orders",
+    description: "",
+    input_schema: { type: "object", properties: {} },
+  },
 }));
 // Fully mocked (no importOriginal): the real module imports shopify.server
 // and db.server.
@@ -81,7 +89,8 @@ vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
 });
 
 import { MESSENGER_LLM_NOT_CONFIGURED_MESSAGE } from "../app/services/messenger-llm.server";
-import type { LlmMessage } from "../app/services/messenger-llm.server";
+import type { LlmMessage, LlmToolDefinition } from "../app/services/messenger-llm.server";
+import { MESSENGER_AGENT_TOOLS } from "../app/services/messenger-agent-tools.server";
 import {
   CUSTOMER_ACCOUNT_CAPABILITIES,
   MESSENGER_CAPABILITIES,
@@ -752,5 +761,104 @@ describe("runAgentTurn — per-channel ordering gate", () => {
     if (!result.ok) return;
     expect(blockOfType(result.reply.blocks, "summary")).toBeUndefined();
     expect(blockOfType(result.reply.blocks, "products")?.items).toEqual(PRODUCTS_RESULT.products);
+  });
+});
+
+// MINOR fix: on a surface where Shopify ALREADY proved who the customer is
+// (customer-account session token -> identity.type === "customer"), the bot
+// must call lookup_my_orders directly instead of making them recite an order
+// number + zip — which can also lock them out. It is a SWAP, not an addition:
+// an authenticated customer is never offered lookup_order at all.
+describe("runAgentTurn — authenticated order lookup (lookup_my_orders)", () => {
+  const LOOKUP_ORDER_STUB: LlmToolDefinition = {
+    name: "lookup_order",
+    description: "",
+    input_schema: { type: "object", properties: {} },
+  };
+
+  function toolNames(callIndex = 0): string[] {
+    return llmMock.mock.calls[callIndex][0].tools.map((tool: { name: string }) => tool.name);
+  }
+
+  beforeEach(() => {
+    // The shared mock registry above is intentionally tiny; add the order
+    // lookup entry only for this block so the swap has something to swap.
+    MESSENGER_AGENT_TOOLS.push(LOOKUP_ORDER_STUB);
+  });
+
+  afterEach(() => {
+    const index = MESSENGER_AGENT_TOOLS.indexOf(LOOKUP_ORDER_STUB);
+    if (index >= 0) MESSENGER_AGENT_TOOLS.splice(index, 1);
+  });
+
+  it("offers lookup_my_orders INSTEAD of lookup_order once the customer is verified", async () => {
+    await runAgentTurn({ channel: webChannel(), messages: history(), now: NOW });
+
+    expect(toolNames()).toContain("lookup_my_orders");
+    expect(toolNames()).not.toContain("lookup_order");
+  });
+
+  it("keeps lookup_order (and never offers lookup_my_orders) with no verified customer", async () => {
+    await runAgentTurn({ channel: messengerChannel(), messages: history(), now: NOW });
+    expect(toolNames()).toContain("lookup_order");
+    expect(toolNames()).not.toContain("lookup_my_orders");
+
+    llmMock.mockClear();
+    await runAgentTurn({ channel: storefrontChannel(), messages: history(), now: NOW });
+    expect(toolNames()).toContain("lookup_order");
+    expect(toolNames()).not.toContain("lookup_my_orders");
+  });
+
+  it("hands the tools the VERIFIED customerGid alongside the threadId", async () => {
+    llmMock.mockResolvedValueOnce(toolTurn("lookup_my_orders", {}));
+    llmMock.mockResolvedValueOnce(textTurn("Heto po ang order ninyo."));
+
+    await runAgentTurn({ channel: webChannel(), messages: history(), now: NOW });
+
+    expect(executeToolMock).toHaveBeenCalledWith("lookup_my_orders", {}, NOW, {
+      threadId: "gid://shopify/Customer/1",
+      customerGid: "gid://shopify/Customer/1",
+    });
+  });
+
+  it("never invents a customerGid for an anonymous or psid identity", async () => {
+    llmMock.mockResolvedValueOnce(toolTurn("resolve_date", { base: "tomorrow" }));
+    llmMock.mockResolvedValueOnce(textTurn("Bukas po."));
+    await runAgentTurn({ channel: storefrontChannel(), messages: history(), now: NOW });
+    expect(executeToolMock).toHaveBeenCalledWith("resolve_date", { base: "tomorrow" }, NOW, {
+      threadId: "conv-1",
+    });
+
+    executeToolMock.mockClear();
+    llmMock.mockResolvedValueOnce(toolTurn("resolve_date", { base: "tomorrow" }));
+    llmMock.mockResolvedValueOnce(textTurn("Bukas po."));
+    await runAgentTurn({ channel: messengerChannel(), messages: history(), now: NOW });
+    expect(executeToolMock).toHaveBeenCalledWith("resolve_date", { base: "tomorrow" }, NOW, {
+      threadId: PSID,
+    });
+  });
+
+  it("tells the authenticated prompt to call lookup_my_orders and never ask for an order number, zip, or email", async () => {
+    await runAgentTurn({ channel: webChannel(), messages: history(), now: NOW });
+
+    const system = llmMock.mock.calls[0][0].system as string;
+    expect(system).toContain("ORDER STATUS LOOKUP (lookup_my_orders");
+    expect(system).toContain("NEVER ask for an order number, a zip code, or an email address");
+    expect(system).not.toContain("ORDER STATUS LOOKUP (lookup_order");
+    // The hard redaction rule survives the branch, verbatim.
+    expect(system).toContain(
+      "NEVER reveal an address, phone number, or payment details, even if asked.",
+    );
+    // Prompt-cache split still holds: the volatile date stays OUT of `system`.
+    expect(system).not.toContain("Current date and time in Asia/Manila");
+    expect(llmMock.mock.calls[0][0].systemContext).toContain("Current date and time in Asia/Manila");
+  });
+
+  it("keeps the order-number+zip prompt on a channel with no verified customer", async () => {
+    await runAgentTurn({ channel: messengerChannel(), messages: history(), now: NOW });
+
+    const system = llmMock.mock.calls[0][0].system as string;
+    expect(system).toContain("ORDER STATUS LOOKUP (lookup_order");
+    expect(system).not.toContain("lookup_my_orders");
   });
 });

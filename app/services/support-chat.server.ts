@@ -138,6 +138,18 @@ export async function completeSupportChatJob(
   ]);
 }
 
+// Close a job that can never produce a reply — the history handed to the LLM
+// did not end on a customer turn (interleaved turns / a retry after the
+// assistant row already landed). Status "done" with ZERO blocks so the polling
+// extension stops immediately and renders nothing, and deliberately NO assistant
+// message row: the turn never happened, kaya wala dapat itong iiwan sa history.
+export async function skipSupportChatJob(jobId: string): Promise<void> {
+  await prisma.supportChatJob.update({
+    where: { id: jobId },
+    data: { status: "done", blocksJson: "[]", error: null },
+  });
+}
+
 export async function failSupportChatJob(jobId: string, error: string): Promise<void> {
   await prisma.supportChatJob.update({
     where: { id: jobId },
