@@ -81,6 +81,79 @@ Vitest is configured standalone (`vitest.config.ts`) — Node environment by def
 - **`SHOPIFY_STOREFRONT_ACCESS_TOKEN` — manual one-time setup.** Required by `apps.schedule-rules.products.ts`. Configure it in **both** local `.env` and the Cloud Run secret (same pattern as `SHOPIFY_API_SECRET`). If unset, that route returns `502` — it does not fall back to the Admin API. Full steps in [`cloud-run-neon.md` §6](./cloud-run-neon.md).
 - **API version pin.** `shopify.app.production.toml` (PROD) pins `2026-04`; verify `shopify.app.toml` (DEV) separately, it has drifted before.
 
+### Where this app actually lives — NOT the Partner Dashboard
+
+The app is managed in the **Dev Dashboard**, and the merchant has **no Partner
+organization at all**:
+
+```
+https://dev.shopify.com/dashboard/163673913/apps/349939269633
+   org 163673913 · app 349939269633 · client_id a9127e5f8228762411a021805a397069
+```
+
+Visiting `partners.shopify.com` shows *"How would you like to get started as a
+partner?"* and asks you to create or join an organization — there is nothing
+there to find. Large parts of shopify.dev still say *"Go to your Partner
+Dashboard"*; **those steps do not apply to this app.** Cost us a long search on
+2026-08-22. Always give the full `dev.shopify.com/dashboard/...` URL rather than
+describing a navigation path.
+
+### `[sidekick] extensions_summary` is required for every release
+
+While the `delivery-sidekick-*` extensions exist, a release is **rejected**
+without a `[sidekick]` section:
+
+```
+Version couldn't be created.
+  • An extensions_summary is required when sidekick-eligible extensions are present.
+```
+
+It must be present in **whichever config you are deploying**. On 2026-08-22
+`npm run deploy:prod` failed because only `shopify.app.toml` (DEV) carried the
+block and `shopify.app.production.toml` had never been given a copy. Keep the two
+byte-identical; if you edit one, edit the other.
+
+### `network_access` needs no dashboard approval here
+
+The customer-account `support-chat` extension declares
+`network_access = true` in its `shopify.extension.toml`, and `npm run deploy:prod`
+released it with **no approval step and no dashboard toggle**. The docs'
+["Request network access" flow](https://shopify.dev/docs/apps/build/customer-accounts/capabilities)
+routes through the Partner Dashboard, which this app does not have. Do not go
+hunting for that toggle — declare the capability in the extension TOML and deploy.
+
+### Migrations apply themselves on deploy
+
+`Dockerfile` ends with `CMD ["npm", "run", "docker-start"]` →
+`npm run setup && npm run start` → `prisma generate && prisma migrate deploy`.
+So a Cloud Run deploy applies every pending migration against PROD Neon **before
+the container serves traffic**. Two consequences:
+
+- You do **not** run migrations by hand for PROD — write the SQL, commit it, deploy.
+- A broken migration means the container never becomes ready, so Cloud Run keeps
+  the previous revision serving. Failure is safe, but the deploy will look "done"
+  while traffic is still on the old revision — **always confirm the traffic split**,
+  not just the revision list:
+
+```bash
+gcloud run services describe delivery-scheduler --region us-central1 --format="yaml(status.traffic)"
+```
+
+Note the `mdclean` tagged revision (`delivery-scheduler-00102-b5f`) appears in that
+output with its own URL and **0%** traffic. It is not the serving revision — read
+the entry with `latestRevision: true` and `percent: 100`.
+
+Rollback is one command:
+
+```bash
+gcloud run services update-traffic delivery-scheduler \
+  --region us-central1 --to-revisions <previous-revision>=100
+```
+
+A single `Error obtaining session table: PrismaClientInitializationError` right
+after a new revision starts is the expected Neon cold start, not a failure — it
+should not repeat.
+
 ## Auth mechanisms (dev-workflow angle)
 
 For local dev, know which auth each route surface expects so you mock/fake the right one. The **authoritative** per-route breakdown lives in [api.md](./api.md#four-route-surfaces-four-different-auth-mechanisms) — this is only the dev-workflow summary:
