@@ -1,0 +1,15 @@
+api_version = "2026-04"
+uid = "62c025f1-0dc0-48eb-9a97-cef244c97f40"
+
+[[extensions]]
+name = "Support chat"
+handle = "support-chat"
+type = "ui_extension"
+
+[[extensions.targeting]]
+module = "./src/SupportChat.jsx"
+target = "customer-account.page.render"
+
+[extensions.capabilities]
+api_access = true
+network_access = true

@@ -50,14 +50,16 @@ async function fetchAccessToken(): Promise<string | null> {
   return payload.access_token ?? null;
 }
 
-// Shared Cloud Tasks POST core — ang echo task at ang delayed follow-up task
-// (2026-08-03) ay parehong dumadaan dito; ang scheduleTime lang ang pinagkaiba.
+// Shared Cloud Tasks POST core — ang echo task, ang delayed follow-up task
+// (2026-08-03), at ngayon ang support-chat job task (agent-core phase 2) ay
+// parehong dumadaan dito; ang workerUrl/scheduleTime lang ang pinagkaiba.
 async function postMessengerTask(
   rawPayload: string,
   scheduleTime?: string,
+  workerUrlOverride?: string,
 ): Promise<EnqueueMessengerEchoTaskResult> {
   const queuePath = process.env.MESSENGER_TASKS_QUEUE_PATH?.trim();
-  const workerUrl = process.env.MESSENGER_WORKER_URL?.trim();
+  const workerUrl = workerUrlOverride ?? process.env.MESSENGER_WORKER_URL?.trim();
   const workerSecret = process.env.MESSENGER_WORKER_SECRET?.trim();
   if (!queuePath || !workerUrl || !workerSecret) {
     return { ok: false, error: MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE, notConfigured: true };
@@ -141,4 +143,64 @@ export async function enqueueMessengerFollowUpTask({
 }: EnqueueMessengerFollowUpTaskInput): Promise<EnqueueMessengerEchoTaskResult> {
   const scheduleTime = new Date(Date.now() + delaySeconds * 1000).toISOString();
   return postMessengerTask(JSON.stringify({ followUp: { psid, orderKey } }), scheduleTime);
+}
+
+// Support chat (customer-account extension backend, agent-core phase 2):
+// same Cloud Tasks core as the Messenger echo task, but its own worker route
+// (webhooks/support-chat/worker) since it runs the agent-core loop against a
+// SupportChatJob row, not a MessengerMessage row.
+//
+// Worker URL resolution: prefer SUPPORT_CHAT_WORKER_URL when set; otherwise
+// derive it from MESSENGER_WORKER_URL by swapping the path, so a single env
+// var (already required for Messenger) is enough to stand this up. If
+// neither resolves to a usable worker URL, the queue is not configured and
+// the caller (the POST route) processes the turn inline instead — same
+// local-dev fallback the Messenger webhook already relies on.
+function resolveSupportChatWorkerUrl(): string | undefined {
+  const explicit = process.env.SUPPORT_CHAT_WORKER_URL?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const messengerWorkerUrl = process.env.MESSENGER_WORKER_URL?.trim();
+  if (!messengerWorkerUrl) {
+    return undefined;
+  }
+  try {
+    const url = new URL(messengerWorkerUrl);
+    const swappedPathname = url.pathname.replace(
+      /\/webhooks\/messenger\/worker\/?$/,
+      "/webhooks/support-chat/worker",
+    );
+    if (swappedPathname === url.pathname) {
+      // Regex didn't match — path-swapping would silently hand back the
+      // Messenger worker URL unchanged, so a support-chat task would POST to
+      // the Messenger worker, which finds no mid, logs, and returns 200. The
+      // job then never runs and the customer polls until timeout with no
+      // error anywhere. Treat this as not-configured instead so the route's
+      // inline-processing fallback kicks in.
+      console.error(
+        "[support-chat] resolveSupportChatWorkerUrl: MESSENGER_WORKER_URL path did not match the expected " +
+          "/webhooks/messenger/worker suffix, so no support-chat worker URL could be derived. Set SUPPORT_CHAT_WORKER_URL explicitly.",
+      );
+      return undefined;
+    }
+    url.pathname = swappedPathname;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+export interface EnqueueSupportChatTaskInput {
+  jobId: string;
+}
+
+export async function enqueueSupportChatTask({
+  jobId,
+}: EnqueueSupportChatTaskInput): Promise<EnqueueMessengerEchoTaskResult> {
+  const workerUrl = resolveSupportChatWorkerUrl();
+  if (!workerUrl) {
+    return { ok: false, error: MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE, notConfigured: true };
+  }
+  return postMessengerTask(JSON.stringify({ jobId }), undefined, workerUrl);
 }

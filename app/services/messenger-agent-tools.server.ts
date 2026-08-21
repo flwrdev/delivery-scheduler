@@ -23,8 +23,14 @@ import { checkDeliveryCoverage } from "./messenger-coverage.server";
 import type { CheckDeliveryCoverageInput } from "./messenger-coverage.server";
 import { getBestSellers, getVariantLive, searchShopProducts } from "./messenger-products.server";
 import type { SearchShopProductsInput } from "./messenger-products.server";
-import { lookupOrdersByEmail, updateMessengerOrderState } from "./messenger-orders.server";
+import { updateMessengerOrderState } from "./messenger-orders.server";
 import type { UpdateOrderStateInput } from "./messenger-orders.server";
+import {
+  clearLookupFailures,
+  isLookupLocked,
+  lookupOrderByNameAndZip,
+  recordLookupFailure,
+} from "./order-lookup.server";
 import type { LlmToolDefinition } from "./messenger-llm.server";
 import { unauthenticated } from "../shopify.server";
 
@@ -504,20 +510,26 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
   {
     name: "lookup_order",
     description:
-      "Look up a customer's EXISTING Shopify orders by the email they used at checkout (works for " +
-      "website orders too, not just Messenger orders). Ask for their email first; the email itself is " +
-      "the verification. Returns up to 3 most recent orders: order number, payment status, fulfillment " +
-      "status, and the delivery date/time. NEVER reveal addresses, phone numbers, or payment details " +
-      "from an order — status and delivery schedule only.",
+      "Look up a customer's EXISTING Shopify order by their ORDER NUMBER + the ZIP CODE used at " +
+      "checkout (works for website orders too, not just Messenger orders). Both are on the order " +
+      "confirmation email — ask for both before calling. Returns order number, payment status, " +
+      "fulfillment status, delivery date/time, and a tracking link/number if the order has shipped. " +
+      "NEVER reveal addresses, phone numbers, or payment details from an order — status, delivery " +
+      "schedule, and tracking only.",
     input_schema: {
       type: "object",
       properties: {
-        email: {
+        order_number: {
           type: "string",
-          description: "The email address the customer says they used at checkout.",
+          description:
+            "The order number from their confirmation email (e.g. '#1234' or '1234' — either form is fine).",
+        },
+        zip: {
+          type: "string",
+          description: "The zip/postal code they used at checkout, from the same confirmation email.",
         },
       },
-      required: ["email"],
+      required: ["order_number", "zip"],
     },
   },
 ];
@@ -525,6 +537,13 @@ export const MESSENGER_AGENT_TOOLS: LlmToolDefinition[] = [
 export interface AgentToolContext {
   /** The Messenger thread the turn belongs to (needed by stateful tools). */
   psid?: string;
+  /**
+   * Channel-agnostic conversation key (extensions phase 1): psid on Messenger,
+   * customer GID or an anonymous conversation id on the web surfaces. Added
+   * alongside `psid` instead of replacing it so the live Messenger caller keeps
+   * working byte-for-byte; `threadId` wins when both are present.
+   */
+  threadId?: string;
 }
 
 /** Dispatch a tool call from the orchestrator loop. Never throws. */
@@ -580,17 +599,53 @@ export async function executeAgentTool(
       return await getVariantLive(raw.variant_id ?? "");
     }
     if (name === "lookup_order") {
-      const raw = (input ?? {}) as { email?: string };
-      return await lookupOrdersByEmail(raw.email ?? "");
+      const raw = (input ?? {}) as { order_number?: string; zip?: string };
+      // Channel-agnostic key: psid on Messenger, customer GID or an anonymous
+      // conversation id on the web surfaces (agent-core defaults toolContext
+      // to { threadId }, the live Messenger loop still passes { psid }).
+      // Resolved ONCE and used for both the lockout check and the lookup
+      // itself so the guard actually applies on every channel, not just
+      // Messenger.
+      const key = context.threadId ?? context.psid;
+      if (!key) {
+        return { ok: false, error: "lookup_order needs a conversation context." };
+      }
+      if (await isLookupLocked(key)) {
+        return {
+          ok: false,
+          error:
+            "Too many failed lookup attempts. Please try again later, or a human agent will follow up in this thread.",
+        };
+      }
+      const orderNumber = raw.order_number ?? "";
+      const zip = raw.zip ?? "";
+      const result = await lookupOrderByNameAndZip({ orderName: orderNumber, zip });
+      // Only count REAL guesses toward the lockout — not a call missing one
+      // of the two fields (that is a prompting issue, not a guessing
+      // attempt), and not an `ambiguous` miss (the search page came back
+      // full, so a real match could still exist just past the page boundary
+      // — that is an inconclusive search, not proof of a wrong guess).
+      if (orderNumber.trim() && zip.trim()) {
+        if (result.ok) {
+          await clearLookupFailures(key);
+        } else if (!result.ambiguous) {
+          await recordLookupFailure(key);
+        }
+      }
+      return result;
     }
     if (name === "update_order") {
-      if (!context.psid) {
+      // Channel-agnostic key: the shared agent core passes threadId, the live
+      // Messenger loop still passes psid. Same value on Messenger, so the
+      // stored order state is untouched by this widening.
+      const key = context.threadId ?? context.psid;
+      if (!key) {
         return { ok: false, error: "update_order needs a conversation context." };
       }
       // Validators are injected here so messenger-orders has no import cycle
       // with this module (CODE validates; the LLM only relays language).
       return await updateMessengerOrderState(
-        context.psid,
+        key,
         (input ?? {}) as UpdateOrderStateInput,
         {
           getVariant: getVariantLive,

@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { rulesMock, adminMock, updateOrderMock } = vi.hoisted(() => ({
+const { rulesMock, adminMock, updateOrderMock, prismaMock } = vi.hoisted(() => ({
   rulesMock: vi.fn(),
   adminMock: vi.fn(),
   updateOrderMock: vi.fn(),
+  prismaMock: {
+    messengerThread: { findUnique: vi.fn(), update: vi.fn() },
+    lookupAttempt: { findUnique: vi.fn(), upsert: vi.fn() },
+  },
 }));
 
 vi.mock("../app/services/schedule-rules.server", () => ({
@@ -12,10 +16,12 @@ vi.mock("../app/services/schedule-rules.server", () => ({
 vi.mock("../app/shopify.server", () => ({
   unauthenticated: { admin: adminMock },
 }));
-// Fully mocked: messenger-orders imports db.server (Prisma) and shopify.server.
+// Fully mocked: messenger-orders and order-lookup both import db.server
+// (Prisma) and shopify.server.
 vi.mock("../app/services/messenger-orders.server", () => ({
   updateMessengerOrderState: updateOrderMock,
 }));
+vi.mock("../app/db.server", () => ({ default: prismaMock }));
 
 import { DEFAULT_DELIVERY_SCHEDULE_RULES } from "../app/lib/delivery-availability";
 import {
@@ -75,6 +81,77 @@ describe("executeAgentTool — update_order dispatch (phase 6)", () => {
     };
     expect(result.ok).toBe(false);
     expect(updateOrderMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeAgentTool — lookup_order dispatch (channel-agnostic lockout wiring)", () => {
+  const graphqlMock = vi.fn();
+  const THREAD_ID = "gid://shopify/Customer/778899";
+
+  beforeEach(() => {
+    vi.stubEnv("MESSENGER_SHOP", "hsrwva-nr.myshopify.com");
+    adminMock.mockReset();
+    adminMock.mockResolvedValue({ admin: { graphql: graphqlMock } });
+    graphqlMock.mockReset();
+    prismaMock.lookupAttempt.findUnique.mockReset();
+    prismaMock.lookupAttempt.upsert.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("fails designed when neither threadId nor psid is present — the guard is never silently skipped", async () => {
+    const result = (await executeAgentTool(
+      "lookup_order",
+      { order_number: "3979", zip: "1300" },
+      NOW_MANILA_NOON_SAT,
+      {},
+    )) as { ok: boolean; error?: string };
+    expect(result.ok).toBe(false);
+    expect(adminMock).not.toHaveBeenCalled();
+    expect(prismaMock.lookupAttempt.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("MAJOR fix: the lockout applies on threadId (customer-account/storefront), not only psid", async () => {
+    prismaMock.lookupAttempt.findUnique.mockResolvedValueOnce({ lockedAt: new Date() });
+    const result = (await executeAgentTool(
+      "lookup_order",
+      { order_number: "3979", zip: "1300" },
+      NOW_MANILA_NOON_SAT,
+      { threadId: THREAD_ID },
+    )) as { ok: boolean; error?: string };
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Too many failed lookup attempts");
+    expect(prismaMock.lookupAttempt.findUnique).toHaveBeenCalledWith({
+      where: { key: THREAD_ID },
+      select: { lockedAt: true },
+    });
+    // Locked out means the tool must not even reach Shopify.
+    expect(adminMock).not.toHaveBeenCalled();
+  });
+
+  it("records a failure keyed by threadId (not MessengerThread/psid) when the web channel guesses wrong", async () => {
+    prismaMock.lookupAttempt.findUnique.mockResolvedValueOnce({ lockedAt: null }); // isLookupLocked
+    prismaMock.lookupAttempt.findUnique.mockResolvedValueOnce({ failures: 0, lockedAt: null }); // recordLookupFailure read
+    prismaMock.lookupAttempt.upsert.mockResolvedValueOnce({});
+    graphqlMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { orders: { nodes: [] } } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const result = (await executeAgentTool(
+      "lookup_order",
+      { order_number: "0000", zip: "1300" },
+      NOW_MANILA_NOON_SAT,
+      { threadId: THREAD_ID },
+    )) as { ok: boolean };
+    expect(result.ok).toBe(false);
+    expect(prismaMock.messengerThread.update).not.toHaveBeenCalled();
+    expect(prismaMock.lookupAttempt.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { key: THREAD_ID } }),
+    );
   });
 });
 

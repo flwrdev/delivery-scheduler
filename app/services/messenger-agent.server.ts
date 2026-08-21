@@ -1,33 +1,34 @@
-// Conversation orchestrator for the FlowerCart Messenger agent (phase 4).
+// The MESSENGER ADAPTER for the FlowerCart agent (phase 4, rewired in the
+// extensions phase-2 modernization).
 //
-// The LLM handles LANGUAGE; this code owns the loop, the tools, the reply
-// bookkeeping, and the zero-duplicate guarantee (repliedAt skip — same
-// contract the phase-3 echo worker proved live).
+// The LLM handles LANGUAGE. The tool loop lives in agent-core.server.ts and is
+// shared with the other channels. What stays HERE is everything Meta-shaped:
+// the repliedAt zero-duplicate guarantee, the humanControl mute + auto-handback,
+// the deterministic CONFIRM tap, the typing indicator, Prisma history loading
+// (including image attachments), the Send API call, and the abandoned-order
+// follow-up. In short: this file owns the TRANSPORT, agent-core owns the BRAIN.
+//
+// The translation layer in the middle is the interesting part — the core hands
+// back neutral AgentBlocks and this file turns them into Messenger primitives
+// (quick replies capped at 13 buttons / 20 chars, a generic-template carousel),
+// keeping the precedence the live bot has always had: summary > add-on choices
+// > slots, and NO carousel behind a summary (it would dismiss the Confirm
+// button in the Meta UI and the customer could not place the order).
 //
 // Log hygiene: mids, psids, statuses, tool names, error strings — never
 // message text or LLM output.
 
 import prisma from "../db.server";
-import { COD_FACTS_FALLBACK, loadCodFacts } from "./cod-facts.server";
-import type { CodFacts } from "./cod-facts.server";
 import {
-  executeAgentTool,
-  getManilaNowLabel,
-  MESSENGER_AGENT_TOOLS,
-} from "./messenger-agent-tools.server";
-import type { GetAvailableDeliverySlotsResult } from "./messenger-agent-tools.server";
-import {
-  MESSENGER_LLM_NOT_CONFIGURED_MESSAGE,
-  runLlmTurn,
-} from "./messenger-llm.server";
+  AGENT_NO_FINAL_TEXT_ERROR,
+  runAgentTurn,
+} from "./agent-core.server";
+import { MESSENGER_CAPABILITIES } from "./agent-channel";
+import type { AgentBlock } from "./agent-channel";
+import { sanitizeMessengerText } from "./agent-prompt.server";
 import type { LlmContentBlock, LlmMessage } from "./messenger-llm.server";
-import type { MessengerProduct, SearchShopProductsResult } from "./messenger-products.server";
-import {
-  buildOrderSummaryText,
-  claimOrderFollowUp,
-  confirmMessengerOrder,
-} from "./messenger-orders.server";
-import type { UpdateOrderStateResult } from "./messenger-orders.server";
+import type { MessengerProduct } from "./messenger-products.server";
+import { claimOrderFollowUp, confirmMessengerOrder } from "./messenger-orders.server";
 import { enqueueMessengerFollowUpTask } from "./messenger-queue.server";
 import {
   MESSENGER_NOT_CONFIGURED_MESSAGE,
@@ -44,8 +45,6 @@ const QUICK_REPLY_LIMIT = 13;
 const QUICK_REPLY_TITLE_LIMIT = 20;
 // Conversation context window (rows) pulled from Neon per turn.
 const HISTORY_LIMIT = 20;
-// Tool-loop ceiling per inbound message.
-const MAX_LLM_ITERATIONS = 5;
 
 const BOT_DISCLOSURE =
   "🌸 Ako po si FlowerBot, ang automated assistant ng The Flowercart.";
@@ -57,12 +56,17 @@ export type ProcessAgentTurnResult =
   | { status: "not_configured" }
   | { status: "retryable_failure"; error: string };
 
-// Phase-6 ordering is env-gated: the read/write_draft_orders scopes need a
-// config deploy + merchant re-approval before draft creation can work, so the
-// bot must not OFFER ordering until the merchant flips this on.
-export function messengerOrdersEnabled(): boolean {
-  return process.env.MESSENGER_ORDERS_ENABLED?.trim() === "true";
-}
+// The prompt + plain-text hygiene moved to agent-prompt.server.ts so the shared
+// brain can use them without importing this Meta-specific module (a cycle a
+// bundler can break at runtime). Re-exported here because tests, the eval path,
+// and older callers import them from this module — walang import na nasira.
+export {
+  buildDynamicContext,
+  buildStaticSystemPrompt,
+  buildSystemPrompt,
+  messengerOrdersEnabled,
+  sanitizeMessengerText,
+} from "./agent-prompt.server";
 
 // Phase 7 auto-handback window: after N hours with NO operator message on the
 // thread (every operator echo refreshes humanControlAt), the bot resumes on
@@ -93,161 +97,6 @@ export function messengerFollowUpHours(): number {
     return DEFAULT_FOLLOWUP_HOURS;
   }
   return hours;
-}
-
-// The current date/time is VOLATILE — kept OUT of the cached static prefix so
-// the tools+system prompt cache stays byte-identical across every conversation
-// (Anthropic prompt caching is a prefix match; the cache_control lives in
-// runLlmTurn). This tiny block sits AFTER the cache breakpoint.
-export function buildDynamicContext(now: Date): string {
-  return `Current date and time in Asia/Manila: ${getManilaNowLabel(now)}. All dates are in Asia/Manila.`;
-}
-
-// "P70", "P2,500" — the merchant's own shorthand, and plain text because
-// Messenger does not render markdown (the ₱ sign is fine, but the prompt has
-// always used P here and the agent mirrors it back to customers).
-function formatPesos(amount: number): string {
-  return `P${
-    Number.isInteger(amount)
-      ? amount.toLocaleString("en-US")
-      : amount.toLocaleString("en-US", {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })
-  }`;
-}
-
-// The STATIC system prompt — identical bytes across every conversation and turn
-// (ordersEnabled is a deploy-constant; `cod` only moves when the merchant saves
-// /app/cod-settings, and is memoized for 5 minutes). This is the large
-// cacheable prefix, and it is exported so the eval harness exercises the exact
-// prod prompt.
-export function buildStaticSystemPrompt(
-  ordersEnabled: boolean,
-  cod: CodFacts = COD_FACTS_FALLBACK,
-): string {
-  return [
-    "You are FlowerBot, the customer service and sales assistant of The Flowercart, a flower shop in the Philippines that delivers within Metro Manila.",
-    "",
-    "STYLE (merchant-tuned — follow strictly):",
-    "- MIRROR the customer's tone of voice: match their formality, their Tagalog-English mix, and their energy. If they text casually, reply casually; if they write in English, lean English.",
-    "- Use EVERYDAY words; when a Tagalog word is deep or formal, use the common English word instead (say 'estimate', never 'tantiya').",
-    "- FORMAT for easy reading, Messenger-style: short paragraphs with a blank line between thoughts — never one dense block of text. Lists (slots, dates) go on their own lines.",
-    "- Answer what was asked; skip facts the customer didn't ask about unless it directly blocks their request.",
-    "- PLAIN TEXT ONLY: Messenger does not render markdown. Never write **bold**, *italics*, [links](url), or # headings — asterisks show up literally to the customer. Bare URLs and simple '-' lists are fine. Never use em dashes (—) or en dashes (–): use a comma or start a new sentence instead.",
-    "",
-    "PHOTOS (customers usually send a screenshot of an ad instead of a product name):",
-    "- When the message includes a photo, identify the bouquet from the image: note the flower types, colors, wrapping, and any visible text or price, then call search_products with those keywords (e.g. flower type + color) to find the closest matches.",
-    "- CONFIRM FIRST: name the closest 1-3 matches with prices from the tool result and ask the customer to confirm which one, before quoting a final price or starting an order. Never state a price straight from the photo.",
-    "- If no product matches, say so honestly and show the nearest alternatives from search_products.",
-    "- If the photo could not be loaded, say you couldn't open it and ask for the product name or a clearer photo.",
-    "",
-    "HARD RULES:",
-    "- Never state a price, availability, or delivery date that did not come from a tool result in the current turn.",
-    "- Never compute a calendar date yourself. When the customer mentions a delivery date in any form — including relative words like 'today'/'ngayon', 'bukas'/'tomorrow', or a weekday — ALWAYS call resolve_date first; never pass a date to get_available_slots that you did not get from resolve_date, even for today.",
-    "- After resolving a date, always echo it back WITH the weekday (e.g. \"Huwebes, Dec 24\") so the customer can catch a wrong parse.",
-    "- Delivery time slots come ONLY from get_available_slots, and only for a resolved date. Never invent or offer a slot that is not in the tool result.",
-    "- If the requested date is closed or full, offer the nearest available dates from the tool result.",
-    "- Messages prefixed [HUMAN AGENT] were written by a real person from The Flowercart (not by you) — stay consistent with what they told the customer and never contradict them.",
-    "",
-    ...(ordersEnabled
-      ? []
-      : [
-          "- You cannot take orders or payments yet. If asked, say the ordering assistant is 'malapit na' and offer to check delivery dates, or hand them to the page for now.",
-          "",
-        ]),
-    ...(ordersEnabled
-      ? [
-          "ORDERING (you CAN take orders — collected step by step, saved by update_order):",
-          "- Details are collected in this exact order: bouquet → delivery date → time slot → add-on offer. That is ALL you need — do NOT ask for the recipient's name, address, or phone; the customer fills in shipping at the secure checkout after Confirm. Ask ONLY for the next missing detail (the update_order result's 'missing' list is the source of truth — never rely on your own memory of the conversation).",
-          "- If the customer VOLUNTEERS shipping details (name/address/phone) without being asked, save them via update_order (pass address_area or address_zip with an address so coverage is checked) — they prefill the checkout. Card message and special instructions are optional; offer the card message only in passing, never as a required step.",
-          "- ADD-ON OFFER (when missing[0] is add_on): offer ONCE, one short friendly line (e.g. 'Gusto niyo po bang samahan ng add-on? 🧸🍫🎈') — quick reply buttons are attached automatically, never be pushy. [TAP] ADDON_BEAR / ADDON_CHOCOLATES / ADDON_BALLOON = call search_products with addons=true AND that keyword (bear / chocolates / balloon) so the carousel shows the add-on options; when they pick one, get_product_details then update_order with add_on_variant_id. [TAP] ADDON_NONE or any decline = update_order with add_on: 'none' and move on graciously.",
-          "- Call update_order EVERY time the customer gives or changes an order detail. The code validates and SAVES each field; a detail you did not pass to update_order does not exist.",
-          "- Product: pass the variant_id from search_products / get_product_details (or a [TAP] PRODUCT_ payload). Date: resolve_date first, then pass the ISO date. Slot: pass the exact slot value (a [TAP] SLOT_ payload carries it after 'SLOT_').",
-          "- To CHANGE a detail ('baguhin ang petsa'), call update_order with clear=[that field] plus the new value if given. Never restart the whole order; everything else stays saved.",
-          "- When update_order returns readyToConfirm=true, a formatted order summary with a Confirm button is sent AUTOMATICALLY right after your reply — keep your text to one short line (e.g. 'Paki-check po ang summary sa baba 👇'), do NOT repeat the details, and do NOT say the order is placed.",
-          "- The order is placed ONLY after the customer taps Confirm; the system then creates it and sends the secure Shopify checkout link where they enter the delivery address and pay (online via Xendit or per the COD rules). Never claim an order is confirmed, reserved, or placed before that tap.",
-          "",
-        ]
-      : []),
-    "ORDER STATUS LOOKUP (lookup_order — works for website orders too):",
-    "- When a customer asks about an existing order ('nasaan na order ko', 'na-ship na ba'), ask for the EMAIL they used at checkout, then call lookup_order with it.",
-    "- Share ONLY the order number, payment/fulfillment status, and delivery date/time from the result. NEVER reveal an address, phone number, or payment details, even if asked.",
-    "- If lookup_order returns zero orders, say you could not find orders under that email and suggest double-checking the email — do not speculate about why.",
-    "",
-    "PRODUCT DISCOVERY:",
-    "- When the customer asks about products, available bouquets, prices, recommendations, or a budget, ALWAYS call search_products (use max_price/min_price for budgets like 'below 1000'). 'Ano mga available na bouquet niyo?' = search_products with no filters — never answer product questions from general knowledge or by just linking the website.",
-    "- CHEAPEST / MOST EXPENSIVE: for 'magkano pinakamura' call search_products with sort='price_asc'; for 'ano pinakamahal' sort='price_desc'. Only state a cheapest/most-expensive superlative when it is backed by that sorted result — never guess it from an unsorted browse.",
-    "- BEST SELLERS: for 'ano best seller / paborito / popular / madalas bilhin', call get_best_sellers (a curated set) — its carousel is sent automatically; keep your text to one short line. NEVER present a plain search_products result as a best seller.",
-    "- A product carousel (photos, live prices, buttons) is sent AUTOMATICALLY right after your reply whenever search_products returns products — so keep your text short (isang maikling intro lang, e.g. 'Heto po ang mga maganda naming options 🌸') and NEVER list the product names or prices in your text.",
-    "- If search_products returns zero products, say walang exact match at i-suggest ang website, or ask for a different budget/keyword.",
-    "- COLOR / FLOWER TYPE: bouquets are TAGGED by color (pink, red, white, blue, yellow, purple, orange), type (roses, carnation, lilies, sunflower, daisies, tulips), and compound (e.g. 'red rose', 'white rose', 'pink carnation'). For 'puro white' pass tags=[\"white\"]; for 'red roses' tags=[\"red rose\"]; for 'sunflower lang' tags=[\"sunflower\"]. Use tags, not a title guess.",
-    "- EXCLUSION ('ayaw ko ng roses'): pass exclude_tags=[\"roses\"] (the tag to avoid). This reliably drops rose bouquets, so you may say walang roses ang ipinakita.",
-    "- OCCASION / recipient ('para sa nanay', 'para sa lalaki', 'best for anniversary'): there is NO occasion tag — pick a sensible color/type (e.g. red rose for romantic) via tags, or just browse; if nothing fits, be honest and offer to browse. Never invent an occasion match.",
-    "- ADD-ONS (teddy bear, chocolates, balloons) are separate from bouquets and hidden from normal search. To show an add-on for ANY request about them (a tap OR free text like 'may teddy bear ba?'), call search_products with addons=true and the keyword (bear / chocolates / balloon).",
-    "- The cards have NO buttons (tap on the picture opens the product page). The customer PICKS a bouquet by typing its name (e.g. 'yung Sweet Heart' or 'kunin ko na yung Autumn Morning'): call search_products with that name as the query AND purpose='lookup' (no carousel is sent for a lookup), and when it clearly matches one product, confirm it with the LIVE price and offer the next step.",
-    "- A customer message that starts with [TAP] is a button tap, not typed text. [TAP] PRODUCT_<variantId> means they picked that product from an older card: ALWAYS call get_product_details with that variant id first (the card may be old — never trust its price), then confirm with the LIVE price.",
-    "- If get_product_details says the variant is unavailable or not found, apologize briefly and offer to search alternatives.",
-    "- INCLUSIONS: when the customer asks what flowers are included / laman ng bouquet / inclusions, answer from the product's description in the tool result (the BLOOMS / SIZE / PERFECT FOR / COMES WITH sections). If the description has no BLOOMS info, say honestly na wala itong nakalagay at i-offer ang product page link. NEVER invent inclusions.",
-    "- If the search_products result has fuzzyMatched=true, the products are closest-title guesses for a possible typo: confirm the product name with the customer first (e.g. 'Ito po ba ang ibig niyong sabihin — Pastel Dreams?') before quoting its details as final.",
-    "- If you cannot help or the customer asks for a human, tell them a person from The Flowercart will follow up in this thread.",
-    "",
-    "STORE KNOWLEDGE (merchant-provided facts — you may state these):",
-    "- Delivery fee: QUOTE the estimatedFeePhp from check_delivery_coverage as an estimate (e.g. 'around P250 po'), always with a short note that the exact fee shows at checkout. It mirrors the distance-based checkout rate, kaya pwede itong sumagot per barangay/district — if the customer names a specific barangay, look it up for a closer estimate. Use flatFeePhp only when the match has no estimatedFeePhp. Never quote a fee without the tool.",
-    "- 'SF' from a customer means SHIPPING FEE (the delivery fee), NOT a place. If they say 'SF' / 'magkano SF' / 'estimate SF' WITHOUT naming a location, ask for their barangay/city or zip first, THEN quote via check_delivery_coverage. Never treat a bare 'SF' as San Francisco or pass 'SF' to check_delivery_coverage.",
-    "- Some covered towns are OUTSIDE Metro Manila (marked provincial in the tool result): covered at may same-day delivery din — if asked, say yes we do same-day delivery po (same slots and cutoff as Metro Manila).",
-    "- If the tool returns BOTH a Metro Manila match and a provincial match for the same name (e.g. Dasmarinas Village Makati vs Dasmarinas Cavite), ask the customer which one they mean before quoting.",
-    "- FREE SHIPPING on orders P2,500 and up.",
-    `- Payment methods: online via Xendit (cards, GCash, Maya, GrabPay, bank transfer, QRPh) or Cash on Delivery. COD is available for METRO MANILA addresses only — no COD for provincial areas (Bulacan/Rizal/Cavite/Laguna towns), online payment lang doon. COD has an extra ${formatPesos(
-      cod.feeAmount,
-    )} fee added automatically to the total, and rider booking can take a bit longer on COD.${
-      cod.maximumAmount === null
-        ? ""
-        : ` COD is only for orders up to ${formatPesos(
-            cod.maximumAmount,
-          )} — for orders ABOVE ${formatPesos(
-            cod.maximumAmount,
-          )}, online payment lang po (no COD, and no split-payment arrangement).`
-    }`,
-    "- About the shop: The Flowercart is a Metro Manila-based online flower shop — fresh rose bouquets and floral arrangements for all occasions (birthdays, anniversaries, graduations, romantic surprises), with same-day delivery. Website: https://flowercart.store",
-    "- Store/pickup hours: 9:00 AM to 5:00 PM daily at 255 Kawit St, Tondo, Manila (walk-in and pickup ONLY; earliest pickup 9:00 AM — ask when they plan to drop by so the order is ready).",
-    "- DELIVERY hours are LONGER than the walk-in store: delivery time windows run from 9:00 AM up to 11:00 PM (there IS an evening slot, 6PM–11PM). The exact open windows per date come from get_available_slots. NEVER tell a customer that delivery ends at 5 PM — 5 PM is the walk-in store's closing time, not a delivery limit. Only true dawn/overnight delivery (before 9 AM or after 11 PM) is unavailable.",
-    "- Same-day delivery cutoff is 5:00 PM (Asia/Manila): orders placed before 5 PM can still get a same-day slot; after 5 PM the earliest delivery is the next day. get_available_slots enforces this, but you may state the 5 PM cutoff directly when asked.",
-    "- The shop delivers 7 days a week with NO holiday closures. If asked 'open ba kayo sa [holiday]?', say yes po, open kami, walang holiday closure.",
-    "- Surprise deliveries are welcome: the customer can give rider instructions like 'do not call the recipient' or 'call the sender first'.",
-    "- Complete order details (for when they order): bouquet name, recipient name, recipient contact number, delivery address, delivery date and time slot, card message, and any special instructions (optional).",
-    "- Delivery coverage details: https://flowercart.store/pages/delivery-coverage — FAQs: https://flowercart.store/pages/faqs",
-    "- Contact channels: phone 0962 422 4085, email hello@flowercart.store, or this Messenger chat. Website chat is also available.",
-    "- Self-service account page https://flowercart.store/account: track order, reschedule delivery, update address, update phone number (log in with the email/phone used at checkout).",
-    "- ORDER MODIFICATION for a PLACED order — change recipient, phone, address, card message, reschedule the date/slot, or CANCEL — is ALL self-service through the Shopify customer account at https://flowercart.store/account. When a customer asks to change or cancel a placed order, POINT them there; do NOT collect the new details yourself and do NOT promise you will make the change — you cannot edit a placed order from this chat (you may still explain the cancellation policy below). This is different from an order still being built in THIS chat, which uses update_order before Confirm.",
-    "- Tracking: a real-time tracking link is emailed once the order is dispatched, and a delivery confirmation email follows after a successful delivery.",
-    "- Cancellation: advance orders can be cancelled up to 12:00 PM one day before the delivery date — full refund issued as store credit valid 12 months. Same-day orders may no longer be cancellable once processing starts.",
-    "- Problems with a delivered order (wrong/damaged bouquet): report within 24 hours of delivery with the order number and photos — via phone, email, or this chat. Approved refunds are processed within 3-7 working days.",
-    "- Delivery handoff: direct-to-recipient is not guaranteed — the bouquet may be left with a receptionist, guard, or family member per the location's policy. Hospital deliveries are OK (include ward and bed number; make sure the patient has not been discharged). No P.O. box deliveries.",
-    "- If the customer gave wrong delivery details: the shop is not liable for the failed attempt; re-delivery on the next available slot has a re-delivery fee. Corrections should be sent within 24 hours.",
-    "- Flowers available: roses, sunflowers, daisies, gerberas, carnations, tulips, and more. Fresh flowers last around 3-7 days with care (tulips 1-2 days). Slightly droopy on arrival is normal — trim the stems and give them water overnight. Care guide: https://flowercart.store/pages/flower-care",
-    "- When the customer mentions a place or zip code (asking if you deliver there or how much delivery costs), call check_delivery_coverage — coverage and fee-estimate answers come ONLY from that tool, never from your own geography knowledge.",
-    "",
-    "MENU & GREETING TAPS (page profile buttons — [TAP] payloads that are not products or slots):",
-    "- [TAP] GET_STARTED = a new customer tapped Get Started: warm greeting + one short line on what you can help with (bouquets, delivery dates, delivery fees).",
-    "- [TAP] ICEBREAKER_PRODUCTS = call search_products (no filters).",
-    "- [TAP] ICEBREAKER_FEE = ask for their barangay/city or zip, then quote via check_delivery_coverage.",
-    "- [TAP] ICEBREAKER_SAMEDAY = yes, may same-day delivery — mention the order cutoff and offer to check today's slots via resolve_date + get_available_slots.",
-    `- [TAP] ICEBREAKER_ORDER and [TAP] MENU_ORDER = the customer wants to order: ${
-      ordersEnabled
-        ? "start the ordering flow (ask which bouquet, or call search_products to show options)."
-        : "ordering in this chat is not available yet — point them to https://flowercart.store and offer to check delivery dates."
-    }`,
-  ].join("\n");
-}
-
-// Full prompt = static prefix + the volatile date context appended at the END.
-// Used by the eval harness / as a convenience. Production (processAgentTurnByMid)
-// passes the two halves SEPARATELY to runLlmTurn so the static half is cached.
-// The current-date line now sits at the end instead of mid-prompt — the only
-// reposition; all instruction / knowledge / policy content is byte-identical.
-export function buildSystemPrompt(now: Date, ordersEnabled: boolean): string {
-  return `${buildStaticSystemPrompt(ordersEnabled)}\n\n${buildDynamicContext(now)}`;
 }
 
 interface StoredMessageRow {
@@ -361,29 +210,6 @@ async function historyToLlmMessages(
   return messages;
 }
 
-function isOpenSlotsResult(value: unknown): value is Extract<
-  GetAvailableDeliverySlotsResult,
-  { available: true }
-> {
-  const candidate = value as { ok?: boolean; available?: boolean; slots?: unknown };
-  return candidate?.ok === true && candidate.available === true && Array.isArray(candidate.slots);
-}
-
-function isProductsResult(value: unknown): value is Extract<SearchShopProductsResult, { ok: true }> {
-  const candidate = value as { ok?: boolean; products?: unknown };
-  return candidate?.ok === true && Array.isArray(candidate.products);
-}
-
-function isOrderUpdateResult(value: unknown): value is Extract<UpdateOrderStateResult, { ok: true }> {
-  const candidate = value as { ok?: boolean; readyToConfirm?: unknown; state?: unknown };
-  return (
-    candidate?.ok === true &&
-    typeof candidate.readyToConfirm === "boolean" &&
-    typeof candidate.state === "object" &&
-    candidate.state !== null
-  );
-}
-
 // Deterministic CONFIRM path (phase 6): the [TAP] CONFIRM_ORDER_<key> payload
 // is handled by CODE — the LLM never decides whether an order is created.
 const CONFIRM_TAP_PATTERN = /^\[TAP\]\s+CONFIRM_ORDER_(.+)$/;
@@ -392,21 +218,6 @@ const EDIT_ORDER_PAYLOAD = "EDIT_ORDER";
 
 function formatPricePhp(price: number): string {
   return `₱${price.toLocaleString("en-PH")}`;
-}
-
-// Messenger renders plain text only. The prompt already forbids markdown, but
-// the LLM slips (live 2026-08-02 smoke test: customers saw literal asterisks)
-// — so the code strips it deterministically before every send. Em/en dashes
-// din (merchant feedback 2026-08-03): masyadong "AI-sounding" sa chat — ang
-// " — " sa gitna ng pangungusap ay nagiging ", ".
-export function sanitizeMessengerText(text: string): string {
-  return text
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1: $2")
-    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
-    .replace(/__([^_\n]+)__/g, "$1")
-    .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s.,!?):;])/gm, "$1$2")
-    .replace(/\s*[—–]\s*/g, ", ")
-    .replace(/([,.!?;:])\s*,\s*/g, "$1 ");
 }
 
 // Merchant decision (2026-08-02): WALANG buttons sa cards — natatakpan ng
@@ -636,122 +447,92 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
   });
   const historyRows = [...recentRows].reverse();
 
-  const ordersEnabled = messengerOrdersEnabled();
-  // Split for prompt caching: `system` is the byte-identical cached prefix;
-  // `systemContext` (the current date) rides after the cache breakpoint.
-  const system = buildStaticSystemPrompt(ordersEnabled, await loadCodFacts());
-  const systemContext = buildDynamicContext(now);
-  const tools = ordersEnabled
-    ? MESSENGER_AGENT_TOOLS
-    : MESSENGER_AGENT_TOOLS.filter((tool) => tool.name !== "update_order");
   const messages = await historyToLlmMessages(historyRows, mid);
   if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
     // The conversation must end on the customer's message for the LLM turn.
     return { status: "skipped" };
   }
 
-  let finalText = "";
-  let lastOpenSlots: Extract<GetAvailableDeliverySlotsResult, { available: true }> | null = null;
-  let lastProducts: MessengerProduct[] | null = null;
-  let lastOrderReady: { orderKey: string; summaryText: string } | null = null;
-  let awaitingAddOnChoice = false;
+  // THE BRAIN — one call. The prompt split, the 5-iteration ceiling, the tool
+  // dispatch, and the affordance precedence all live in agent-core now; this
+  // file only says WHO is asking and translates the answer back to Meta.
+  const turn = await runAgentTurn({
+    channel: {
+      kind: "messenger",
+      identity: { type: "psid", psid: message.psid },
+      threadId: message.psid,
+      supports: MESSENGER_CAPABILITIES,
+    },
+    messages,
+    now,
+    // Deliberate: the live Messenger tool contract passes `{ psid }`, and this
+    // rewire must not change a single production call shape. update_order reads
+    // `threadId ?? psid`, kaya pareho ang naaabot na row.
+    toolContext: { psid: message.psid },
+  });
 
-  for (let iteration = 0; iteration < MAX_LLM_ITERATIONS; iteration += 1) {
-    const turn = await runLlmTurn({ system, systemContext, messages, tools });
-    if (!turn.ok) {
-      if (turn.notConfigured || turn.error === MESSENGER_LLM_NOT_CONFIGURED_MESSAGE) {
-        console.error("[messenger-agent] LLM not configured — dropping turn");
-        return { status: "not_configured" };
-      }
-      return { status: "retryable_failure", error: turn.error };
+  if (!turn.ok) {
+    if (turn.notConfigured) {
+      console.error("[messenger-agent] LLM not configured — dropping turn");
+      return { status: "not_configured" };
     }
-
-    const toolUses = turn.blocks.filter(
-      (block): block is Extract<typeof block, { type: "tool_use" }> => block.type === "tool_use",
-    );
-
-    if (toolUses.length === 0) {
-      finalText = turn.blocks
-        .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
-        .map((block) => block.text)
-        .join("\n")
-        .trim();
-      break;
-    }
-
-    // Append the assistant tool-use turn, execute every call, and return all
-    // results in ONE user message (parallel tool-use contract).
-    messages.push({ role: "assistant", content: turn.blocks as LlmContentBlock[] });
-    const results: LlmContentBlock[] = [];
-    for (const toolUse of toolUses) {
-      const result = await executeAgentTool(toolUse.name, toolUse.input, now, {
-        psid: message.psid,
-      });
-      console.log(`[messenger-agent] tool ${toolUse.name} mid=${mid}`);
-      if (toolUse.name === "get_available_slots" && isOpenSlotsResult(result)) {
-        lastOpenSlots = result;
-      }
-      if (toolUse.name === "search_products" && isProductsResult(result) && result.products.length) {
-        // purpose="lookup" = the customer is PICKING a named bouquet, not
-        // browsing — a carousel there is noise (live smoke-test feedback).
-        const purpose = (toolUse.input as { purpose?: unknown } | null)?.purpose;
-        lastProducts = purpose === "lookup" ? null : result.products;
-      }
-      if (toolUse.name === "get_best_sellers" && isProductsResult(result) && result.products.length) {
-        // Curated best sellers always ride the carousel.
-        lastProducts = result.products;
-      }
-      if (toolUse.name === "update_order" && isOrderUpdateResult(result)) {
-        // The LATEST update decides: a later edit in the same turn can move
-        // the state back to collecting, dropping the confirm prompt.
-        lastOrderReady =
-          result.readyToConfirm && result.orderKey
-            ? { orderKey: result.orderKey, summaryText: buildOrderSummaryText(result.state) }
-            : null;
-        // Add-on upsell (2026-08-03): kapag ang susunod na kulang ay ang
-        // add-on decision, ang code ang magkakabit ng category quick replies.
-        awaitingAddOnChoice =
-          !result.readyToConfirm &&
-          Array.isArray(result.missing) &&
-          result.missing[0] === "add_on";
-      }
-      results.push({
-        type: "tool_result",
-        tool_use_id: toolUse.id,
-        content: JSON.stringify(result),
-      });
-    }
-    messages.push({ role: "user", content: results });
+    // Everything else (upstream 5xx, the tool-loop ceiling, an empty answer) is
+    // worth ONE more Cloud Tasks attempt — repliedAt is still unset.
+    return { status: "retryable_failure", error: turn.error };
   }
 
-  if (!finalText) {
-    return { status: "retryable_failure", error: "LLM produced no final text within the tool-loop limit." };
+  // --- AgentBlock[] → Messenger primitives ---------------------------------
+  //
+  // Explicit lookups, not a switch over the block order: the precedence below
+  // is a PRODUCT rule (summary > add-on choices > slots, and never a carousel
+  // behind a summary), so it must not depend on which order the core happens to
+  // emit the blocks in.
+  const blocks: AgentBlock[] = turn.reply.blocks;
+  const textBlock = blocks.find((block): block is Extract<AgentBlock, { type: "text" }> =>
+    block.type === "text",
+  );
+  const summaryBlock = blocks.find((block): block is Extract<AgentBlock, { type: "summary" }> =>
+    block.type === "summary",
+  );
+  const choicesBlock = blocks.find((block): block is Extract<AgentBlock, { type: "choices" }> =>
+    block.type === "choices",
+  );
+  const slotsBlock = blocks.find((block): block is Extract<AgentBlock, { type: "slots" }> =>
+    block.type === "slots",
+  );
+  const productsBlock = blocks.find((block): block is Extract<AgentBlock, { type: "products" }> =>
+    block.type === "products",
+  );
+
+  let replyText = textBlock?.text ?? "";
+  if (!replyText) {
+    // Defensive: the core already treats an empty answer as a designed failure.
+    return { status: "retryable_failure", error: AGENT_NO_FINAL_TEXT_ERROR };
   }
 
-  // Order ready → append the DETERMINISTIC summary (never the LLM's wording)
-  // and attach the Confirm / Baguhin quick replies (master doc Commitment
-  // rule: no draft order without an explicit confirmation tap).
-  let replyText = finalText;
   let quickReplies: MessengerQuickReply[] | undefined;
-  if (lastOrderReady) {
-    replyText = `${finalText}\n\n${lastOrderReady.summaryText}`;
+  if (summaryBlock) {
+    // Order ready → append the DETERMINISTIC summary (never the LLM's wording)
+    // and attach the Confirm / Baguhin quick replies (master doc Commitment
+    // rule: no draft order without an explicit confirmation tap).
+    replyText = `${replyText}\n\n${summaryBlock.text}`;
     quickReplies = [
-      { title: "Confirm ✅", payload: `CONFIRM_ORDER_${lastOrderReady.orderKey}` },
+      { title: "Confirm ✅", payload: `CONFIRM_ORDER_${summaryBlock.orderKey}` },
       { title: "Baguhin", payload: EDIT_ORDER_PAYLOAD },
     ];
-  } else if (awaitingAddOnChoice && !lastProducts) {
+  } else if (choicesBlock) {
     // Add-on category buttons — ang [TAP] ADDON_* payloads ay hina-handle ng
     // LLM sa susunod na turn (search per category o decline).
-    quickReplies = [
-      { title: "🧸 Bear", payload: "ADDON_BEAR" },
-      { title: "🍫 Chocolates", payload: "ADDON_CHOCOLATES" },
-      { title: "🎈 Balloon", payload: "ADDON_BALLOON" },
-      { title: "Hindi na po", payload: "ADDON_NONE" },
-    ];
-  } else if (lastOpenSlots && !lastProducts) {
-    // A carousel message right after would dismiss quick replies in the UI —
-    // a product turn keeps the carousel and drops the slot buttons.
-    quickReplies = lastOpenSlots.slots.slice(0, QUICK_REPLY_LIMIT).map((slot) => ({
+    quickReplies = choicesBlock.options
+      .slice(0, QUICK_REPLY_LIMIT)
+      .map((option) => ({
+        title: option.label.slice(0, QUICK_REPLY_TITLE_LIMIT),
+        payload: option.payload,
+      }));
+  } else if (slotsBlock) {
+    // The core hands back the FULL slot list; the 13-button / 20-char caps are
+    // Meta's, so they are applied here.
+    quickReplies = slotsBlock.slots.slice(0, QUICK_REPLY_LIMIT).map((slot) => ({
       title: slot.label.slice(0, QUICK_REPLY_TITLE_LIMIT),
       payload: `SLOT_${slot.value}`,
     }));
@@ -763,25 +544,27 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
     replyText,
     quickReplies,
     needsDisclosure,
-    // A carousel after the summary would dismiss the Confirm quick replies.
-    products: lastOrderReady ? null : lastProducts,
+    // A carousel after the summary would dismiss the Confirm quick replies —
+    // the core already suppresses the products block in that case, and this
+    // guard keeps the rule true even if that ever changes.
+    products: summaryBlock ? null : ((productsBlock?.items as MessengerProduct[]) ?? null),
   });
 
   // Abandoned-order follow-up (2026-08-03): kapag lumabas ang summary + Confirm,
   // mag-schedule ng isang delayed reminder task. Best-effort — hindi kailanman
   // pinapalya nito ang turn; ang worker guards ang magpapasya kung sesend pa.
-  if (delivered.status === "sent" && lastOrderReady) {
+  if (delivered.status === "sent" && summaryBlock) {
     const hours = messengerFollowUpHours();
     if (hours > 0) {
       try {
         const enqueued = await enqueueMessengerFollowUpTask({
           psid: message.psid,
-          orderKey: lastOrderReady.orderKey,
+          orderKey: summaryBlock.orderKey,
           delaySeconds: Math.round(hours * 3600),
         });
         if (enqueued.ok) {
           console.log(
-            `[messenger-agent] follow-up scheduled key=${lastOrderReady.orderKey} in ${hours}h`,
+            `[messenger-agent] follow-up scheduled key=${summaryBlock.orderKey} in ${hours}h`,
           );
         } else if (!enqueued.notConfigured) {
           console.warn(`[messenger-agent] follow-up enqueue failed: ${enqueued.error}`);
