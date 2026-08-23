@@ -77,6 +77,18 @@ model LookupAttempt {
   updatedAt DateTime  @updatedAt
 }
 
+// Turn-volume rate limiting for LLM-backed agent channels (storefront widget,
+// 2026-08-22) — distinct from LookupAttempt, which only throttles the
+// order-lookup TOOL. This throttles general message/turn volume per caller.
+// key is "conv:<conversationId>" or "ip:<address>" — opaque, no
+// server-verified identity required. See agent-rate-limit.server.ts.
+model AgentRateLimit {
+  key         String   @id
+  windowStart DateTime
+  count       Int      @default(0)
+  updatedAt   DateTime @updatedAt
+}
+
 model MessengerMessage {
   id        String          @id @default(cuid())
   psid      String
@@ -207,16 +219,20 @@ model ReminderConfig {
   updatedAt DateTime @updatedAt
 }
 
-// Support chat (customer-account extension backend, agent-core phase 2):
-// enqueue-then-poll job records for a customer-account chat turn. Neon holds
-// the CONVERSATION + JOB STATUS only — same posture as MessengerThread/
-// MessengerMessage (never the order; order state lives on the Shopify order).
-// id is the customerGid today (one thread per signed-in customer); a future
-// anonymous/storefront surface can seed a conversation uuid instead.
+// Support chat (customer-account + storefront widget, agent-core phase 2/3):
+// enqueue-then-poll job records for a chat turn. Neon holds the CONVERSATION
+// + JOB STATUS only — same posture as MessengerThread/MessengerMessage
+// (never the order; order state lives on the Shopify order).
+// id is the customerGid for customer-account threads (one thread per
+// signed-in customer); a "storefront:<uuid>" conversation id for the
+// anonymous storefront widget (customerGid null there). `channel` is what
+// runSupportChatTurn reads to reconstruct the right AgentChannel per job —
+// see support-chat-turn.server.ts.
 model SupportChatThread {
   id          String   @id
   shop        String
   customerGid String?
+  channel     String   @default("customer-account") // "customer-account" | "storefront"
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -270,4 +286,43 @@ model DeliveryScheduleConfig {
   version           Int      @default(0)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+}
+
+// Merchant-editable storefront chat widget copy/colors, set from the app's
+// Messenger admin page (merchant chose to fold widget settings into that
+// page rather than a dedicated nav item, 2026-08-23). Null column = use the
+// built-in default in widget-config.server.ts — same convention as
+// ReminderConfig's email templates. Read by
+// apps.schedule-rules.widget-config.ts (App Proxy) on every storefront page
+// load, so widget-config.server.ts caches this in-process; the Theme Editor
+// block settings in app-embed.liquid are NOT removed — they stay as the
+// fallback if this row doesn't exist yet or the fetch fails.
+model WidgetConfig {
+  shop         String   @id
+  greeting     String?
+  bubbleColor  String?
+  supportPhone String?
+  trackLabel   String?
+  chip2Label   String?
+  chip2Message String?
+  chip3Label   String?
+  chip3Message String?
+  chip4Label   String?
+  chip4Message String?
+  // Colors/layout/behavior (2026-08-23 addendum) -- same null=default
+  // convention as the fields above. position/panelSize are validated
+  // against a fixed string set at the app layer (see app.messenger-orders.tsx),
+  // not a Prisma enum, to match how bubbleColor is already hex-validated
+  // there rather than DB-constrained.
+  panelBg        String?
+  textColor      String?
+  mutedColor     String?
+  borderColor    String?
+  panelSize      String? // "compact" | "standard" | "large"
+  cornerRadius   Int?
+  position       String? // "left" | "right"
+  disclaimerText String?
+  showDisclaimer Boolean?
+  autoHideBubble Boolean?
+  updatedAt      DateTime @updatedAt
 }

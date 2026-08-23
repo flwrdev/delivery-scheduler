@@ -24,6 +24,8 @@
 // NEVER message text, never LLM output, never customer details.
 
 import { loadCodFacts } from "./cod-facts.server";
+import { loadFaqFacts } from "./faq-facts.server";
+import type { FaqFact } from "./faq-facts.server";
 import {
   executeAgentTool,
   LOOKUP_MY_ORDERS_TOOL,
@@ -152,7 +154,16 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
   // (A handful of prefix variants now exist — ordering on/off x authenticated
   // on/off — but each one is still byte-identical PER CHANNEL, so the cache
   // still hits; it just means one cache entry per variant.)
-  const system = buildStaticSystemPrompt(ordersEnabled, await loadCodFacts(), !!customerGid);
+  const [cod, faq] = await Promise.all([loadCodFacts(), loadFaqFacts()]);
+  // Messenger excluded for now: not yet active for customers (Meta App
+  // Review pending), not the priority surface, and its prompt is already
+  // tuned — this gate is the only thing scoping the FAQ section to
+  // storefront/customer-account. Delete the ternary once Messenger should
+  // get it too. loadFaqFacts() is still called unconditionally above (its
+  // own 5-minute cache makes this free after the first hit) so the gate
+  // stays a pure policy decision, not a structural branch.
+  const includeFaq = channel.kind !== "messenger";
+  const system = buildStaticSystemPrompt(ordersEnabled, cod, !!customerGid, includeFaq ? faq : []);
   const systemContext = buildDynamicContext(now);
   // Channel-aware tool list. Two rules:
   //  1. update_order needs BOTH ordering gates (see above).
@@ -322,6 +333,8 @@ export {
   messengerOrdersEnabled,
   sanitizeMessengerText,
 };
+export { loadFaqFacts };
+export type { FaqFact };
 export { executeAgentTool, MESSENGER_AGENT_TOOLS };
 export { buildOrderSummaryText };
 export { MESSENGER_LLM_NOT_CONFIGURED_MESSAGE, runLlmTurn };

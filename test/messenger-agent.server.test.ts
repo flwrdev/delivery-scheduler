@@ -1368,3 +1368,29 @@ describe("buildStaticSystemPrompt COD facts", () => {
     expect(codLine(buildStaticSystemPrompt(false))).toContain("up to P2,500");
   });
 });
+
+describe("buildStaticSystemPrompt FAQ facts", () => {
+  const sampleFaq = [{ question: "May resibo ba kayo?", answer: "Opo, soft copy sa email." }];
+
+  it("omits the FAQ section entirely when no facts are passed", () => {
+    const prompt = buildStaticSystemPrompt(false);
+    expect(prompt).not.toContain("MERCHANT FAQ KNOWLEDGE BASE");
+  });
+
+  it("omits the FAQ section when passed an empty array", () => {
+    const prompt = buildStaticSystemPrompt(false, undefined, false, []);
+    expect(prompt).not.toContain("MERCHANT FAQ KNOWLEDGE BASE");
+  });
+
+  it("renders every FAQ as a Q/A pair, sourced from the store's own Knowledge Base", () => {
+    const prompt = buildStaticSystemPrompt(false, undefined, false, sampleFaq);
+    expect(prompt).toContain("MERCHANT FAQ KNOWLEDGE BASE");
+    expect(prompt).toContain("Q: May resibo ba kayo?");
+    expect(prompt).toContain("A: Opo, soft copy sa email.");
+  });
+
+  it("tells the model tool-backed facts win over FAQ prose", () => {
+    const prompt = buildStaticSystemPrompt(false, undefined, false, sampleFaq);
+    expect(prompt).toContain("the TOOL result always wins");
+  });
+});

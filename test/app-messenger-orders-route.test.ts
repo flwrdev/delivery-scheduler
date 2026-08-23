@@ -11,6 +11,10 @@ const { prismaMock, adminMock, graphqlMock, componentStub, getProfileMock, setPr
         findMany: vi.fn(),
         update: vi.fn(),
       },
+      widgetConfig: {
+        findUnique: vi.fn(),
+        upsert: vi.fn(),
+      },
     },
     adminMock: vi.fn(),
     graphqlMock: vi.fn(),
@@ -35,6 +39,7 @@ vi.mock("@shopify/polaris", () => ({
   BlockStack: componentStub,
   Button: componentStub,
   Card: componentStub,
+  Divider: componentStub,
   EmptyState: componentStub,
   IndexTable: Object.assign(componentStub, { Row: componentStub, Cell: componentStub }),
   InlineStack: componentStub,
@@ -42,6 +47,7 @@ vi.mock("@shopify/polaris", () => ({
   Link: componentStub,
   Page: componentStub,
   Text: componentStub,
+  TextField: componentStub,
 }));
 vi.mock("@shopify/app-bridge-react", () => ({
   TitleBar: componentStub,
@@ -79,6 +85,8 @@ beforeEach(() => {
   setProfileMock.mockResolvedValue({ ok: true });
   prismaMock.messengerThread.findMany.mockResolvedValue([]);
   prismaMock.messengerThread.update.mockResolvedValue({});
+  prismaMock.widgetConfig.findUnique.mockResolvedValue(null);
+  prismaMock.widgetConfig.upsert.mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -313,5 +321,192 @@ describe("app.messenger-orders action — setupProfile (phase 8)", () => {
     } as never);
     expect(result.ok).toBe(false);
     expect((result as { errors?: string[] }).errors).toEqual(["Graph API 400: bad token"]);
+  });
+});
+
+describe("app.messenger-orders loader — widget config (2026-08-23)", () => {
+  it("returns blank strings (built-in default) when no row exists", async () => {
+    const result = await loader({ request: new Request(ROUTE_URL) } as never);
+    expect(result.widgetConfig).toEqual({
+      greeting: "",
+      bubbleColor: "",
+      supportPhone: "",
+      trackLabel: "",
+      chip2Label: "",
+      chip2Message: "",
+      chip3Label: "",
+      chip3Message: "",
+      chip4Label: "",
+      chip4Message: "",
+      panelBg: "",
+      textColor: "",
+      mutedColor: "",
+      borderColor: "",
+      panelSize: "",
+      cornerRadius: null,
+      position: "",
+      disclaimerText: "",
+      showDisclaimer: null,
+      autoHideBubble: null,
+    });
+    expect(prismaMock.widgetConfig.findUnique).toHaveBeenCalledWith({
+      where: { shop: "flowercart.myshopify.com" },
+    });
+  });
+
+  it("returns the saved row's fields as-is", async () => {
+    prismaMock.widgetConfig.findUnique.mockResolvedValue({
+      shop: "flowercart.myshopify.com",
+      greeting: "Kumusta!",
+      bubbleColor: "#123456",
+      supportPhone: null,
+      trackLabel: null,
+      chip2Label: "L2",
+      chip2Message: null,
+      chip3Label: null,
+      chip3Message: null,
+      chip4Label: null,
+      chip4Message: null,
+      updatedAt: new Date(),
+    });
+    const result = await loader({ request: new Request(ROUTE_URL) } as never);
+    expect(result.widgetConfig.greeting).toBe("Kumusta!");
+    expect(result.widgetConfig.bubbleColor).toBe("#123456");
+    expect(result.widgetConfig.supportPhone).toBe("");
+    expect(result.widgetConfig.chip2Label).toBe("L2");
+  });
+});
+
+describe("app.messenger-orders action — saveWidgetConfig (2026-08-23)", () => {
+  it("upserts trimmed fields, blank -> null, and answers ok:true", async () => {
+    const result = await action({
+      request: makeActionRequest({
+        intent: "saveWidgetConfig",
+        greeting: "  Kumusta ka?  ",
+        bubbleColor: "#ff00aa",
+        supportPhone: "",
+        trackLabel: "",
+        chip2Label: "New label",
+        chip2Message: "",
+        chip3Label: "",
+        chip3Message: "",
+        chip4Label: "",
+        chip4Message: "",
+        panelBg: "",
+        textColor: "",
+        mutedColor: "",
+        borderColor: "",
+        panelSize: "",
+        cornerRadius: "",
+        position: "",
+        disclaimerText: "",
+        showDisclaimer: "",
+        autoHideBubble: "",
+      }),
+    } as never);
+
+    expect(result).toMatchObject({ ok: true, intent: "saveWidgetConfig" });
+    const upsertArgs = prismaMock.widgetConfig.upsert.mock.calls[0][0];
+    expect(upsertArgs.where).toEqual({ shop: "flowercart.myshopify.com" });
+    expect(upsertArgs.update).toEqual({
+      greeting: "Kumusta ka?",
+      bubbleColor: "#ff00aa",
+      supportPhone: null,
+      trackLabel: null,
+      chip2Label: "New label",
+      chip2Message: null,
+      chip3Label: null,
+      chip3Message: null,
+      chip4Label: null,
+      chip4Message: null,
+      panelBg: null,
+      textColor: null,
+      mutedColor: null,
+      borderColor: null,
+      panelSize: null,
+      cornerRadius: null,
+      position: null,
+      disclaimerText: null,
+      showDisclaimer: null,
+      autoHideBubble: null,
+    });
+  });
+
+  it("saves the new style/layout/behavior fields when provided", async () => {
+    const result = await action({
+      request: makeActionRequest({
+        intent: "saveWidgetConfig",
+        panelBg: "#111111",
+        textColor: "#222222",
+        mutedColor: "#333333",
+        borderColor: "#444444",
+        panelSize: "large",
+        cornerRadius: "20",
+        position: "left",
+        disclaimerText: "Custom disclaimer.",
+        showDisclaimer: "false",
+        autoHideBubble: "true",
+      }),
+    } as never);
+
+    expect(result).toMatchObject({ ok: true, intent: "saveWidgetConfig" });
+    const upsertArgs = prismaMock.widgetConfig.upsert.mock.calls[0][0];
+    expect(upsertArgs.update).toMatchObject({
+      panelBg: "#111111",
+      textColor: "#222222",
+      mutedColor: "#333333",
+      borderColor: "#444444",
+      panelSize: "large",
+      cornerRadius: 20,
+      position: "left",
+      disclaimerText: "Custom disclaimer.",
+      showDisclaimer: false,
+      autoHideBubble: true,
+    });
+  });
+
+  it("rejects a bubble color that isn't a hex code, without touching the database", async () => {
+    const result = await action({
+      request: makeActionRequest({ intent: "saveWidgetConfig", bubbleColor: "not-a-color" }),
+    } as never);
+    expect(result.ok).toBe(false);
+    expect((result as { errors?: string[] }).errors?.[0]).toMatch(/hex/i);
+    expect(prismaMock.widgetConfig.upsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a chip label over the max length, without touching the database", async () => {
+    const result = await action({
+      request: makeActionRequest({
+        intent: "saveWidgetConfig",
+        chip2Label: "x".repeat(41),
+      }),
+    } as never);
+    expect(result.ok).toBe(false);
+    expect(prismaMock.widgetConfig.upsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid panelSize/position without touching the database", async () => {
+    const result = await action({
+      request: makeActionRequest({ intent: "saveWidgetConfig", panelSize: "gigantic" }),
+    } as never);
+    expect(result.ok).toBe(false);
+    expect(prismaMock.widgetConfig.upsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a cornerRadius outside the allowed range without touching the database", async () => {
+    const result = await action({
+      request: makeActionRequest({ intent: "saveWidgetConfig", cornerRadius: "999" }),
+    } as never);
+    expect(result.ok).toBe(false);
+    expect(prismaMock.widgetConfig.upsert).not.toHaveBeenCalled();
+  });
+
+  it("answers ok:false (ADR-11, 200 body) when the upsert throws", async () => {
+    prismaMock.widgetConfig.upsert.mockRejectedValue(new Error("db down"));
+    const result = await action({
+      request: makeActionRequest({ intent: "saveWidgetConfig", greeting: "Hi" }),
+    } as never);
+    expect(result.ok).toBe(false);
+    expect(Array.isArray((result as { errors?: string[] }).errors)).toBe(true);
   });
 });

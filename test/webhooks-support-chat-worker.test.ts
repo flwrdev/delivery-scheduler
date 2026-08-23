@@ -13,6 +13,7 @@ const {
   failJobMock,
   skipJobMock,
   loadHistoryMock,
+  getThreadChannelMock,
   runAgentTurnMock,
 } = vi.hoisted(() => ({
   getJobMock: vi.fn(),
@@ -20,6 +21,7 @@ const {
   failJobMock: vi.fn(),
   skipJobMock: vi.fn(),
   loadHistoryMock: vi.fn(),
+  getThreadChannelMock: vi.fn(),
   runAgentTurnMock: vi.fn(),
 }));
 
@@ -29,11 +31,20 @@ vi.mock("../app/services/support-chat.server", () => ({
   failSupportChatJob: failJobMock,
   skipSupportChatJob: skipJobMock,
   loadSupportChatHistory: loadHistoryMock,
+  getSupportChatThreadChannel: getThreadChannelMock,
 }));
 
 vi.mock("../app/services/agent-core.server", () => ({
   runAgentTurn: runAgentTurnMock,
   CUSTOMER_ACCOUNT_CAPABILITIES: Object.freeze({
+    markdown: true,
+    carousel: false,
+    quickReplies: true,
+    productCards: true,
+    textLimit: 4000,
+    ordering: false,
+  }),
+  STOREFRONT_CAPABILITIES: Object.freeze({
     markdown: true,
     carousel: false,
     quickReplies: true,
@@ -85,6 +96,7 @@ beforeEach(() => {
     error: null,
   });
   loadHistoryMock.mockResolvedValue([customerTurn("magkano po delivery sa Makati?")]);
+  getThreadChannelMock.mockResolvedValue({ channel: "customer-account", customerGid: THREAD_ID });
   completeJobMock.mockResolvedValue(undefined);
   failJobMock.mockResolvedValue(undefined);
   skipJobMock.mockResolvedValue(undefined);
