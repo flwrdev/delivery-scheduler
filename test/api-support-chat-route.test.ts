@@ -15,6 +15,7 @@ const {
   failJobMock,
   skipJobMock,
   loadHistoryMock,
+  getThreadChannelMock,
   enqueueMock,
   runAgentTurnMock,
 } = vi.hoisted(() => ({
@@ -27,6 +28,7 @@ const {
   failJobMock: vi.fn(),
   skipJobMock: vi.fn(),
   loadHistoryMock: vi.fn(),
+  getThreadChannelMock: vi.fn(),
   enqueueMock: vi.fn(),
   runAgentTurnMock: vi.fn(),
 }));
@@ -44,6 +46,7 @@ vi.mock("../app/services/support-chat.server", () => ({
   failSupportChatJob: failJobMock,
   skipSupportChatJob: skipJobMock,
   loadSupportChatHistory: loadHistoryMock,
+  getSupportChatThreadChannel: getThreadChannelMock,
 }));
 
 vi.mock("../app/services/messenger-queue.server", () => ({
@@ -58,6 +61,14 @@ vi.mock("../app/services/agent-core.server", () => ({
     quickReplies: true,
     productCards: true,
     textLimit: 4000,
+  }),
+  STOREFRONT_CAPABILITIES: Object.freeze({
+    markdown: true,
+    carousel: false,
+    quickReplies: true,
+    productCards: true,
+    textLimit: 4000,
+    ordering: false,
   }),
 }));
 
@@ -115,6 +126,7 @@ beforeEach(() => {
   failJobMock.mockReset();
   skipJobMock.mockReset();
   loadHistoryMock.mockReset();
+  getThreadChannelMock.mockReset();
   enqueueMock.mockReset();
   runAgentTurnMock.mockReset();
 
@@ -125,6 +137,7 @@ beforeEach(() => {
   failJobMock.mockResolvedValue(undefined);
   skipJobMock.mockResolvedValue(undefined);
   loadHistoryMock.mockResolvedValue([customerTurn("hi")]);
+  getThreadChannelMock.mockResolvedValue({ channel: "customer-account", customerGid: CUSTOMER_GID });
   enqueueMock.mockResolvedValue({ ok: true, taskName: "projects/p/locations/l/queues/q/tasks/t" });
 });
 

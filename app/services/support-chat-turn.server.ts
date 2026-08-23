@@ -35,11 +35,16 @@
 // Log hygiene: jobId, threadId, skip reasons, error strings — NEVER message text
 // or LLM output.
 
-import { CUSTOMER_ACCOUNT_CAPABILITIES, runAgentTurn } from "./agent-core.server";
+import {
+  CUSTOMER_ACCOUNT_CAPABILITIES,
+  STOREFRONT_CAPABILITIES,
+  runAgentTurn,
+} from "./agent-core.server";
 import type { AgentChannel } from "./agent-core.server";
 import type { LlmMessage } from "./messenger-llm.server";
 import {
   completeSupportChatJob,
+  getSupportChatThreadChannel,
   loadSupportChatHistory,
   skipSupportChatJob,
 } from "./support-chat.server";
@@ -147,12 +152,37 @@ export async function runSupportChatTurn({
     return { status: "done", intercepted: true };
   }
 
-  const channel: AgentChannel = {
-    kind: "customer-account",
-    identity: { type: "customer", customerGid: threadId },
-    supports: CUSTOMER_ACCOUNT_CAPABILITIES,
-    threadId,
-  };
+  // Channel is read off the thread row itself rather than threaded through
+  // this function's signature — otherwise every caller (worker, both inline
+  // dev fallbacks) would independently construct an AgentChannel, tripling
+  // the exact drift surface the lockout-key addendum already had to fix once
+  // for a similar reason. A job always has a thread by construction, so a
+  // miss here means a real bug, not an expected runtime condition.
+  const threadChannel = await getSupportChatThreadChannel(threadId);
+  if (!threadChannel) {
+    console.error(
+      `[support-chat-turn] thread not found jobId=${jobId} thread=${threadId}`,
+    );
+    return { status: "failed", error: "thread not found", notConfigured: false };
+  }
+
+  const channel: AgentChannel =
+    threadChannel.channel === "storefront"
+      ? {
+          kind: "storefront",
+          identity: {
+            type: "anonymous",
+            conversationId: threadId.replace(/^storefront:/, ""),
+          },
+          supports: STOREFRONT_CAPABILITIES,
+          threadId,
+        }
+      : {
+          kind: "customer-account",
+          identity: { type: "customer", customerGid: threadChannel.customerGid ?? threadId },
+          supports: CUSTOMER_ACCOUNT_CAPABILITIES,
+          threadId,
+        };
   const result = await runAgentTurn(now ? { channel, messages, now } : { channel, messages });
 
   if (!result.ok) {

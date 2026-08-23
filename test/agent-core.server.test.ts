@@ -19,6 +19,7 @@ const {
   summaryMock,
   claimFollowUpMock,
   enqueueFollowUpMock,
+  loadFaqFactsMock,
 } = vi.hoisted(() => ({
   prismaMock: {
     messengerThread: { findUnique: vi.fn(), update: vi.fn() },
@@ -39,6 +40,7 @@ const {
   summaryMock: vi.fn(),
   claimFollowUpMock: vi.fn(),
   enqueueFollowUpMock: vi.fn(),
+  loadFaqFactsMock: vi.fn(),
 }));
 
 vi.mock("../app/db.server", () => ({ default: prismaMock }));
@@ -78,6 +80,7 @@ vi.mock("../app/services/cod-facts.server", async (importOriginal) => {
   const original = await importOriginal<typeof import("../app/services/cod-facts.server")>();
   return { ...original, loadCodFacts: async () => original.COD_FACTS_FALLBACK };
 });
+vi.mock("../app/services/faq-facts.server", () => ({ loadFaqFacts: loadFaqFactsMock }));
 vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
   const original = await importOriginal<typeof import("../app/services/messenger-send.server")>();
   return {
@@ -195,6 +198,7 @@ beforeEach(() => {
   llmMock.mockResolvedValue(textTurn("Sige po!"));
   executeToolMock.mockResolvedValue({ ok: true });
   summaryMock.mockReturnValue("🧾 ORDER SUMMARY (deterministic)");
+  loadFaqFactsMock.mockResolvedValue([{ question: "May resibo ba kayo?", answer: "Opo." }]);
 });
 
 afterEach(() => {
@@ -860,5 +864,44 @@ describe("runAgentTurn — authenticated order lookup (lookup_my_orders)", () =>
     const system = llmMock.mock.calls[0][0].system as string;
     expect(system).toContain("ORDER STATUS LOOKUP (lookup_order");
     expect(system).not.toContain("lookup_my_orders");
+  });
+});
+
+// Messenger is deployed but not yet active for customers (Meta App Review
+// pending) — it is deliberately excluded from the FAQ grounding rollout so
+// its already-tuned prompt is untouched while it is not live. This gate is
+// a single ternary in agent-core.server.ts; these tests pin it so a future
+// edit can't silently re-include or accidentally drop a channel.
+describe("runAgentTurn — FAQ knowledge base gate", () => {
+  it("never includes FAQ content for the Messenger channel, even when facts are available", async () => {
+    await runAgentTurn({ channel: messengerChannel(), messages: history(), now: NOW });
+
+    const system = llmMock.mock.calls[0][0].system as string;
+    expect(system).not.toContain("MERCHANT FAQ KNOWLEDGE BASE");
+  });
+
+  it("includes FAQ content for the customer-account channel", async () => {
+    await runAgentTurn({ channel: webChannel(), messages: history(), now: NOW });
+
+    const system = llmMock.mock.calls[0][0].system as string;
+    expect(system).toContain("MERCHANT FAQ KNOWLEDGE BASE");
+    expect(system).toContain("Q: May resibo ba kayo?");
+  });
+
+  it("includes FAQ content for the storefront channel", async () => {
+    await runAgentTurn({ channel: storefrontChannel(), messages: history(), now: NOW });
+
+    const system = llmMock.mock.calls[0][0].system as string;
+    expect(system).toContain("MERCHANT FAQ KNOWLEDGE BASE");
+    expect(system).toContain("Q: May resibo ba kayo?");
+  });
+
+  it("still omits the section on non-Messenger channels when loadFaqFacts resolves nothing", async () => {
+    loadFaqFactsMock.mockResolvedValueOnce([]);
+
+    await runAgentTurn({ channel: storefrontChannel(), messages: history(), now: NOW });
+
+    const system = llmMock.mock.calls[0][0].system as string;
+    expect(system).not.toContain("MERCHANT FAQ KNOWLEDGE BASE");
   });
 });

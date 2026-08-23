@@ -38,8 +38,48 @@ export async function ensureSupportChatThread({
 }: EnsureThreadInput): Promise<void> {
   await prisma.supportChatThread.upsert({
     where: { id: customerGid },
-    create: { id: customerGid, shop, customerGid },
+    create: { id: customerGid, shop, customerGid, channel: "customer-account" },
     update: { shop },
+  });
+}
+
+export interface EnsureAnonymousThreadInput {
+  conversationId: string;
+  shop: string;
+}
+
+// One row per storefront-widget conversation (id = "storefront:<uuid>",
+// customerGid null — there is no signed-in identity on this channel). The
+// "storefront:" prefix is cheap defense-in-depth namespacing against the id
+// space ever colliding with a customerGid, even though gid://shopify/... and
+// a client-minted UUID can't actually collide.
+export async function ensureAnonymousSupportChatThread({
+  conversationId,
+  shop,
+}: EnsureAnonymousThreadInput): Promise<string> {
+  const id = `storefront:${conversationId}`;
+  await prisma.supportChatThread.upsert({
+    where: { id },
+    create: { id, shop, customerGid: null, channel: "storefront" },
+    update: { shop },
+  });
+  return id;
+}
+
+export interface SupportChatThreadChannel {
+  channel: string;
+  customerGid: string | null;
+}
+
+// Read once at the top of runSupportChatTurn to reconstruct the right
+// AgentChannel per job, instead of threading a channel argument through
+// every caller (worker, inline dev fallbacks) — see support-chat-turn.server.ts.
+export async function getSupportChatThreadChannel(
+  threadId: string,
+): Promise<SupportChatThreadChannel | null> {
+  return prisma.supportChatThread.findUnique({
+    where: { id: threadId },
+    select: { channel: true, customerGid: true },
   });
 }
 
