@@ -73,8 +73,14 @@ export interface AgentChannel {
  *   summary + Confirm button  -> "summary"
  *
  * `products.items` is `unknown[]` on purpose: the real shape is
- * MessengerProduct[] from messenger-products.server, and importing that here
+ * MessengerProduct[] from agent-products.server, and importing that here
  * would make this file server-only. The adapters narrow it.
+ *
+ * ⚠️ ADDING OR RENAMING A BLOCK TYPE? THREE independent renderers must learn
+ * it — the Messenger adapter (messenger-agent.server.ts), SupportChat.jsx,
+ * and storefront-chat-widget.js share no code. test/agent-block-contract.test.ts
+ * greps all three and fails the build on a silent miss; update it (or its
+ * documented exemptions) together with the renderers.
  */
 export type AgentBlock =
   | { type: "text"; text: string }

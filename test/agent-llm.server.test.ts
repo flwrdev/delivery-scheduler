@@ -18,7 +18,7 @@ import {
   MESSENGER_LLM_MODEL,
   MESSENGER_LLM_NOT_CONFIGURED_MESSAGE,
   runLlmTurn,
-} from "../app/services/messenger-llm.server";
+} from "../app/services/agent-llm.server";
 
 const BASE_INPUT = {
   system: "You are FlowerBot.",

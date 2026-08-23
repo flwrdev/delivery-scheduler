@@ -44,13 +44,13 @@ const {
 }));
 
 vi.mock("../app/db.server", () => ({ default: prismaMock }));
-vi.mock("../app/services/messenger-llm.server", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../app/services/messenger-llm.server")>();
+vi.mock("../app/services/agent-llm.server", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../app/services/agent-llm.server")>();
   return { ...original, runLlmTurn: llmMock };
 });
 // Fully mocked (no importOriginal): the real module imports shopify.server,
 // whose Prisma session storage cannot initialize inside vitest.
-vi.mock("../app/services/messenger-agent-tools.server", () => ({
+vi.mock("../app/services/agent-tools.server", () => ({
   executeAgentTool: executeToolMock,
   getManilaNowLabel: () => "Saturday, August 1, 2026 at 12:00 PM",
   MESSENGER_AGENT_TOOLS: [
@@ -91,9 +91,9 @@ vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
   };
 });
 
-import { MESSENGER_LLM_NOT_CONFIGURED_MESSAGE } from "../app/services/messenger-llm.server";
-import type { LlmMessage, LlmToolDefinition } from "../app/services/messenger-llm.server";
-import { MESSENGER_AGENT_TOOLS } from "../app/services/messenger-agent-tools.server";
+import { MESSENGER_LLM_NOT_CONFIGURED_MESSAGE } from "../app/services/agent-llm.server";
+import type { LlmMessage, LlmToolDefinition } from "../app/services/agent-llm.server";
+import { MESSENGER_AGENT_TOOLS } from "../app/services/agent-tools.server";
 import {
   CUSTOMER_ACCOUNT_CAPABILITIES,
   MESSENGER_CAPABILITIES,
@@ -398,7 +398,7 @@ describe("runAgentTurn — failure shapes", () => {
 });
 
 describe("runAgentTurn — channel capabilities", () => {
-  it("sanitizes markdown when the channel cannot render it", async () => {
+  it("leaves the text VERBATIM even on a non-markdown channel — sanitizing is the adapter's job (2026-08-24 ownership move)", async () => {
     llmMock.mockResolvedValue(textTurn("Ang **Sweet Heart** po ay P1,500 — libre ang delivery."));
 
     const result = await runAgentTurn({
@@ -410,9 +410,9 @@ describe("runAgentTurn — channel capabilities", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const text = blockOfType(result.reply.blocks, "text")?.text ?? "";
-    expect(text).toContain("Sweet Heart");
-    expect(text).not.toContain("**");
-    expect(text).not.toContain("—");
+    // The Messenger adapter sanitizes in deliverReplyAndBookkeep — asserted in
+    // test/messenger-agent.server.test.ts, not here.
+    expect(text).toBe("Ang **Sweet Heart** po ay P1,500 — libre ang delivery.");
   });
 
   it("PRESERVES markdown when the channel renders it", async () => {
@@ -430,7 +430,7 @@ describe("runAgentTurn — channel capabilities", () => {
     expect(text).toBe("Ang **Sweet Heart** po ay P1,500 — libre ang delivery.");
   });
 
-  it("slices the text to the channel's textLimit", async () => {
+  it("does NOT slice to textLimit — the per-transport cap is the adapter's job (2026-08-24 ownership move)", async () => {
     llmMock.mockResolvedValue(textTurn("A".repeat(4000)));
 
     const result = await runAgentTurn({
@@ -441,7 +441,9 @@ describe("runAgentTurn — channel capabilities", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(blockOfType(result.reply.blocks, "text")?.text).toBe("A".repeat(25));
+    // Messenger budgets in deliverReplyAndBookkeep (protecting the appended
+    // summary); the web path caps in runSupportChatTurn before persisting.
+    expect(blockOfType(result.reply.blocks, "text")?.text).toBe("A".repeat(4000));
   });
 });
 

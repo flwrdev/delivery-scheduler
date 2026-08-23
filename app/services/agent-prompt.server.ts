@@ -18,7 +18,7 @@
 import { COD_FACTS_FALLBACK } from "./cod-facts.server";
 import type { CodFacts } from "./cod-facts.server";
 import type { FaqFact } from "./faq-facts.server";
-import { getManilaNowLabel } from "./messenger-agent-tools.server";
+import { getManilaNowLabel } from "./agent-tools.server";
 
 // Phase-6 ordering is env-gated: the read/write_draft_orders scopes need a
 // config deploy + merchant re-approval before draft creation can work, so the

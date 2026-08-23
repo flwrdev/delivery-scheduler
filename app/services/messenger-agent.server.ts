@@ -26,8 +26,8 @@ import {
 import { MESSENGER_CAPABILITIES } from "./agent-channel";
 import type { AgentBlock } from "./agent-channel";
 import { sanitizeMessengerText } from "./agent-prompt.server";
-import type { LlmContentBlock, LlmMessage } from "./messenger-llm.server";
-import type { MessengerProduct } from "./messenger-products.server";
+import type { LlmContentBlock, LlmMessage } from "./agent-llm.server";
+import type { MessengerProduct } from "./agent-products.server";
 import { claimOrderFollowUp, confirmMessengerOrder } from "./messenger-orders.server";
 import { enqueueMessengerFollowUpTask } from "./messenger-queue.server";
 import {
@@ -242,11 +242,24 @@ interface DeliverReplyArgs {
   needsDisclosure: boolean;
   /** Optional best-effort product carousel sent after the text. */
   products?: MessengerProduct[] | null;
+  /**
+   * Text that must SURVIVE the 2000-char cap intact (the deterministic order
+   * summary the Confirm quick reply refers to). When the combined message
+   * would run over, the LLM lead text is what gets cut — never this.
+   */
+  protectedSuffix?: string;
 }
 
 // Shared send + bookkeeping tail for both the LLM path and the deterministic
 // confirm path. Once the text send succeeds this MUST report success — a
 // Cloud Tasks retry after that point would send a duplicate.
+//
+// Text-cap ownership (2026-08-24): the core now emits VERBATIM text, so this
+// is the ONE place the Messenger sanitize + 2000-char budget happens. The
+// budget is computed from the sanitized parts so a `protectedSuffix` (order
+// summary) is never truncated by a near-limit LLM reply — previously the
+// summary was appended before a blind tail slice, and the Confirm button
+// could point at a summary the customer never fully saw.
 async function deliverReplyAndBookkeep({
   psid,
   mid,
@@ -254,10 +267,16 @@ async function deliverReplyAndBookkeep({
   quickReplies,
   needsDisclosure,
   products,
+  protectedSuffix,
 }: DeliverReplyArgs): Promise<ProcessAgentTurnResult> {
-  const finalReplyText = `${needsDisclosure ? `${BOT_DISCLOSURE}\n` : ""}${sanitizeMessengerText(
-    replyText,
-  )}`.slice(0, MESSENGER_TEXT_LIMIT);
+  const disclosure = needsDisclosure ? `${BOT_DISCLOSURE}\n` : "";
+  const suffix = protectedSuffix ? `\n\n${sanitizeMessengerText(protectedSuffix)}` : "";
+  const leadBudget = Math.max(0, MESSENGER_TEXT_LIMIT - disclosure.length - suffix.length);
+  const lead = sanitizeMessengerText(replyText).slice(0, leadBudget);
+  // The final slice is a belt-and-suspenders guard (a pathological suffix
+  // longer than the cap itself) — in the normal case the budget above already
+  // keeps the string within the limit.
+  const finalReplyText = `${disclosure}${lead}${suffix}`.slice(0, MESSENGER_TEXT_LIMIT);
 
   let sendResult: Awaited<ReturnType<typeof sendMessengerTextMessage>>;
   try {
@@ -504,7 +523,7 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
     block.type === "products",
   );
 
-  let replyText = textBlock?.text ?? "";
+  const replyText = textBlock?.text ?? "";
   if (!replyText) {
     // Defensive: the core already treats an empty answer as a designed failure.
     return { status: "retryable_failure", error: AGENT_NO_FINAL_TEXT_ERROR };
@@ -512,10 +531,10 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
 
   let quickReplies: MessengerQuickReply[] | undefined;
   if (summaryBlock) {
-    // Order ready → append the DETERMINISTIC summary (never the LLM's wording)
-    // and attach the Confirm / Baguhin quick replies (master doc Commitment
-    // rule: no draft order without an explicit confirmation tap).
-    replyText = `${replyText}\n\n${summaryBlock.text}`;
+    // Order ready → the DETERMINISTIC summary (never the LLM's wording) rides
+    // as deliverReplyAndBookkeep's protectedSuffix so the 2000-char budget can
+    // never cut it, and attach the Confirm / Baguhin quick replies (master doc
+    // Commitment rule: no draft order without an explicit confirmation tap).
     quickReplies = [
       { title: "Confirm ✅", payload: `CONFIRM_ORDER_${summaryBlock.orderKey}` },
       { title: "Baguhin", payload: EDIT_ORDER_PAYLOAD },
@@ -544,6 +563,7 @@ export async function processAgentTurnByMid(mid: string): Promise<ProcessAgentTu
     replyText,
     quickReplies,
     needsDisclosure,
+    protectedSuffix: summaryBlock?.text,
     // A carousel after the summary would dismiss the Confirm quick replies —
     // the core already suppresses the products block in that case, and this
     // guard keeps the rule true even if that ever changes.
