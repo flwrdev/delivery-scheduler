@@ -18,7 +18,7 @@
 import crypto from "node:crypto";
 
 import type { AgentBlock } from "./agent-channel";
-import type { LlmContentBlock, LlmMessage } from "./messenger-llm.server";
+import type { LlmContentBlock, LlmMessage } from "./agent-llm.server";
 import prisma from "../db.server";
 
 // Conversation context window (rows) pulled from Neon per turn — same cap the

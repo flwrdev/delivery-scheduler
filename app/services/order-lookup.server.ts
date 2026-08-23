@@ -350,7 +350,7 @@ export async function lookupOrdersByCustomerId(
 
 // ---------------------------------------------------------------------------
 // Anti-guessing attempt limit (LookupAttempt, keyed by the resolved agent
-// thread key — see messenger-agent-tools.server.ts's `context.threadId ??
+// thread key — see agent-tools.server.ts's `context.threadId ??
 // context.psid` resolution).
 // ---------------------------------------------------------------------------
 //

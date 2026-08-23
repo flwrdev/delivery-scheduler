@@ -21,7 +21,13 @@
   // hardcoded chip defaults below and let a late-arriving response go unused.
   var CONFIG_FETCH_TIMEOUT_MS = 800;
   var STORAGE_KEY = "fc_chat_conversation_id";
-  var POLL_INTERVAL_MS = 1500;
+  // Poll backoff (2026-08-24), mirroring SupportChat.jsx: fast cadence only
+  // while a fast answer is still plausible, then back off — every poll is a
+  // signature-checked request + a Prisma read on the backend, and this widget
+  // is live on every storefront page.
+  var POLL_INTERVAL_FAST_MS = 1500;
+  var POLL_INTERVAL_SLOW_MS = 4500;
+  var POLL_FAST_WINDOW_MS = 10000;
   // 60s foreground, same reasoning as SupportChat.jsx: a worst-case agent
   // turn (multiple tool calls) can run longer than 30s, and the turn is
   // written into server-side history regardless of whether the client is
@@ -817,20 +823,23 @@
   }
 
   // ---------------------------------------------------------------------
-  // Poll the jobId endpoint every POLL_INTERVAL_MS until status is "done" or
+  // Poll the jobId endpoint (fast, then backed-off) until status is "done" or
   // "failed", or POLL_TIMEOUT_MS elapses — same shape as SupportChat.jsx's
   // pollForBlocks. On timeout, keeps polling in the background (bounded to
   // BACKGROUND_POLL_TIMEOUT_MS) and hands a late result to onLateResult.
   // ---------------------------------------------------------------------
   function pollForBlocks(jobId, onLateResult) {
-    var deadline = Date.now() + POLL_TIMEOUT_MS;
+    var startedAt = Date.now();
+    var deadline = startedAt + POLL_TIMEOUT_MS;
 
     function loop() {
       if (Date.now() >= deadline) {
         continuePollingInBackground(jobId, onLateResult);
         return Promise.resolve("timeout");
       }
-      return sleep(POLL_INTERVAL_MS)
+      return sleep(
+        Date.now() - startedAt < POLL_FAST_WINDOW_MS ? POLL_INTERVAL_FAST_MS : POLL_INTERVAL_SLOW_MS
+      )
         .then(function () {
           return pollOnce(jobId);
         })
@@ -849,7 +858,9 @@
 
     function loop() {
       if (Date.now() >= backgroundDeadline) return;
-      sleep(POLL_INTERVAL_MS)
+      // Past the 60s foreground window the turn is slow by definition — the
+      // fast cadence buys nothing here.
+      sleep(POLL_INTERVAL_SLOW_MS)
         .then(function () {
           return pollOnce(jobId);
         })

@@ -41,7 +41,7 @@ import {
   runAgentTurn,
 } from "./agent-core.server";
 import type { AgentChannel } from "./agent-core.server";
-import type { LlmMessage } from "./messenger-llm.server";
+import type { LlmMessage } from "./agent-llm.server";
 import {
   completeSupportChatJob,
   getSupportChatThreadChannel,
@@ -193,6 +193,15 @@ export async function runSupportChatTurn({
     };
   }
 
-  await completeSupportChatJob(jobId, threadId, result.reply.blocks);
+  // Per-transport text cap (2026-08-24 ownership move): the core emits the
+  // text VERBATIM and every adapter enforces its own transport's limit — the
+  // Messenger adapter budgets in deliverReplyAndBookkeep, the web channels
+  // cap here before persisting. Markdown stays (both web surfaces render it).
+  const blocks = result.reply.blocks.map((block) =>
+    block.type === "text"
+      ? { ...block, text: block.text.slice(0, channel.supports.textLimit) }
+      : block,
+  );
+  await completeSupportChatJob(jobId, threadId, blocks);
   return { status: "done", intercepted: false };
 }
