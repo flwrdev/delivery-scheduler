@@ -3,13 +3,16 @@ export default async function renderOrderStatusBlock() {
     shopify: CustomerAccountOrderStatusApi;
   }).shopify as CustomerAccountOrderStatusApi;
 
-  // Keep both the host-provided order snapshot and our own refresh sources because
-  // the customer-account page can lag behind immediately after a reschedule save.
+  // Keep both the host-provided order snapshot and our own one-shot backend read
+  // because the customer-account page can lag behind immediately after a
+  // reschedule save. (A cross-extension storage "handoff" from the reschedule
+  // modal used to live here — it was dead code: extension storage is scoped per
+  // extension, so this block could never see the modal's marker. Removed
+  // 2026-08-25 together with its 1s poll loop.)
   const state = {
     metafields: getSubscribableValue(api.appMetafields) ?? [],
     attributes: getSubscribableValue(api.attributes) ?? [],
     order: getSubscribableValue(api.order),
-    pendingSync: null as PendingRescheduleSync | null,
     latestDelivery: null as OrderDeliverySnapshot | null,
   };
 
@@ -26,54 +29,16 @@ export default async function renderOrderStatusBlock() {
   const root = document.createElement('s-query-container');
   document.body.replaceChildren(root);
 
-  // Split-cadence poll. The tick itself is ALWAYS on for the life of the block,
-  // but only its cheap half runs unconditionally:
-  //
-  //   - storage read (local, no network) — every tick, forever. The reschedule
-  //     modal and this block live on the SAME customer-account page, and the
-  //     block does NOT re-activate when the modal closes, so this read is the
-  //     only thing that notices the `delivery-reschedule-sync:` handoff appearing
-  //     after the block has already rendered. Stopping it would lose the
-  //     optimistic update until a manual refresh — which is the whole reason
-  //     this poll exists.
-  //   - backend read (network) — only while a fresh handoff is outstanding, and
-  //     it stops again the moment that handoff resolves or ages out. The original
-  //     code fetched the backend every second for the whole life of the page.
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
-  let isPollInFlight = false;
-  let hasPendingHandoff = false;
-
-  const startPolling = () => {
-    // The handle is kept so arming is idempotent within this activation —
-    // repeated calls install at most one interval. (A re-activation gets a
-    // fresh closure and its own interval; the target has no teardown hook.)
-    if (pollTimer !== null) {
-      return;
-    }
-
-    pollTimer = setInterval(() => {
-      void pollOnce();
-    }, RESCHEDULE_SYNC_POLL_MS);
-  };
-
-  const pollOnce = async () => {
-    // Skip the tick outright if the previous one has not settled: at a 1s period a
-    // slow backend would otherwise stack overlapping fetches on top of each other.
-    if (isPollInFlight) {
-      return;
-    }
-
-    isPollInFlight = true;
-    try {
-      await syncPendingRescheduleFromStorage();
-
-      if (hasPendingHandoff) {
-        await syncLatestDelivery();
-      }
-    } finally {
-      isPollInFlight = false;
-    }
-  };
+  // Backend-read discipline (2026-08-25 incident: stale tabs streamed 1 req/s of
+  // 401s at the backend with no stop condition). One read per order id, one in
+  // flight at a time, and the backend is abandoned for the rest of the
+  // activation after repeated auth failures or too many errors of any kind —
+  // the host metafield/attribute fallback keeps the block rendering regardless.
+  let isFetchInFlight = false;
+  let lastFetchedOrderId: string | null = null;
+  let authFailStreak = 0;
+  let totalFailCount = 0;
+  let backendDisabled = false;
 
   const render = () => {
     const metafields = state.metafields;
@@ -94,39 +59,12 @@ export default async function renderOrderStatusBlock() {
       'reschedule_status',
     );
 
-    let pendingSync = state.pendingSync;
-    // Clear the optimistic handoff once either the direct server fetch or Shopify's
-    // host payload confirms the saved delivery values.
-    if (
-      order?.id &&
-      pendingSync &&
-      doesDeliveryMatchPendingSync(
-        pendingSync,
-        latestDelivery ?? {
-          date: metaDate,
-          timeSlot: metaTime,
-          status: storedRescheduleStatus,
-        },
-      )
-    ) {
-      state.pendingSync = null;
-      pendingSync = null;
-      void clearPendingRescheduleSync(api.storage, order.id);
-      // The handoff resolved — stop hitting the backend. The storage half of the
-      // tick keeps running, ready for the next handoff.
-      hasPendingHandoff = false;
-    }
-
-    // Prefer the optimistic handoff and the direct server read over the host snapshot
-    // so the block reflects a successful reschedule without a full page reload.
+    // Prefer the direct server read over the host snapshot so the block reflects
+    // a recent reschedule even while Shopify's own order payload lags behind.
     const deliveryDate =
-      pendingSync?.date ?? latestDelivery?.date ?? metaDate ?? attrs['Delivery Date'] ?? null;
+      latestDelivery?.date ?? metaDate ?? attrs['Delivery Date'] ?? null;
     const deliveryTime =
-      pendingSync?.timeSlot ??
-      latestDelivery?.timeSlot ??
-      metaTime ??
-      attrs['Delivery Time'] ??
-      null;
+      latestDelivery?.timeSlot ?? metaTime ?? attrs['Delivery Time'] ?? null;
     const cardMessage = attrs['Card Message'] ?? null;
 
     if (!deliveryDate && !deliveryTime) {
@@ -134,8 +72,7 @@ export default async function renderOrderStatusBlock() {
       return;
     }
 
-    const rescheduleStatus =
-      pendingSync?.status ?? latestDelivery?.status ?? storedRescheduleStatus;
+    const rescheduleStatus = latestDelivery?.status ?? storedRescheduleStatus;
 
     const section = document.createElement('s-section');
     const orderLabel = order?.name ? ` · ${order.name}` : '';
@@ -171,37 +108,48 @@ export default async function renderOrderStatusBlock() {
     root.replaceChildren(section);
   };
 
-  const syncPendingRescheduleFromStorage = async () => {
-    const nextPendingSync = await readPendingRescheduleSync(
-      api.storage,
-      state.order?.id ?? null,
-    );
-
-    // Gate the backend half of the tick. `readPendingRescheduleSync` already
-    // deletes a marker older than RESCHEDULE_SYNC_MAX_AGE_MS and answers null, so
-    // the freshness cap doubles as a stop condition: the fetches end right after
-    // that final clear instead of running for the life of the page.
-    hasPendingHandoff = nextPendingSync !== null;
-
-    if (isSamePendingRescheduleSync(state.pendingSync, nextPendingSync)) {
-      return;
-    }
-
-    state.pendingSync = nextPendingSync;
-    render();
-  };
-
   const syncLatestDelivery = async () => {
-    // Poll the app backend because closing the reschedule modal does not reliably
-    // cause Shopify's customer-account shell to refetch order delivery metafields.
-    const nextDelivery = await fetchLatestOrderDelivery(api, state.order?.id ?? null);
+    const orderId = state.order?.id ?? null;
 
-    if (isSameOrderDeliverySnapshot(state.latestDelivery, nextDelivery)) {
+    // The lastFetchedOrderId check is the dedupe: activation and the order
+    // subscribable's initial emission both land here, and repeated emissions of
+    // the same order must not each cost a network round trip.
+    if (
+      !orderId ||
+      backendDisabled ||
+      isFetchInFlight ||
+      lastFetchedOrderId === orderId
+    ) {
       return;
     }
 
-    state.latestDelivery = nextDelivery;
-    render();
+    isFetchInFlight = true;
+    try {
+      const result = await fetchLatestOrderDelivery(api, orderId);
+
+      if (result.authFailure) {
+        authFailStreak += 1;
+      } else {
+        authFailStreak = 0;
+      }
+      if (!result.ok) {
+        totalFailCount += 1;
+      }
+      if (authFailStreak >= AUTH_FAIL_STOP || totalFailCount >= TOTAL_FAIL_STOP) {
+        // A dead session never heals within the page's lifetime — stop asking.
+        backendDisabled = true;
+      }
+
+      if (result.ok) {
+        lastFetchedOrderId = orderId;
+        if (!isSameOrderDeliverySnapshot(state.latestDelivery, result.delivery)) {
+          state.latestDelivery = result.delivery;
+          render();
+        }
+      }
+    } finally {
+      isFetchInFlight = false;
+    }
   };
 
   subscribeToSubscribable(api.appMetafields, (value) => {
@@ -214,35 +162,30 @@ export default async function renderOrderStatusBlock() {
   });
   subscribeToSubscribable(api.order, (value) => {
     state.order = value;
-    void syncPendingRescheduleFromStorage();
     void syncLatestDelivery();
     render();
   });
 
-  await syncPendingRescheduleFromStorage();
   await syncLatestDelivery();
-  startPolling();
 
   render();
 }
 
 const APP_BASE_URL = 'https://delivery-scheduler-299861709433.us-central1.run.app';
 const ORDER_DELIVERY_URL = `${APP_BASE_URL}/public/customer-account/order-delivery`;
-const RESCHEDULE_SYNC_KEY_PREFIX = 'delivery-reschedule-sync:';
-const RESCHEDULE_SYNC_MAX_AGE_MS = 15 * 60 * 1000;
-const RESCHEDULE_SYNC_POLL_MS = 1000;
-
-type PendingRescheduleSync = {
-  date: string;
-  timeSlot: string;
-  status: 'confirmed';
-  updatedAt: number;
-};
+const AUTH_FAIL_STOP = 3;
+const TOTAL_FAIL_STOP = 20;
 
 type OrderDeliverySnapshot = {
   date: string | null;
   timeSlot: string | null;
   status: string | null;
+};
+
+type OrderDeliveryFetchResult = {
+  ok: boolean;
+  authFailure: boolean;
+  delivery: OrderDeliverySnapshot | null;
 };
 
 type CustomerAccountOrderStatusApi = {
@@ -254,18 +197,12 @@ type CustomerAccountOrderStatusApi = {
   sessionToken: {
     get: () => Promise<string>;
   };
-  storage: ExtensionStorage;
 };
 
 type ExtensionSubscribable<T> = {
   value?: T;
   current?: T;
   subscribe?: (subscriber: (value: T) => void) => (() => void) | void;
-};
-
-type ExtensionStorage = {
-  read: <T = unknown>(key: string) => Promise<T | null>;
-  delete: (key: string) => Promise<void>;
 };
 
 function getMetafieldValue(
@@ -295,16 +232,19 @@ function subscribeToSubscribable<T>(
 
 async function fetchLatestOrderDelivery(
   api: CustomerAccountOrderStatusApi,
-  orderId: string | null | undefined,
-) {
-  if (!orderId) {
-    return null;
-  }
-
+  orderId: string,
+): Promise<OrderDeliveryFetchResult> {
   try {
-    // Reuse the customer-account session token so the backend can validate both the
-    // signed-in customer and the specific order before returning fresh delivery data.
     const sessionToken = await api.sessionToken.get();
+
+    // If the sandbox bridge dies mid-call, get() can resolve undefined; sending
+    // that reaches the backend as the literal string "undefined" and lands as an
+    // unexplained 401 (observed in prod 2026-08-25). Count it as an auth failure
+    // locally instead of shipping garbage.
+    if (typeof sessionToken !== 'string' || sessionToken.trim() === '') {
+      return { ok: false, authFailure: true, delivery: null };
+    }
+
     const requestBody = new URLSearchParams({ orderId, sessionToken });
 
     const response = await fetch(ORDER_DELIVERY_URL, {
@@ -322,94 +262,26 @@ async function fetchLatestOrderDelivery(
     };
 
     if (!response.ok) {
-      throw new Error(responseBody.error ?? `Order delivery request failed (${response.status})`);
+      console.warn(
+        'Order delivery request failed:',
+        responseBody.error ?? response.status,
+      );
+      return {
+        ok: false,
+        authFailure: response.status === 401 || response.status === 403,
+        delivery: null,
+      };
     }
 
     if (!isOrderDeliverySnapshot(responseBody.delivery)) {
-      return null;
+      return { ok: true, authFailure: false, delivery: null };
     }
 
-    return responseBody.delivery;
+    return { ok: true, authFailure: false, delivery: responseBody.delivery };
   } catch (error) {
     console.warn('Failed to fetch latest order delivery:', error);
-    return null;
+    return { ok: false, authFailure: false, delivery: null };
   }
-}
-
-async function readPendingRescheduleSync(
-  storage: ExtensionStorage,
-  orderId: string | null | undefined,
-) {
-  if (!orderId) {
-    return null;
-  }
-
-  try {
-    for (const key of getPendingRescheduleSyncKeys(orderId)) {
-      const value = await storage.read<unknown>(key);
-      if (value == null) {
-        continue;
-      }
-
-      if (!isPendingRescheduleSync(value)) {
-        await storage.delete(key);
-        continue;
-      }
-
-      if (Date.now() - value.updatedAt > RESCHEDULE_SYNC_MAX_AGE_MS) {
-        await storage.delete(key);
-        continue;
-      }
-
-      return value;
-    }
-
-    return null;
-  } catch (error) {
-    console.warn('Failed to read pending reschedule sync:', error);
-    return null;
-  }
-}
-
-async function clearPendingRescheduleSync(storage: ExtensionStorage, orderId: string) {
-  try {
-    await Promise.all(
-      getPendingRescheduleSyncKeys(orderId).map((key) => storage.delete(key)),
-    );
-  } catch (error) {
-    console.warn('Failed to clear pending reschedule sync:', error);
-  }
-}
-
-function getPendingRescheduleSyncKeys(orderId: string) {
-  const numericOrderId = extractNumericOrderId(orderId);
-  const keys = new Set([`${RESCHEDULE_SYNC_KEY_PREFIX}${orderId}`]);
-
-  if (numericOrderId) {
-    keys.add(`${RESCHEDULE_SYNC_KEY_PREFIX}${numericOrderId}`);
-    keys.add(`${RESCHEDULE_SYNC_KEY_PREFIX}gid://shopify/Order/${numericOrderId}`);
-  }
-
-  return [...keys];
-}
-
-function extractNumericOrderId(orderId: string) {
-  const match = orderId.match(/(\d+)$/);
-  return match ? match[1] : null;
-}
-
-function isPendingRescheduleSync(value: unknown): value is PendingRescheduleSync {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.date === 'string' &&
-    typeof candidate.timeSlot === 'string' &&
-    candidate.status === 'confirmed' &&
-    typeof candidate.updatedAt === 'number'
-  );
 }
 
 function isOrderDeliverySnapshot(value: unknown): value is OrderDeliverySnapshot {
@@ -422,26 +294,6 @@ function isOrderDeliverySnapshot(value: unknown): value is OrderDeliverySnapshot
     (candidate.date === null || typeof candidate.date === 'string') &&
     (candidate.timeSlot === null || typeof candidate.timeSlot === 'string') &&
     (candidate.status === null || typeof candidate.status === 'string')
-  );
-}
-
-function isSamePendingRescheduleSync(
-  left: PendingRescheduleSync | null,
-  right: PendingRescheduleSync | null,
-) {
-  if (left === right) {
-    return true;
-  }
-
-  if (!left || !right) {
-    return false;
-  }
-
-  return (
-    left.date === right.date &&
-    left.timeSlot === right.timeSlot &&
-    left.status === right.status &&
-    left.updatedAt === right.updatedAt
   );
 }
 
@@ -461,17 +313,6 @@ function isSameOrderDeliverySnapshot(
     left.date === right.date &&
     left.timeSlot === right.timeSlot &&
     left.status === right.status
-  );
-}
-
-function doesDeliveryMatchPendingSync(
-  pendingSync: PendingRescheduleSync,
-  delivery: OrderDeliverySnapshot,
-) {
-  return (
-    delivery.date === pendingSync.date &&
-    delivery.timeSlot === pendingSync.timeSlot &&
-    delivery.status === pendingSync.status
   );
 }
 

@@ -52,7 +52,6 @@ export default async function renderRescheduleModal() {
 const APP_BASE_URL = 'https://delivery-scheduler-299861709433.us-central1.run.app';
 const SCHEDULE_RULES_URL = `${APP_BASE_URL}/public/customer-account/schedule-rules`;
 const RESCHEDULE_URL = `${APP_BASE_URL}/public/customer-account/reschedule`;
-const RESCHEDULE_SYNC_KEY_PREFIX = 'delivery-reschedule-sync:';
 
 function formatDisplayDate(isoDate: string): string {
   const [y, m, d] = isoDate.split('-').map(Number);
@@ -86,19 +85,9 @@ type RescheduleState = {
 type ShopifyActionApi = {
   close: () => void;
   orderId: string;
-  storage: {
-    write: (key: string, value: unknown) => Promise<void>;
-  };
   sessionToken: {
     get: () => Promise<string>;
   };
-};
-
-type PendingRescheduleSync = {
-  date: string;
-  timeSlot: string;
-  status: 'confirmed';
-  updatedAt: number;
 };
 
 function getShopifyApi() {
@@ -279,11 +268,16 @@ function buildRescheduleView(
 
     dateField.setAttribute('allow', `${state.minDate}--${state.maxDate}`);
     setOptionalAttribute(dateField, 'disallow', state.disallowDates);
-    dateField.toggleAttribute('disabled', state.isLoadingRules || state.isSubmitting);
+    setBooleanAttribute(
+      dateField,
+      'disabled',
+      state.isLoadingRules || state.isSubmitting,
+    );
     setOptionalAttribute(dateField, 'error', state.dateError);
     setElementValue(dateField, state.date);
 
-    select.toggleAttribute(
+    setBooleanAttribute(
+      select,
       'disabled',
       state.isLoadingRules ||
         state.isSubmitting ||
@@ -295,8 +289,8 @@ function buildRescheduleView(
     setElementValue(select, state.timeSlot);
 
     const isBusy = state.isSubmitting || state.isLoadingRules;
-    confirmButton.toggleAttribute('loading', isBusy);
-    confirmButton.toggleAttribute('disabled', isBusy);
+    setBooleanAttribute(confirmButton, 'loading', isBusy);
+    setBooleanAttribute(confirmButton, 'disabled', isBusy);
   };
 
   return { action, update };
@@ -354,7 +348,7 @@ async function submitReschedule(
   try {
     // Send the write through the app backend so the same auth, ownership, and
     // delivery-rule validation is enforced for every customer-account submission.
-    const sessionToken = await shopifyApi.sessionToken.get();
+    const sessionToken = await getSessionToken(shopifyApi);
 
     const requestBody = new URLSearchParams({
       orderId: shopifyApi.orderId,
@@ -387,15 +381,6 @@ async function submitReschedule(
       }
       return;
     }
-
-    // Persist an optimistic handoff for the order-status block so it can reflect the
-    // saved delivery selection before Shopify refreshes its own order payload.
-    await writePendingRescheduleSync(shopifyApi, {
-      date: state.date,
-      timeSlot: state.timeSlot,
-      status: 'confirmed',
-      updatedAt: Date.now(),
-    });
 
     // Move the modal into success state using the values that just saved instead of
     // waiting for the surrounding customer-account page to re-read the order.
@@ -432,7 +417,7 @@ async function loadScheduleRules(
 async function fetchScheduleRules(
   shopifyApi: ShopifyActionApi,
 ): Promise<DeliveryScheduleRules> {
-  const sessionToken = await shopifyApi.sessionToken.get();
+  const sessionToken = await getSessionToken(shopifyApi);
   // Excludes this order's own current booking from the returned capacity
   // counts, same as the reschedule submit path — otherwise a slot this order
   // already occupies can read as "full" in the picker even though picking it
@@ -467,36 +452,18 @@ async function fetchScheduleRules(
   return cloneDeliveryScheduleRules(responseBody.rules);
 }
 
-async function writePendingRescheduleSync(
-  shopifyApi: ShopifyActionApi,
-  value: PendingRescheduleSync,
-) {
-  try {
-    await Promise.all(
-      getPendingRescheduleSyncKeys(shopifyApi.orderId).map((key) =>
-        shopifyApi.storage.write(key, value),
-      ),
-    );
-  } catch (error) {
-    console.warn('Failed to persist pending reschedule sync:', error);
-  }
-}
+async function getSessionToken(shopifyApi: ShopifyActionApi): Promise<string> {
+  const sessionToken = await shopifyApi.sessionToken.get();
 
-function getPendingRescheduleSyncKeys(orderId: string) {
-  const numericOrderId = extractNumericOrderId(orderId);
-  const keys = new Set([`${RESCHEDULE_SYNC_KEY_PREFIX}${orderId}`]);
-
-  if (numericOrderId) {
-    keys.add(`${RESCHEDULE_SYNC_KEY_PREFIX}${numericOrderId}`);
-    keys.add(`${RESCHEDULE_SYNC_KEY_PREFIX}gid://shopify/Order/${numericOrderId}`);
+  // If the sandbox bridge is torn down mid-call, get() can resolve undefined;
+  // sending that would reach the backend as the literal string "undefined" and
+  // land as an unexplained 401 (observed in prod 2026-08-25). Fail loudly here
+  // instead so the modal's own error handling reports something actionable.
+  if (typeof sessionToken !== 'string' || sessionToken.trim() === '') {
+    throw new Error('Session token unavailable. Please refresh the page.');
   }
 
-  return [...keys];
-}
-
-function extractNumericOrderId(orderId: string) {
-  const match = orderId.match(/(\d+)$/);
-  return match ? match[1] : null;
+  return sessionToken;
 }
 
 function applyAvailabilityState(state: RescheduleState) {
@@ -641,6 +608,18 @@ function createOption(value: string, label: string) {
   const option = createElement('s-option', { value });
   option.textContent = label;
   return option;
+}
+
+function setBooleanAttribute(element: HTMLElement, name: string, on: boolean) {
+  // The customer-account sandbox's remote-DOM elements implement setAttribute /
+  // removeAttribute but NOT the standard boolean-toggle DOM method — calling it
+  // throws and takes the whole action modal down (prod incident 2026-08-25;
+  // enforced repo-wide by test/extension-sandbox-dom-guard.test.ts).
+  if (on) {
+    element.setAttribute(name, '');
+    return;
+  }
+  element.removeAttribute(name);
 }
 
 function setOptionalAttribute(element: HTMLElement, name: string, value: string) {

@@ -72,11 +72,19 @@ async function queryStorefront(shop: string, variables: Record<string, unknown>)
     throw new Error("SHOPIFY_STOREFRONT_ACCESS_TOKEN is not configured");
   }
 
+  // The merchant's token rotation (2026-08-25) issued a public-style Storefront
+  // token (32-hex, admin custom app), which authenticates via the public header;
+  // a Headless-channel private token (shpat_-prefixed) still gets the private
+  // header, so either kind of token can be dropped into the secret.
+  const tokenHeader = token.startsWith("shpat")
+    ? "Shopify-Storefront-Private-Token"
+    : "X-Shopify-Storefront-Access-Token";
+
   const response = await fetch(`https://${shop}/api/${apiVersion}/graphql.json`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Shopify-Storefront-Private-Token": token,
+      [tokenHeader]: token,
     },
     body: JSON.stringify({ query: PRODUCTS_QUERY, variables }),
   });

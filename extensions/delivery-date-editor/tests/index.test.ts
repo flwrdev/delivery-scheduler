@@ -3,18 +3,17 @@
 // customer-account order-status page (docs/api.md §2: reads block state and
 // calls read endpoints only).
 //
-// It merges three sources of truth, in this precedence order: the optimistic
-// handoff the reschedule modal left in `shopify.storage`, the direct
+// It merges two sources of truth, in this precedence order: the direct
 // /public/customer-account/order-delivery read, then the host's own metafields
-// and legacy checkout attributes. The precedence exists because closing the
-// reschedule modal does not reliably make Shopify refetch the order.
+// and legacy checkout attributes. The direct read exists because Shopify's
+// order payload can lag right after a reschedule. (The former cross-extension
+// storage "handoff" was dead code — extension storage is per-extension, so this
+// block could never see the modal's marker — and was removed 2026-08-25
+// together with the 1s poll loop.)
 import { getExtension } from "@shopify/ui-extensions-tester";
-import { createStorage } from "@shopify/ui-extensions-tester/customer-account";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const extension = getExtension("customer-account.order-status.block.render");
-
-const ORDER_ID = "gid://shopify/Order/1";
 
 function metafield(namespace: string, key: string, value: string) {
   return { target: { type: "order" as const }, metafield: { namespace, key, value } };
@@ -27,6 +26,29 @@ function setSubscribable(subscribable: { value?: unknown; current?: unknown }, n
   subscribable.current = next;
 }
 
+// A controllable stand-in for the order subscribable: tests emit new order
+// values through it to exercise the fetch dedupe and the auth-failure stop.
+function createEmittableOrder(initial: unknown) {
+  let subscriber: ((value: unknown) => void) | null = null;
+  const subscribable = {
+    value: initial,
+    current: initial,
+    subscribe(fn: (value: unknown) => void) {
+      subscriber = fn;
+    },
+    emit(next: unknown) {
+      subscribable.value = next;
+      subscribable.current = next;
+      subscriber?.(next);
+    },
+  };
+  return subscribable;
+}
+
+function fetchCallCount() {
+  return (extension.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+}
+
 function texts() {
   return [...document.body.querySelectorAll("s-text")].map(
     (node) => node.textContent ?? "",
@@ -34,13 +56,6 @@ function texts() {
 }
 
 beforeEach(() => {
-  // The block runs one 1s interval for its whole life. Every tick re-reads
-  // shopify.storage (local, no network) so a handoff written AFTER the first
-  // render is still noticed; only a tick that finds a fresh handoff also
-  // refetches the backend. Faking just the interval timers lets a test drive
-  // that tick on purpose and keeps it inert otherwise, without touching
-  // Date.now(), which the pending-sync freshness window depends on.
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   extension.setUp();
   // Quiet 200 with no `delivery` key: the direct read reports "nothing fresher
   // than what the host already gave us".
@@ -51,7 +66,6 @@ beforeEach(() => {
 
 afterEach(() => {
   extension.tearDown();
-  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -121,17 +135,21 @@ describe("delivery-date-editor order-status block", () => {
     expect(badge?.textContent).not.toContain("2026-09-02");
   });
 
-  it("prefers the modal's pending-sync handoff over the stale host metafields", async () => {
-    // What order-action-modal.tsx wrote right after a successful reschedule.
-    extension.shopify.storage = createStorage({
-      [`delivery-reschedule-sync:${ORDER_ID}`]: {
-        date: "2026-09-09",
-        timeSlot: "3PM-6PM",
-        status: "confirmed",
-        updatedAt: Date.now(),
-      },
-    });
-    // The host payload still shows the PRE-reschedule values.
+  it("prefers the direct server read over the stale host metafields", async () => {
+    // The backend answers with the just-saved reschedule values while the host
+    // payload still shows the pre-reschedule ones.
+    extension.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            delivery: {
+              date: "2026-09-09",
+              timeSlot: "3PM-6PM",
+              status: "confirmed",
+            },
+          }),
+        ),
+    ) as unknown as typeof globalThis.fetch;
     setSubscribable(extension.shopify.appMetafields, [
       metafield("custom", "date", "2026-09-02"),
       metafield("custom", "time_slot", "9AM-12PM"),
@@ -145,16 +163,13 @@ describe("delivery-date-editor order-status block", () => {
       "Time slot",
       "3PM-6PM",
     ]);
-    // The handoff also carries the confirmed status, so the badge appears.
+    // The server read also carries the confirmed status, so the badge appears.
     expect(document.body.querySelector("s-badge")).not.toBeNull();
   });
 
-  it("picks up a handoff written after the block has already rendered", async () => {
-    // The reschedule modal and this block sit on the SAME customer-account page,
-    // and the block is not re-activated when the modal closes. So the only thing
-    // that can notice the handoff the modal just wrote is the storage read on the
-    // poll tick — which is why that read must keep running even when there was
-    // nothing pending at first render.
+  it("fetches once per order id — re-emitting the same order costs no request", async () => {
+    const order = createEmittableOrder({ id: "gid://shopify/Order/1", name: "#1000" });
+    extension.shopify.order = order as unknown as typeof extension.shopify.order;
     setSubscribable(extension.shopify.appMetafields, [
       metafield("custom", "date", "2026-09-02"),
       metafield("custom", "time_slot", "9AM-12PM"),
@@ -162,34 +177,74 @@ describe("delivery-date-editor order-status block", () => {
 
     await extension.render();
 
+    const callsAfterActivation = fetchCallCount();
+    expect(callsAfterActivation).toBe(1);
+
+    // The host re-emitting the identical order (hydration echoes, unrelated
+    // updates) must not turn into extra network traffic.
+    order.emit({ id: "gid://shopify/Order/1", name: "#1000" });
+    order.emit({ id: "gid://shopify/Order/1", name: "#1000" });
+    await Promise.resolve();
+
+    expect(fetchCallCount()).toBe(callsAfterActivation);
+  });
+
+  it("stops calling the backend after three consecutive auth failures", async () => {
+    // 2026-08-25 incident pin: stale tabs streamed 1 req/s of 401s with no stop
+    // condition. Auth failures never heal within a page's lifetime, so after
+    // three in a row the backend must be left alone for the rest of the
+    // activation.
+    extension.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
+          status: 401,
+        }),
+    ) as unknown as typeof globalThis.fetch;
+    const order = createEmittableOrder(undefined);
+    extension.shopify.order = order as unknown as typeof extension.shopify.order;
+    setSubscribable(extension.shopify.appMetafields, [
+      metafield("custom", "date", "2026-09-02"),
+      metafield("custom", "time_slot", "9AM-12PM"),
+    ]);
+
+    await extension.render();
+    expect(fetchCallCount()).toBe(0);
+
+    // Three different orders → three attempts, all 401.
+    for (const id of ["1", "2", "3"]) {
+      order.emit({ id: `gid://shopify/Order/${id}`, name: `#${id}` });
+      // Let the async fetch settle before the next emission so the failures
+      // count as consecutive attempts rather than being skipped by the
+      // in-flight guard.
+      await vi.waitFor(() => {
+        expect(fetchCallCount()).toBe(Number(id));
+      });
+    }
+
+    // The stop is now armed — a fourth order must not produce a request.
+    order.emit({ id: "gid://shopify/Order/4", name: "#4" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetchCallCount()).toBe(3);
+  });
+
+  it("refuses to send a non-string session token", async () => {
+    // A dying sandbox bridge can make sessionToken.get() resolve undefined; the
+    // old code serialized that into the literal string "undefined" and shipped
+    // it as a doomed 401 (seen in prod 2026-08-25). It must never reach fetch.
+    extension.shopify.sessionToken.get = vi.fn(
+      async () => undefined,
+    ) as unknown as typeof extension.shopify.sessionToken.get;
+    setSubscribable(extension.shopify.appMetafields, [
+      metafield("custom", "date", "2026-09-02"),
+      metafield("custom", "time_slot", "9AM-12PM"),
+    ]);
+
+    await extension.render();
+
+    expect(fetchCallCount()).toBe(0);
+    // The host metafields still render — the guard degrades, never blanks.
     expect(texts()).toEqual(["Date", "2026-09-02", "Time slot", "9AM-12PM"]);
-
-    // A tick with an empty storage changes nothing — and, the point of the
-    // split cadence, it must NOT hit the network: only the local storage read
-    // runs while nothing is pending. This pins the backend gate itself, not
-    // just the storage half — an unconditional refetch-every-tick would pass
-    // every other assertion in this file.
-    const idleFetchCalls = (extension.fetch as ReturnType<typeof vi.fn>).mock
-      .calls.length;
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(texts()).toEqual(["Date", "2026-09-02", "Time slot", "9AM-12PM"]);
-    expect(
-      (extension.fetch as ReturnType<typeof vi.fn>).mock.calls.length,
-    ).toBe(idleFetchCalls);
-
-    // ...and now the modal lands its optimistic handoff mid-life.
-    await extension.shopify.storage.write(
-      `delivery-reschedule-sync:${ORDER_ID}`,
-      {
-        date: "2026-09-09",
-        timeSlot: "3PM-6PM",
-        status: "confirmed",
-        updatedAt: Date.now(),
-      },
-    );
-
-    await vi.advanceTimersByTimeAsync(1000);
-
-    expect(texts()).toEqual(["Date", "2026-09-09", "Time slot", "3PM-6PM"]);
   });
 });
