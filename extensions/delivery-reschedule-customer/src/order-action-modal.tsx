@@ -56,7 +56,9 @@ const RESCHEDULE_URL = `${APP_BASE_URL}/public/customer-account/reschedule`;
 function formatDisplayDate(isoDate: string): string {
   const [y, m, d] = isoDate.split('-').map(Number);
   const date = new Date(y, m - 1, d);
-  return date.toLocaleDateString(undefined, {
+  // Pinned to English per the brand's English-first voice (merchant decision
+  // 2026-08-25) — a Filipino-locale browser would otherwise render "Biyernes".
+  return date.toLocaleDateString('en-PH', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
