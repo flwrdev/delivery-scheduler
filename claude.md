@@ -81,3 +81,11 @@ Rules:
   the user: "Run `npm run setup` before your next `npm run dev`" —
   dev boot no longer auto-applies migrations (see shopify.web.toml
   commit 00482e1).
+- **Stay inside this repo.** Every shell command runs with
+  `C:\Projects\LPC Issue\delivery-scheduler` as the working directory and must
+  stay there. Do NOT `cd` out of it, and do NOT read, search, write, or run
+  anything in another repo or an unrelated folder — no absolute paths outside
+  the repo root, no `..` escapes, no cross-repo `grep`/`find`. If a task
+  genuinely needs something from outside, STOP and ask for explicit permission
+  first, naming the exact path and why. Exception: the session scratchpad
+  directory for temp files.
