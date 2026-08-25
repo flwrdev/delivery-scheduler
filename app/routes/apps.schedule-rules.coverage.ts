@@ -3,7 +3,9 @@ import type { LoaderFunctionArgs } from "react-router";
 import { verifyAppProxySignature } from "../lib/verify-app-proxy.server";
 import { checkDeliveryCoverage } from "../services/messenger-coverage.server";
 
-// Storefront delivery-fee checker (delivery-fee-checker theme extension).
+// Storefront delivery-fee checker (delivery-fee-checker.liquid block, which
+// lives inside the storefront-chat-widget theme extension — Shopify allows
+// only ONE theme extension per app, so every storefront block ships there).
 //
 // A SECOND caller for checkDeliveryCoverage() — the same pure lookup the
 // FlowerBot agent uses via agent-tools.server.ts, so the storefront quote and
