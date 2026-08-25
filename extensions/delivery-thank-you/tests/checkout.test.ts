@@ -77,13 +77,9 @@ describe("delivery-thank-you card", () => {
     expect(headings()).toEqual(["Delivery Schedule"]);
 
     const body = document.body.textContent ?? "";
-    const formatted = new Date(2026, 8, 2).toLocaleDateString(undefined, {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-    expect(body).toContain(`Date: ${formatted}`);
+    // The customer-facing date is pinned to English (brand English-first
+    // voice, merchant decision 2026-08-25) regardless of the browser locale.
+    expect(body).toContain("Date: Wednesday, September 2, 2026");
     // The raw ISO value never reaches the customer.
     expect(body).not.toContain("2026-09-02");
     expect(body).toContain("Time slot: 9AM-12PM");
