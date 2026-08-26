@@ -270,6 +270,51 @@ model SupportChatJob {
   @@index([threadId, createdAt])
 }
 
+// Durable work record for the orders/create delivery sync (ADR-22, Phase A of
+// docs/proposals/orders-async-jobs.md). Work BOOKKEEPING only — the Shopify
+// order stays the delivery-state ledger; nothing here is ever read as delivery
+// state. The row is the resume point: which idempotent sync step is already
+// done (review finding S5) and whether the work is still owed (M1) — the
+// webhook writes this row and acks fast, the Cloud Tasks worker does the
+// actual sync with retries, the hourly sweep rescues stranded rows.
+model DeliverySyncTask {
+  id             String    @id @default(cuid())
+  shop           String
+  shopifyOrderId String
+  orderName      String? // "#1046" — merchant-facing display in the ops banner
+  // Work input, extracted once from the webhook payload — retries never need
+  // the original payload again. Null deliveryDate/timeSlot = COD-fee-only task.
+  deliveryDate   String?
+  timeSlot       String?
+  // Validation clock (D4/DEF-7, merchant constraint 2026-08-26): every retry
+  // validates against the order's checkout time, never the retry time — a
+  // delayed sync can never turn a legal checkout into "past cutoff".
+  checkoutTime   DateTime
+  needsCodFee    Boolean   @default(false)
+  // Per-step ledger — steps with nothing to do are created already-true, so
+  // "done" is always simply "all three flags true".
+  metafieldsDone Boolean   @default(false)
+  tagsDone       Boolean   @default(false)
+  codFeeDone     Boolean   @default(false)
+  status         String    @default("pending") // pending | done | failed
+  // Double-processing guard (merchant constraint 2026-08-26): worker lease,
+  // claimed via one conditional updateMany (null or stale = claimable) — see
+  // claimDeliverySyncTask in delivery-sync-task.server.ts.
+  lockedAt       DateTime?
+  attempts       Int       @default(0)
+  // "Not before" marker for the SWEEP only — Cloud Tasks retries pace
+  // themselves via the queue's own backoff policy.
+  nextAttemptAt  DateTime  @default(now())
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  doneAt         DateTime?
+
+  @@unique([shop, shopifyOrderId]) // webhook redelivery → same row, never a duplicate
+  @@index([status, nextAttemptAt]) // the sweep query
+  @@index([shop, status]) // the merchant-banner count query
+}
+
 model DeliveryScheduleConfig {
   id                String   @id @default(cuid())
   shop              String   @unique

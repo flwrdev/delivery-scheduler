@@ -53,6 +53,7 @@ props-only component fed from that single loader.
 | | `services/send-customer-email.server.ts` | `handleSendEmailOp` — SMTP send + `EmailSendLog` row |
 | | `services/update-order-contact.server.ts` | `handleEditDetailsOp` |
 | | `services/lalamove-tracking.server.ts` | `recordLalamoveOrderId` (ADR-16 status listener, not dispatch) |
+| | `services/delivery-sync-task.server.ts` | `getDeliverySyncIssues` (loader banner count) + `retryDeliverySyncIssues` (the `retryDeliverySync` op) — ADR-22 |
 | | `services/schedule-rules.server.ts` | `getScheduleRules` / `getScheduleRulesWithBookedCounts` |
 | Styles | `app/styles/order-details-panel.css` | Panel-only styles (imported `?url` via the route's `links()`) |
 
@@ -104,12 +105,15 @@ Loader sequence (all in `app.orders.tsx`):
    (ADR-19) for this page's order ids → attached as `order.emailLog` /
    `order.reminderConversions`. Panel-timeline garnish, not page-critical: a
    Neon cold-start rejection degrades both to empty lists, never 500s the page.
-8. `Response.json({...} satisfies LoaderData, { headers: { "Cache-Control": "no-store" } })`
+8. **Sync-issue count (ADR-22), separately guarded:** `getDeliverySyncIssues`
+   counts failed/stuck `DeliverySyncTask` rows for the warning banner —
+   degrades to zero on DB trouble, never page-critical.
+9. `Response.json({...} satisfies LoaderData, { headers: { "Cache-Control": "no-store" } })`
    returning: `orders`, `pageInfo`, `errors`, the echoed filter params,
-   `todayISO`, `pageSize`, and `mapsApiKey` (client-exposed by design — the
-   Maps JS SDK needs it in the browser; the key must be locked down in Google
-   Cloud console to the Cloud Run referrer + Maps JavaScript API/Places API
-   (New) only).
+   `todayISO`, `pageSize`, `syncIssues`, and `mapsApiKey` (client-exposed by
+   design — the Maps JS SDK needs it in the browser; the key must be locked
+   down in Google Cloud console to the Cloud Run referrer + Maps JavaScript
+   API/Places API (New) only).
 
 **`shouldRevalidate` (REC-7):** toggling the `?order` param (panel open/close)
 skips the loader re-run — the panel reads already-loaded data. Everything else
@@ -143,6 +147,12 @@ default behavior.
   `escDisabled`; **Esc closes the panel only when no modal is open** —
   with a modal up, Esc closes just that modal (`anyModalOpen` in the route:
   `activeModal`, the shared tags modal, or the KPI products modal).
+- **Sync-issue banner (ADR-22)** — renders when `syncIssues.count > 0`
+  (failed/stuck webhook delivery syncs): warning tone, lists sample order
+  names, "Retry sync" button on a dedicated fetcher (which counts into
+  `actionInFlight`, so auto-refresh pauses while a retry runs). Deliberately
+  not dismissible — it reports a real capacity-count gap and clears itself
+  once the sync completes.
 - **Modal state** — one `activeModal` discriminated union in the route
   (`cancel` / `archive` / `unarchive` / `markFulfilled` / `reschedule` /
   `sendEmail` / `editDetails` / `addTags` / `removeTags`), plus the two
@@ -172,10 +182,13 @@ its loader:
 
 The route `action` dispatches on `_action`:
 
-- **Single-order ops, dispatched before the bulk machinery:** `sendEmail`
-  (SMTP compose — writes **nothing** to the Shopify order, logs to
-  `EmailSendLog` for the timeline) and `editDetails` (shipping-address
-  rewrite — an order write but **not** a delivery write).
+- **Single-order/no-selection ops, dispatched before the bulk machinery:**
+  `sendEmail` (SMTP compose — writes **nothing** to the Shopify order, logs to
+  `EmailSendLog` for the timeline), `editDetails` (shipping-address rewrite —
+  an order write but **not** a delivery write), and `retryDeliverySync`
+  (ADR-22 — re-arms failed/stuck `DeliverySyncTask` rows and re-enqueues the
+  worker; posted by the warning banner's "Retry sync" button, no order
+  selection involved).
 - **Bulk ops** (`BulkActionName`, max **100** selected ids): `archive`,
   `unarchive`, `cancel`, `tagsAdd`, `tagsRemove`, `markFulfilled` (+ optional
   Lalamove Order ID → `recordLalamoveOrderId`, ADR-16), `reschedule`.
