@@ -134,6 +134,13 @@ drifted spellings still get the repair write (§5 behavior pinned by test).
 Finished jobs purge at 7 days via the nightly chat-retention job; done sync
 tasks at 30 days (failed sync tasks are kept — they feed the ops banner).
 
+**Phase C (2026-08-27):** the booked-counts engine overlays still-pending
+`DeliverySyncTask` rows (pending + metafields not yet written, deduped by
+order id against the scan) onto every counts read — a paid order occupies its
+slot from the moment its task row exists, not only once its metafields land.
+Additive + fresh per call + fail-open; see the ADR-22 Phase C addendum in
+[decisions.md](./decisions.md).
+
 ## Lalamove courier-status listener (ADR-16 — NOT a Shopify webhook, NOT dispatch; polling-only as of the same-day addendum)
 
 **Correlation is explicit, not inferred.** The merchant pastes the real Lalamove Order ID (from the Lalamove app's order detail "Additional info" section — NOT the tracking share-link) into a new optional field in the `/app/orders` "Mark as fulfilled" modal, single-order only. The `markFulfilled` handler in [app.orders.tsx](../app/routes/app.orders.tsx) calls `recordLalamoveOrderId()` right after a successful `fulfillmentCreate`. Live-tested 2026-08-16: Lalamove's push webhooks do **not** fire for orders booked through the merchant's manual "Place Order" web flow (confirmed via the Lalamove Partner Portal's own "Webhook attempts" log showing zero order events across a real driver assignment + cancellation, while an unrelated event delivered fine on the same URL) — so the poller below, not the webhook, is what actually runs.
