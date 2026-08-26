@@ -47,7 +47,14 @@ import type { BulkModalName } from "../../hooks/useBulkActions";
 export interface OrdersTabDef {
   id: string;
   label: string;
-  count: number;
+  /**
+   * Count derived from the loaded page, or null to render the label without
+   * one — the route passes null when the loaded page is too small to be
+   * representative (25-row server-filtered views) or unknowable (Archived).
+   */
+  count: number | null;
+  /** True when further server pages exist — the count renders as "N+". */
+  approximate?: boolean;
 }
 
 const TIME_SLOT_CHOICES = [
@@ -484,7 +491,9 @@ export function OrdersIndexTable({
               pressed={tab.id === activeTab}
               onClick={() => onTabChange(tab.id)}
             >
-              {tab.count > 0 ? `${tab.label} (${tab.count})` : tab.label}
+              {tab.count !== null && tab.count > 0
+                ? `${tab.label} (${tab.count}${tab.approximate ? "+" : ""})`
+                : tab.label}
             </Button>
           ))}
         </InlineStack>
