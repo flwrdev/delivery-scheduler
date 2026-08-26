@@ -15,7 +15,19 @@ ng state na iyon papunta sa Shopify orders.
   as order metafields, tags, and customAttributes.
 - **Booked-slot counts are computed live** via Admin GraphQL on every call — never
   cached locally, walang audit table (the `delivery.reschedule_history` metafield is
-  the only persistent reschedule audit trail).
+  the only persistent reschedule audit trail). Since ADR-22 Phase C the live scan
+  additionally overlays still-pending `DeliverySyncTask` rows (fresh per call,
+  fail-open, deduped) so a paid order counts against its slot before its sync lands.
+- **Async ops work queues (ADR-22, live 2026-08-27).** The orders/create webhook is
+  a THIN receiver: it records a durable `DeliverySyncTask` row and a Cloud Tasks
+  worker performs the sync with per-step retries (hourly sweep backstop, ops-page
+  banner for failures); bulk ops over 10 orders run as chunked `BulkActionJob`s
+  through ONE shared executor (`app/services/bulk-actions.server.ts`) that the
+  inline path uses too. Design + merchant constraints (no double-processing; a
+  paid order is never rejected for cutoff at retry time):
+  `docs/proposals/orders-async-jobs.md` + decisions.md ADR-22; the `/app/orders`
+  page architecture: `docs/orders-ui.md`. **UPDATE THOSE DOCS whenever this
+  machinery changes** — that is their maintenance contract.
 - **Only a few surfaces write delivery state.** Most extensions and admin order-page
   blocks are read-only. Never assume a surface writes — verify in `docs/api.md`.
 - **Courier dispatch is out of scope** — handled by the official Shopify Lalamove app.
