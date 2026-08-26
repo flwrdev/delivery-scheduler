@@ -65,6 +65,11 @@ import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.s
 import { handleSendEmailOp } from "../services/send-customer-email.server";
 import { handleEditDetailsOp } from "../services/update-order-contact.server";
 import { recordLalamoveOrderId } from "../services/lalamove-tracking.server";
+import {
+  getDeliverySyncIssues,
+  retryDeliverySyncIssues,
+  type DeliverySyncIssueSummary,
+} from "../services/delivery-sync-task.server";
 import prisma from "../db.server";
 import {
   getScheduleRules,
@@ -304,6 +309,8 @@ type LoaderData = {
   pageSize: number;
   /** Google Maps key for the Edit-details address search; "" hides the field. */
   mapsApiKey: string;
+  /** Delivery-sync tasks stuck/failed for this shop (ADR-22) — drives the ops banner; degrades to zero on DB trouble. */
+  syncIssues: DeliverySyncIssueSummary;
 };
 
 export const loader = async ({
@@ -493,6 +500,19 @@ export const loader = async ({
     order.reminderConversions = conversionsByOrderId.get(order.id) ?? [];
   }
 
+  // Sync-issue banner count (ADR-22): same guarded posture as the enrichment
+  // above — banner garnish, never page-critical.
+  let syncIssues: DeliverySyncIssueSummary = { count: 0, orderNames: [] };
+  try {
+    syncIssues = await getDeliverySyncIssues(session.shop);
+  } catch (error) {
+    console.warn(
+      `[orders loader] sync-issue count skipped: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
   return Response.json(
     {
       orders,
@@ -505,6 +525,7 @@ export const loader = async ({
       sortParam,
       todayISO,
       pageSize,
+      syncIssues,
       // Client-exposed by design (Maps JS SDK requires it in the browser) —
       // the key itself must be locked down in the Google Cloud console:
       // HTTP-referrer restriction + Places API only.
@@ -742,6 +763,37 @@ export const action = async ({
     // minutes apart could tag different days.
     const { timezone } = await getScheduleRules(session.shop);
     return handleEditDetailsOp(admin, fd, timezone);
+  }
+
+  // Retry stuck delivery syncs (ADR-22): re-arms failed/stuck DeliverySyncTask
+  // rows and enqueues a worker task each. Carries no orderId selection, so it
+  // dispatches before the bulk machinery like sendEmail/editDetails.
+  if (opRaw === "retryDeliverySync") {
+    try {
+      const { retried } = await retryDeliverySyncIssues(session.shop);
+      return Response.json({
+        ok: true,
+        action: "retryDeliverySync",
+        message:
+          retried > 0
+            ? `Retrying delivery sync for ${retried} order${retried === 1 ? "" : "s"} in the background.`
+            : "Nothing left to retry.",
+        retried,
+      });
+    } catch (error) {
+      console.warn(
+        `[orders action] retryDeliverySync failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      // ADR-11: upstream trouble is 200 + ok:false, never a 5xx.
+      return Response.json({
+        ok: false,
+        action: "retryDeliverySync",
+        message: "Could not restart the delivery sync. Try again in a moment.",
+        retried: 0,
+      });
+    }
   }
 
   const op = isBulkActionName(opRaw) ? opRaw : "";
@@ -1530,6 +1582,11 @@ function Extension() {
     dismiss: dismissOrdersDiff,
   } = useOrdersDiff(displayedOrders, ordersViewKey);
 
+  // ADR-22 sync-issue banner: dedicated fetcher — it counts into
+  // actionInFlight via useFetchers above, so the smart refresh pauses while a
+  // retry runs, and its completion revalidates the loader (banner updates).
+  const syncRetryFetcher = useFetcher<{ ok: boolean; message: string }>();
+
   const ordersDiffTitle = useMemo(() => {
     const parts: string[] = [];
     if (newOrderIds.size > 0) {
@@ -2019,6 +2076,36 @@ function Extension() {
             onDismiss={() => setErrorDismissed(true)}
           >
             <Text as="p">{error}</Text>
+          </Banner>
+        )}
+
+        {/* ── Delivery-sync issue banner (ADR-22): failed/stuck webhook syncs.
+            Not dismissible on purpose — it reports a real capacity-count gap
+            and disappears on its own once the sync completes. ───────────── */}
+        {loaderData.syncIssues.count > 0 && (
+          <Banner
+            tone="warning"
+            title={`Delivery info has not synced for ${loaderData.syncIssues.count} order${
+              loaderData.syncIssues.count === 1 ? "" : "s"
+            }`}
+            action={{
+              content: "Retry sync",
+              loading: syncRetryFetcher.state !== "idle",
+              onAction: () =>
+                syncRetryFetcher.submit(
+                  { _action: "retryDeliverySync" },
+                  { method: "post" },
+                ),
+            }}
+          >
+            <Text as="p">
+              {loaderData.syncIssues.orderNames.join(", ")}
+              {loaderData.syncIssues.count > loaderData.syncIssues.orderNames.length
+                ? " and more"
+                : ""}{" "}
+              — booked-slot counts may be undercounting these orders until the
+              sync completes. Retry runs in the background.
+            </Text>
           </Banner>
         )}
 

@@ -51,6 +51,7 @@ The full route/extension/service inventory (extensions ×12, embedded admin rout
 - `DeliveryScheduleConfig`
 - `MessengerThread` / `MessengerMessage` (Messenger agent conversation pair — never the order)
 - `LalamoveTracking` (ADR-16 — Lalamove↔Shopify correlation side-table, never delivery state)
+- `DeliverySyncTask` (2026-08-26, ADR-22 — durable work record for the orders/create delivery sync: per-step ledger, frozen checkout-time validation clock, atomic worker lease. Work BOOKKEEPING only, never delivery state — the sync's writes still land on the Shopify order per api.md §2 row 1)
 - `EmailSendLog` (2026-08-17 — Customer Email send log for the order panel's `DeliveryTimeline`; never delivery state, never joins the order write-path contract in [api.md](./api.md))
 - `OccasionReminder` / `ReminderSuppression` / `ReminderConfig` (2026-08-21, ADR-19 — occasion-reminder queue rows, the unsubscribe/do-not-remind list, and the merchant kill switch; never delivery state, never joins the order write-path contract)
 - `SupportChatThread` / `SupportChatMessage` / `SupportChatJob` (2026-08-21, ADR-20 — chat conversation + enqueue-then-poll job status, shared by the customer-account AND storefront channels; `SupportChatThread.channel` (added 2026-08-22, ADR-21) distinguishes the two. Same posture as `MessengerThread`/`MessengerMessage`, never delivery state, never joins the order write-path contract)
