@@ -56,6 +56,7 @@ import { RescheduleModal } from "../components/orders/RescheduleModal";
 import { SendEmailModal } from "../components/orders/SendEmailModal";
 import { EditDetailsModal } from "../components/orders/EditDetailsModal";
 import {
+  DEFAULT_DELIVERY_SCHEDULE_RULES,
   getShopLocalDate,
   validateMerchantRescheduleSelection,
 } from "../lib/delivery-availability";
@@ -292,6 +293,15 @@ type LoaderData = {
   timeWindowParam: string;
   tabParam: string;
   sortParam: string;
+  /**
+   * SHOP-local "today" (YYYY-MM-DD), stamped fresh on every loader run — the
+   * client's date tabs / overdue chips derive from this, never from the
+   * browser clock, so a merchant (or VA) on a non-Manila machine and a page
+   * left open past shop midnight both still see the shop's real "Today".
+   */
+  todayISO: string;
+  /** Orders page size this load used (25 or 250) — tab counts derived from a 25-row page are hidden as unrepresentative. */
+  pageSize: number;
   /** Google Maps key for the Edit-details address search; "" hides the field. */
   mapsApiKey: string;
 };
@@ -334,7 +344,15 @@ export const loader = async ({
   const queryParts: string[] = [];
 
   if (searchParam) {
-    queryParts.push(searchParam);
+    // A raw ":" parses as a field:value operator in Shopify's search syntax
+    // (e.g. "status:closed" typed into the search box widens the All view
+    // past its -status:closed guard) — quote such input so it searches as a
+    // literal term. Plain searches pass through untouched.
+    queryParts.push(
+      searchParam.includes(":")
+        ? `"${searchParam.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+        : searchParam,
+    );
   }
   if (tabParam === "unfulfilled") {
     // status:open — the workqueue: excludes archived AND cancelled orders.
@@ -374,6 +392,22 @@ export const loader = async ({
     reverse: sortParam !== "orderDate asc",
   };
 
+  // "Today" is the SHOP's calendar day (event tags, cutoffs, and the booked
+  // counts all already run on rules.timezone — the client must agree). The
+  // timezone read is non-critical: a Postgres hiccup falls back to the shop
+  // default instead of failing the page.
+  let shopTimezone = DEFAULT_DELIVERY_SCHEDULE_RULES.timezone;
+  try {
+    ({ timezone: shopTimezone } = await getScheduleRules(session.shop));
+  } catch (error) {
+    console.warn(
+      `[orders loader] timezone read failed, using ${shopTimezone}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const todayISO = getShopLocalDate(shopTimezone) || toLocalISODate(new Date());
+
   const response = await admin.graphql(GET_ORDERS_QUERY, { variables });
   const body = (await response.json()) as {
     data?: {
@@ -390,15 +424,48 @@ export const loader = async ({
 
   // Email-sent history (E-5 revisit, docs/customer-email-design.md) lives in
   // Postgres, never on the Shopify order — one lookup keyed by this page's
-  // order ids, grouped and attached below.
+  // order ids, grouped and attached below. The occasion-reminder conversions
+  // (ADR-19) ride the same guarded fetch. Both are panel-timeline garnish,
+  // not page-critical: a Neon cold-start rejection here must degrade to
+  // empty lists, never 500 the whole ops page — and on the Today view this
+  // loader re-runs every 5 minutes, so the exposure is constant.
   const orderIds = orders.map((o) => o.id);
-  const emailLogRows =
-    orderIds.length > 0
-      ? await prisma.emailSendLog.findMany({
+  let emailLogRows: Array<{
+    shopifyOrderId: string;
+    sentAt: Date;
+    to: string;
+  }> = [];
+  let conversionRows: Array<{
+    convertedOrderId: string | null;
+    touch: string;
+    occasionType: string;
+    sentAt: Date | null;
+  }> = [];
+  if (orderIds.length > 0) {
+    try {
+      [emailLogRows, conversionRows] = await Promise.all([
+        prisma.emailSendLog.findMany({
           where: { shop: session.shop, shopifyOrderId: { in: orderIds } },
           orderBy: { sentAt: "desc" },
-        })
-      : [];
+        }),
+        prisma.occasionReminder.findMany({
+          where: { shop: session.shop, convertedOrderId: { in: orderIds } },
+          select: {
+            convertedOrderId: true,
+            touch: true,
+            occasionType: true,
+            sentAt: true,
+          },
+        }),
+      ]);
+    } catch (error) {
+      console.warn(
+        `[orders loader] email/reminder enrichment skipped: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   const emailLogByOrderId = new Map<string, { sentAt: string; to: string }[]>();
   for (const row of emailLogRows) {
     const list = emailLogByOrderId.get(row.shopifyOrderId) ?? [];
@@ -408,22 +475,6 @@ export const loader = async ({
   for (const order of orders) {
     order.emailLog = emailLogByOrderId.get(order.id) ?? [];
   }
-
-  // Occasion-reminder conversions (ADR-19): a row whose convertedOrderId is
-  // one of this page's orders means THAT order came from a reminder email —
-  // surfaced in the panel's DeliveryTimeline. Read-only Postgres lookup.
-  const conversionRows =
-    orderIds.length > 0
-      ? await prisma.occasionReminder.findMany({
-          where: { shop: session.shop, convertedOrderId: { in: orderIds } },
-          select: {
-            convertedOrderId: true,
-            touch: true,
-            occasionType: true,
-            sentAt: true,
-          },
-        })
-      : [];
   const conversionsByOrderId = new Map<
     string,
     { touch: string; occasionType: string; sentAt: string | null }[]
@@ -452,6 +503,11 @@ export const loader = async ({
       timeWindowParam,
       tabParam,
       sortParam,
+      todayISO,
+      pageSize,
+      // Client-exposed by design (Maps JS SDK requires it in the browser) —
+      // the key itself must be locked down in the Google Cloud console:
+      // HTTP-referrer restriction + Places API only.
       mapsApiKey: process.env.GOOGLE_MAPS_API_KEY ?? "",
     } satisfies LoaderData,
     { headers: { "Cache-Control": "no-store" } },
@@ -1280,29 +1336,39 @@ function Extension() {
   const [searchTerm, setSearchTerm] = useState<string>(searchParam);
   const searchParamRef = useRef(searchParam);
 
-  // Stable date references for tab filtering (computed once per mount)
+  // Date references for tab filtering, derived from the SHOP-local todayISO
+  // the loader stamped — never from the browser clock, which drifts from the
+  // shop day on a non-Manila machine. Keyed on todayISO so every loader
+  // settle (including the §6 auto-refresh) rolls the boundary over at the
+  // shop's midnight; the old once-per-mount version kept filtering "Today"
+  // on yesterday during a past-midnight prep session. All arithmetic is UTC
+  // over the ISO string, so no timezone conversion can shift the day.
   const dateRefs = useMemo(() => {
-    const now = new Date();
-    const todayISO = toLocalISODate(now);
-    const tom = new Date(now);
-    tom.setDate(now.getDate() + 1);
-    const tomorrowISO = toLocalISODate(tom);
+    const todayISO = loaderData.todayISO;
+    const [y, m, d] = todayISO.split("-").map(Number);
+    const toISO = (dt: Date) =>
+      `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(
+        dt.getUTCDate(),
+      ).padStart(2, "0")}`;
+    const base = new Date(Date.UTC(y, m - 1, d));
+    const tom = new Date(base);
+    tom.setUTCDate(base.getUTCDate() + 1);
     // "This week" = the current CALENDAR week, Sunday through Saturday. The
     // previous Monday-start window made the tab empty on Sundays for every
     // upcoming delivery (2026-07-12 smoke test: today Sun Jul 12, delivery
     // Sat Jul 18 → excluded from the Mon Jul 6 – Sun Jul 12 window).
-    const dow = now.getDay();
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - dow);
+    const dow = base.getUTCDay();
+    const weekStart = new Date(base);
+    weekStart.setUTCDate(base.getUTCDate() - dow);
     const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
+    weekEnd.setUTCDate(weekStart.getUTCDate() + 6);
     return {
       todayISO,
-      tomorrowISO,
-      startWeekISO: toLocalISODate(weekStart),
-      endWeekISO: toLocalISODate(weekEnd),
+      tomorrowISO: toISO(tom),
+      startWeekISO: toISO(weekStart),
+      endWeekISO: toISO(weekEnd),
     };
-  }, []);
+  }, [loaderData.todayISO]);
 
   // ── Client-side view shaping — every delivery-date/time-slot constraint is
   //    applied HERE, not in the loader query: Shopify ignores metafield search
@@ -1436,11 +1502,13 @@ function Extension() {
   //    arrives with the Phase 4 reschedule form. ────────────────────────────
   const fetchers = useFetchers();
   const actionInFlight = fetchers.some((f) => f.state !== "idle");
-  const refreshPaused =
-    activeModal !== null ||
-    tagsModalOrderId !== null ||
-    kpiProductsOpen ||
-    actionInFlight;
+  // Any modal stacked over the page — pauses the smart refresh below, and
+  // disables the details panel's own Escape handler (one Esc otherwise
+  // closed the modal AND the panel underneath it, taking a half-typed
+  // compose down with the ?order= param).
+  const anyModalOpen =
+    activeModal !== null || tagsModalOrderId !== null || kpiProductsOpen;
+  const refreshPaused = anyModalOpen || actionInFlight;
   const { lastUpdatedLabel, refresh, isRefreshing } = useSmartRefresh({
     isTodayView: tabParam === "today",
     paused: refreshPaused,
@@ -1909,16 +1977,26 @@ function Extension() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  // Tab counts are derived from the LOADED page only. On the server-filtered
+  // tabs the page is just 25 rows, so a derived count would be badly wrong
+  // ("Today (2)" while 15 exist) — counts render only when the enlarged
+  // 250-row page was loaded. Even then a further server page may exist
+  // (cursor pagination), so counts show as lower bounds ("12+").
+  const tabCountsVisible = loaderData.pageSize >= 250;
+  const tabCountsPartial = Boolean(
+    pageInfo?.hasNextPage || pageInfo?.hasPreviousPage,
+  );
+  const tabCount = (n: number): number | null => (tabCountsVisible ? n : null);
   const tabDefs: OrdersTabDef[] = [
-    { id: "all", label: "All", count: orders.length },
-    { id: "today", label: "Today", count: tabCounts.today },
-    { id: "tomorrow", label: "Tomorrow", count: tabCounts.tomorrow },
-    { id: "thisWeek", label: "This week", count: tabCounts.thisWeek },
-    { id: "unfulfilled", label: "Unfulfilled", count: tabCounts.unfulfilled },
-    { id: "unpaid", label: "Unpaid", count: tabCounts.unpaid },
+    { id: "all", label: "All", count: tabCount(orders.length), approximate: tabCountsPartial },
+    { id: "today", label: "Today", count: tabCount(tabCounts.today), approximate: tabCountsPartial },
+    { id: "tomorrow", label: "Tomorrow", count: tabCount(tabCounts.tomorrow), approximate: tabCountsPartial },
+    { id: "thisWeek", label: "This week", count: tabCount(tabCounts.thisWeek), approximate: tabCountsPartial },
+    { id: "unfulfilled", label: "Unfulfilled", count: tabCount(tabCounts.unfulfilled), approximate: tabCountsPartial },
+    { id: "unpaid", label: "Unpaid", count: tabCount(tabCounts.unpaid), approximate: tabCountsPartial },
     // Archived orders are excluded from every other view's query, so no
     // client-side count is knowable here — the label renders without one.
-    { id: "archived", label: "Archived", count: 0 },
+    { id: "archived", label: "Archived", count: null },
   ];
 
   const hasActiveFilters = Boolean(
@@ -2238,7 +2316,9 @@ function Extension() {
         <Suspense fallback={null}>
           <OrderDetailsPanel
             order={selectedOrder}
+            todayISO={dateRefs.todayISO}
             notInView={selectedOrderNotInView}
+            escDisabled={anyModalOpen}
             onClose={handleCloseDrawer}
             onReschedule={openPanelReschedule}
             onSendEmail={openPanelSendEmail}

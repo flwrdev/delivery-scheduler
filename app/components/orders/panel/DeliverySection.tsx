@@ -3,7 +3,6 @@ import { Badge, BlockStack, Button, InlineStack, Text } from "@shopify/polaris";
 import { useCopyToClipboard } from "../../../hooks/useCopyToClipboard";
 import {
   type Order,
-  toLocalISODate,
   formatDeliveryDate,
   financialStatusTone,
   fulfillmentBadge,
@@ -56,12 +55,18 @@ function CopyableValue({
   );
 }
 
-export function DeliverySection({ order }: { order: Order }) {
+export function DeliverySection({
+  order,
+  todayISO,
+}: {
+  order: Order;
+  /** SHOP-local today from the route loader — never the browser clock. */
+  todayISO: string;
+}) {
   const { copied, fieldCopied, copyText, copyField } = useCopyToClipboard();
 
   const rawDate = getDeliveryDateValue(order);
   const deliveryDate = rawDate !== "—" ? formatDeliveryDate(rawDate) : "—";
-  const todayISO = toLocalISODate(new Date());
   const isOpenOrder = isOpenDeliverableOrder(order);
   const ffBadge = fulfillmentBadge(order);
   const deliveryRelative =

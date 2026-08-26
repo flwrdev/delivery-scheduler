@@ -106,7 +106,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       if (statusResult.order.status === "COMPLETED" || statusResult.order.status === "COMPLETE") {
-        const result = await markLalamoveOrderDelivered(admin, row.lalamoveOrderId, statusResult.order);
+        const result = await markLalamoveOrderDelivered(admin, shop, row.lalamoveOrderId, statusResult.order);
         if (result.status === "delivered") delivered++;
         console.log(`[lalamove-poll] ${row.lalamoveOrderId}: ${result.status}`);
       } else {
