@@ -107,14 +107,32 @@ rejected for cutoff at retry time):
 | Path | File | Auth |
 | --- | --- | --- |
 | `POST /webhooks/delivery-sync/worker` | [webhooks.delivery-sync_.worker.ts](../app/routes/webhooks.delivery-sync_.worker.ts) | HMAC-SHA256 over the raw body (`X-Messenger-Worker-Signature`, `sha256=<hex>`), keyed with `OPS_WORKER_SECRET` falling back to `MESSENGER_WORKER_SECRET` — the SAME resolver runs on the enqueue side so signer/verifier can never disagree. Cloud Tasks contract: 200 = done/unretryable, 503 = retry. |
-| `POST /internal/delivery-sync-sweep` | [internal.delivery-sync-sweep.ts](../app/routes/internal.delivery-sync-sweep.ts) | Shared-secret header (`x-ops-worker-secret` vs the same resolver), timing-safe compare — same pattern as the Lalamove poller. Hourly Cloud Scheduler job (backstop only; the Cloud Tasks retry chain is primary). Re-enqueues stranded pending rows (due per `nextAttemptAt`, lease null/stale). |
+| `POST /webhooks/bulk-action/worker` | [webhooks.bulk-action_.worker.ts](../app/routes/webhooks.bulk-action_.worker.ts) | Same HMAC scheme + resolver (Phase B). Cooperative chunking: one task processes ≤15 items via `processBulkActionJobChunk`, checkpoints each, then re-enqueues ITSELF (same jobId) and 200s; a failed re-enqueue 503s so Cloud Tasks keeps the chain alive. |
+| `GET /app/orders/bulk-job/:jobId` | [app.orders_.bulk-job.$jobId.ts](../app/routes/app.orders_.bulk-job.$jobId.ts) | `authenticate.admin` (embedded fetcher, polled every ~2s while a job runs). Shop-scoped; another shop's job answers exactly like a missing one (`found:false`, always 200 per ADR-11). Per-item results appear only once the job is done/failed. |
+| `POST /internal/delivery-sync-sweep` | [internal.delivery-sync-sweep.ts](../app/routes/internal.delivery-sync-sweep.ts) | Shared-secret header (`x-ops-worker-secret` vs the same resolver), timing-safe compare — same pattern as the Lalamove poller. Hourly Cloud Scheduler job (backstop only; the Cloud Tasks retry chains are primary). Rescues stranded `DeliverySyncTask` rows (due per `nextAttemptAt`, lease null/stale) AND stranded `BulkActionJob`s (still open, untouched for a whole lease window). |
 
 Merchant surface: the `/app/orders` loader returns a guarded `syncIssues` count
 (failed rows + pending rows at 3+ attempts) that renders a warning banner; its
 "Retry sync" button posts `_action=retryDeliverySync` (dispatched before the
 bulk machinery, like `sendEmail`) which re-arms the rows and re-enqueues.
 Optional env (all default to the Messenger equivalents): `OPS_WORKER_SECRET`,
-`OPS_TASKS_QUEUE_PATH`, `DELIVERY_SYNC_WORKER_URL`.
+`OPS_TASKS_QUEUE_PATH`, `DELIVERY_SYNC_WORKER_URL`, `BULK_ACTION_WORKER_URL`.
+
+**Phase B — bulk-action jobs (2026-08-27, review finding S4):** every bulk op's
+execution now lives in ONE shared executor (`executeBulkAction`,
+[bulk-actions.server.ts](../app/services/bulk-actions.server.ts)) — the action
+validates params, then either runs the executor inline (selections ≤ 10,
+synchronous response exactly as before) or creates a `BulkActionJob` +
+per-order items and answers `{ mode: "job", jobId }` for the client to poll
+([bulk-action-jobs.server.ts](../app/services/bulk-action-jobs.server.ts)).
+The §2 write-path table is UNCHANGED in substance — the reschedule op still
+funnels through `rescheduleOrderDelivery()`; only where the code lives moved.
+Retry idempotency added for worker crash-retries: an already-cancelled /
+already-fulfilled order re-runs as success, and a reschedule whose metafields
+already sit EXACTLY at the target skips the write (no duplicate history) while
+drifted spellings still get the repair write (§5 behavior pinned by test).
+Finished jobs purge at 7 days via the nightly chat-retention job; done sync
+tasks at 30 days (failed sync tasks are kept — they feed the ops banner).
 
 ## Lalamove courier-status listener (ADR-16 — NOT a Shopify webhook, NOT dispatch; polling-only as of the same-day addendum)
 
@@ -334,7 +352,7 @@ The four delivery-schedule write paths (the 4th — merchant reschedule — adde
 | `orders/create` webhook → Cloud Tasks worker (ADR-22) | [webhooks.orders.create.ts](../app/routes/webhooks.orders.create.ts) (thin receiver) → **`processDeliverySyncTask()`** ([delivery-sync-task.server.ts](../app/services/delivery-sync-task.server.ts)) via [webhooks.delivery-sync_.worker.ts](../app/routes/webhooks.delivery-sync_.worker.ts) | Via `syncOrderDeliveryMetafields`: `custom.date`, `custom.time_slot`, plus legacy mirror metafields `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date`, **plus the additive `delivery.sync_status` (Scheduler V2 D4, 2026-07-17): `"ok"` \| `"attention:<code>"` — the checkout-time validation outcome. Validation no longer gates the write: parseable date+slot ALWAYS sync (DEF-7 fixed); validation "now" = the order's `created_at`, and over-capacity is advisory (`attention:capacity`, never blocks)** | Via `syncOrderDeliveryScheduleTag`: replaces existing delivery schedule tags with new date + slot label | None |
 | App Proxy reschedule | [apps.schedule-rules.reschedule.ts](../app/routes/apps.schedule-rules.reschedule.ts) | `metafieldsSet`: `custom.date`, `custom.time_slot`, `$app.reschedule_status`, `$app.reschedule_requested_at` (no legacy mirrors written here) | Via `syncOrderDeliveryScheduleTag` with `additionalTags: ['resched']`: removes prior delivery schedule tags, adds new date + slot + `'resched'` | `orderUpdate(customAttributes)`: sets `Delivery Date` and `Delivery Time` |
 | Customer Account JWT reschedule | [public.customer-account.reschedule.ts](../app/routes/public.customer-account.reschedule.ts) → **`rescheduleOrderDelivery()`** ([reschedule-order-delivery.server.ts](../app/services/reschedule-order-delivery.server.ts)) | One `metafieldsSet`: `custom.date`, `custom.time_slot`, **legacy mirrors `delivery.date`, `delivery.time_slot`, `sidekick.delivery_date` (added by the Phase 4 refactor, REC-2 — previously left stale)**, `$app.reschedule_status`, `$app.reschedule_requested_at`; separate `metafieldsSet` appends to `delivery.reschedule_history` (`source: "customer"`) | Via `syncOrderDeliveryScheduleTag` with `additionalTags: ['resched']` | `orderUpdate(customAttributes)`: sets `Delivery Date` and `Delivery Time` |
-| **Merchant reschedule (admin)** | [app.orders.tsx](../app/routes/app.orders.tsx) `action`, op `reschedule` → **the same `rescheduleOrderDelivery()`** with `source: "merchant"` | **Identical** to the customer row (one shared write sequence, REC-1); history events carry `source: "merchant"` | Same, **except NO `'resched'` lock tag** — a merchant override does not consume the customer's self-service reschedule (§5) | Same |
+| **Merchant reschedule (admin)** | [app.orders.tsx](../app/routes/app.orders.tsx) `action`, op `reschedule` → `executeBulkAction()` ([bulk-actions.server.ts](../app/services/bulk-actions.server.ts), inline ≤10 orders or via the Phase B job worker) → **the same `rescheduleOrderDelivery()`** with `source: "merchant"` | **Identical** to the customer row (one shared write sequence, REC-1); history events carry `source: "merchant"` | Same, **except NO `'resched'` lock tag** — a merchant override does not consume the customer's self-service reschedule (§5) | Same |
 
 **`orders/create` failure contract (ADR-22, 2026-08-26 — replaces the 2026-07-29 inline-guarded contract):** the webhook itself only extracts, upserts the `DeliverySyncTask` row, and enqueues — its ONLY intentional non-200 is that row upsert failing (Neon truly down), where it throws so Shopify's own redelivery becomes the durable fallback. Every upstream call (offline session, rules read, `metafieldsSet`, `tagsAdd`, COD fee) runs in the worker: a step failure is checkpointed and retried (Cloud Tasks backoff, hourly sweep as backstop, attempts cap ~8 → `failed` + ops-page banner) instead of the old log-and-forget. The validation clock on every retry is the row's frozen `checkoutTime` — a delayed sync can never re-judge a legal checkout as past-cutoff — and validation stays a flag (`delivery.sync_status`), never a gate. The counts read still passes `excludeOrderId` for the order being synced, so a retry (whose `custom.date` a prior partial attempt may already have written) cannot count the order against its own slot; a truncated counts scan (`countsMeta.status: "partial"`) is logged and the capacity check runs fail-open either way.
 

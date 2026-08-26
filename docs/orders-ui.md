@@ -54,6 +54,9 @@ props-only component fed from that single loader.
 | | `services/update-order-contact.server.ts` | `handleEditDetailsOp` |
 | | `services/lalamove-tracking.server.ts` | `recordLalamoveOrderId` (ADR-16 status listener, not dispatch) |
 | | `services/delivery-sync-task.server.ts` | `getDeliverySyncIssues` (loader banner count) + `retryDeliverySyncIssues` (the `retryDeliverySync` op) — ADR-22 |
+| | `services/bulk-actions.server.ts` | **The shared bulk executor** (`executeBulkAction`) + all bulk mutations, `BulkActionName`/`BulkActionResponse` types, `BULK_INLINE_MAX` — ADR-22 Phase B (extracted from this route 2026-08-27) |
+| | `services/bulk-action-jobs.server.ts` | Job orchestration for large selections: create/claim/chunk/status — ADR-22 Phase B |
+| Fetcher route | `app/routes/app.orders_.bulk-job.$jobId.ts` | Job-status poll for the background bulk banner (every ~2s while a job runs) |
 | | `services/schedule-rules.server.ts` | `getScheduleRules` / `getScheduleRulesWithBookedCounts` |
 | Styles | `app/styles/order-details-panel.css` | Panel-only styles (imported `?url` via the route's `links()`) |
 
@@ -192,6 +195,14 @@ The route `action` dispatches on `_action`:
 - **Bulk ops** (`BulkActionName`, max **100** selected ids): `archive`,
   `unarchive`, `cancel`, `tagsAdd`, `tagsRemove`, `markFulfilled` (+ optional
   Lalamove Order ID → `recordLalamoveOrderId`, ADR-16), `reschedule`.
+  **Phase B split (ADR-22, 2026-08-27):** the action validates params, then
+  selections ≤ `BULK_INLINE_MAX` (10) run inline through the shared
+  `executeBulkAction` and answer results synchronously (the pre-Phase-B
+  contract, unchanged); larger selections become a `BulkActionJob` answered as
+  `{ mode: "job", jobId }` — the Cloud Tasks worker processes them in ≤15-item
+  chunks while `useBulkActions` polls the fetcher route, shows a progress
+  banner, and fires the same completion toast/selection-prune when done. The
+  job survives a closed page; only the toast needs the page open.
 - The **only delivery write** on this page is the `reschedule` op, which goes
   through the shared `rescheduleOrderDelivery()` service — the same
   orchestration the customer-account reschedule uses (REC-1/2), so merchant

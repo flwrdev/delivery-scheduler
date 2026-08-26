@@ -315,6 +315,50 @@ model DeliverySyncTask {
   @@index([shop, status]) // the merchant-banner count query
 }
 
+// Bulk-action jobs (ADR-22 Phase B, docs/proposals/orders-async-jobs.md §3b —
+// review finding S4): a /app/orders bulk op on MORE than BULK_INLINE_MAX
+// orders becomes one job + per-order items instead of one long HTTP request.
+// The Cloud Tasks worker processes items chunk-by-chunk (re-enqueueing itself
+// between chunks) so every request stays small; the client polls the job by
+// id. Work BOOKKEEPING only — the order writes land on Shopify exactly as the
+// inline path's do (same shared executor, so the two can't drift).
+model BulkActionJob {
+  id         String    @id @default(cuid()) // returned to the client for polling
+  shop       String
+  action     String // BulkActionName
+  paramsJson String // validated BulkOpParams snapshot (validation happens BEFORE job creation)
+  status     String    @default("queued") // queued | running | done | failed
+  // Double-processing guard (§2a): job-level lease, renewed every chunk;
+  // items additionally claim pending → processing before execution.
+  lockedAt   DateTime?
+  totalCount Int
+  okCount    Int       @default(0)
+  failCount  Int       @default(0)
+  lastError  String?
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+  updatedAt  DateTime  @updatedAt
+  items      BulkActionJobItem[]
+
+  @@index([shop, status, createdAt]) // status polling scope check
+  @@index([status, updatedAt]) // the sweep's stranded-job rescue query
+}
+
+model BulkActionJobItem {
+  id             String  @id @default(cuid())
+  jobId          String
+  shopifyOrderId String
+  orderName      String?
+  status         String  @default("pending") // pending | processing | ok | failed
+  message        String? // same per-item message the inline BulkActionItemResult carries
+  updatedAt      DateTime @updatedAt
+  job            BulkActionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, shopifyOrderId])
+  @@index([jobId, status])
+}
+
 model DeliveryScheduleConfig {
   id                String   @id @default(cuid())
   shop              String   @unique

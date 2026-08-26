@@ -264,6 +264,55 @@ function resolveDeliverySyncWorkerUrl(): string | undefined {
   }
 }
 
+// Same URL-derivation pattern for the bulk-action worker (ADR-22 Phase B).
+function resolveBulkActionWorkerUrl(): string | undefined {
+  const explicit = process.env.BULK_ACTION_WORKER_URL?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const messengerWorkerUrl = process.env.MESSENGER_WORKER_URL?.trim();
+  if (!messengerWorkerUrl) {
+    return undefined;
+  }
+  try {
+    const url = new URL(messengerWorkerUrl);
+    const swappedPathname = url.pathname.replace(
+      /\/webhooks\/messenger\/worker\/?$/,
+      "/webhooks/bulk-action/worker",
+    );
+    if (swappedPathname === url.pathname) {
+      console.error(
+        "[bulk-jobs] resolveBulkActionWorkerUrl: MESSENGER_WORKER_URL path did not match the expected " +
+          "/webhooks/messenger/worker suffix, so no bulk-action worker URL could be derived. Set BULK_ACTION_WORKER_URL explicitly.",
+      );
+      return undefined;
+    }
+    url.pathname = swappedPathname;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+export interface EnqueueBulkActionTaskInput {
+  jobId: string;
+}
+
+export async function enqueueBulkActionTask({
+  jobId,
+}: EnqueueBulkActionTaskInput): Promise<EnqueueMessengerEchoTaskResult> {
+  const workerUrl = resolveBulkActionWorkerUrl();
+  const secret = resolveOpsWorkerSecret();
+  const queuePath = resolveOpsQueuePath();
+  if (!workerUrl || !secret || !queuePath) {
+    return { ok: false, error: MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE, notConfigured: true };
+  }
+  return postMessengerTask(JSON.stringify({ bulkActionJobId: jobId }), undefined, workerUrl, {
+    queuePath,
+    secret,
+  });
+}
+
 export interface EnqueueDeliverySyncTaskInput {
   taskId: string;
 }

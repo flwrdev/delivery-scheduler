@@ -35,6 +35,13 @@ export const RETENTION = {
   customerAccountMessageDays: 90,
   rateLimitStaleDays: 2,
   lookupAttemptStaleDays: 30,
+  // ADR-22 ops work queues (2026-08-27) — same transient-bookkeeping posture:
+  //   - finished BulkActionJob rows (+ items via FK cascade) > 7 days;
+  //   - DONE DeliverySyncTask rows > 30 days. FAILED sync tasks are
+  //     deliberately KEPT — they feed the ops-page banner until the merchant
+  //     retries them into done; auto-purging them would hide a real problem.
+  bulkJobFinishedDays: 7,
+  deliverySyncDoneDays: 30,
 } as const;
 
 // Cap on storefront threads deleted per run — the scheduler runs daily, so a
@@ -50,6 +57,8 @@ export interface ChatRetentionSummary {
   customerAccountMessagesDeleted: number;
   rateLimitRowsDeleted: number;
   lookupAttemptsDeleted: number;
+  bulkJobsDeleted: number;
+  deliverySyncTasksDeleted: number;
 }
 
 function daysAgo(now: Date, days: number): Date {
@@ -119,6 +128,22 @@ export async function runChatRetentionPurge(now: Date = new Date()): Promise<Cha
     where: { updatedAt: { lt: lookupCutoff } },
   });
 
+  // 5. ADR-22 ops work queues: finished bulk jobs (items ride the FK cascade)
+  //    and DONE delivery-sync tasks. Failed sync tasks are kept — see the
+  //    RETENTION comment.
+  const bulkJobs = await prisma.bulkActionJob.deleteMany({
+    where: {
+      status: { in: ["done", "failed"] },
+      updatedAt: { lt: daysAgo(now, RETENTION.bulkJobFinishedDays) },
+    },
+  });
+  const syncTasks = await prisma.deliverySyncTask.deleteMany({
+    where: {
+      status: "done",
+      updatedAt: { lt: daysAgo(now, RETENTION.deliverySyncDoneDays) },
+    },
+  });
+
   const summary: ChatRetentionSummary = {
     ok: true,
     jobsDeleted: jobs.count,
@@ -128,12 +153,15 @@ export async function runChatRetentionPurge(now: Date = new Date()): Promise<Cha
     customerAccountMessagesDeleted: caMessages.count,
     rateLimitRowsDeleted: rateLimits.count,
     lookupAttemptsDeleted: lookups.count,
+    bulkJobsDeleted: bulkJobs.count,
+    deliverySyncTasksDeleted: syncTasks.count,
   };
   console.log(
     `[chat-retention] purge done jobs=${summary.jobsDeleted} sfThreads=${summary.storefrontThreadsDeleted} ` +
       `sfMessages=${summary.storefrontMessagesDeleted} sfJobs=${summary.storefrontJobsDeleted} ` +
       `caMessages=${summary.customerAccountMessagesDeleted} rateLimit=${summary.rateLimitRowsDeleted} ` +
-      `lookups=${summary.lookupAttemptsDeleted}`,
+      `lookups=${summary.lookupAttemptsDeleted} bulkJobs=${summary.bulkJobsDeleted} ` +
+      `syncTasks=${summary.deliverySyncTasksDeleted}`,
   );
   return summary;
 }

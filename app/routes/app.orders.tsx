@@ -61,21 +61,37 @@ import {
   validateMerchantRescheduleSelection,
 } from "../lib/delivery-availability";
 import { slotValuesMatch } from "../lib/slot-value";
-import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
 import { handleSendEmailOp } from "../services/send-customer-email.server";
 import { handleEditDetailsOp } from "../services/update-order-contact.server";
-import { recordLalamoveOrderId } from "../services/lalamove-tracking.server";
 import {
   getDeliverySyncIssues,
   retryDeliverySyncIssues,
   type DeliverySyncIssueSummary,
 } from "../services/delivery-sync-task.server";
+import {
+  BULK_INLINE_MAX,
+  MAX_SELECTED_ORDER_IDS,
+  executeBulkAction,
+  fetchRescheduleOrderStates,
+  isBulkActionName,
+  rescheduleCurrentDateOf,
+  rescheduleCurrentSlotOf,
+  type BulkActionItemResult,
+  type BulkActionName,
+  type BulkActionResponse,
+  type BulkOpParams,
+} from "../services/bulk-actions.server";
+import {
+  createBulkActionJob,
+  runBulkJobToCompletion,
+} from "../services/bulk-action-jobs.server";
+import { enqueueBulkActionTask } from "../services/messenger-queue.server";
 import prisma from "../db.server";
 import {
   getScheduleRules,
   getScheduleRulesWithBookedCounts,
 } from "../services/schedule-rules.server";
-import { buildOrderEventTag, MAX_ORDER_TAG_LENGTH } from "../lib/order-tags";
+import { MAX_ORDER_TAG_LENGTH } from "../lib/order-tags";
 import { authenticate } from "../shopify.server";
 import panelStylesHref from "../styles/order-details-panel.css?url";
 
@@ -535,189 +551,17 @@ export const loader = async ({
   );
 };
 
-// ─── Bulk action mutations ────────────────────────────────────────────────────
+// ─── Bulk action types (moved to services/bulk-actions.server.ts, ADR-22 Phase B) ──
+//
+// The executor, its mutations, and the result types now live in the shared
+// service so the inline path and the Cloud Tasks worker cannot drift.
+// Re-exported here so existing imports (useBulkActions) keep their path.
+export type { BulkActionName, BulkActionResponse } from "../services/bulk-actions.server";
 
-const ORDER_CLOSE_MUTATION = `
-  mutation OrderClose($input: OrderCloseInput!) {
-    orderClose(input: $input) {
-      order { id }
-      userErrors { field message }
-    }
-  }
-`;
-
-const ORDER_OPEN_MUTATION = `
-  mutation OrderOpen($input: OrderOpenInput!) {
-    orderOpen(input: $input) {
-      order { id }
-      userErrors { field message }
-    }
-  }
-`;
-
-const ORDER_CANCEL_MUTATION = `
-  mutation OrderCancel(
-    $orderId: ID!
-    $reason: OrderCancelReason!
-    $restock: Boolean!
-    $notifyCustomer: Boolean
-    $staffNote: String
-  ) {
-    orderCancel(
-      orderId: $orderId
-      reason: $reason
-      restock: $restock
-      notifyCustomer: $notifyCustomer
-      staffNote: $staffNote
-    ) {
-      job { id }
-      orderCancelUserErrors { field message code }
-    }
-  }
-`;
-
-const TAGS_ADD_MUTATION = `
-  mutation TagsAdd($id: ID!, $tags: [String!]!) {
-    tagsAdd(id: $id, tags: $tags) {
-      node { id }
-      userErrors { field message }
-    }
-  }
-`;
-
-const TAGS_REMOVE_MUTATION = `
-  mutation TagsRemove($id: ID!, $tags: [String!]!) {
-    tagsRemove(id: $id, tags: $tags) {
-      node { id }
-      userErrors { field message }
-    }
-  }
-`;
-
-// Fulfillment-order workflow — used ONLY when the merchant clicks "Mark as fulfilled".
-// Requires read_merchant_managed_fulfillment_orders (query) and
-// write_merchant_managed_fulfillment_orders (mutation). Never added to GET_ORDERS_QUERY.
-// Builds one aliased query for all selected orders to replace N serial API roundtrips.
-function buildBatchFulfillmentQuery(ids: string[]): string {
-  const fragments = ids
-    .map(
-      (id, i) =>
-        `  o${i}: order(id: "${id}") {
-    id
-    fulfillmentOrders(first: 50) {
-      nodes {
-        id
-        status
-        supportedActions { action }
-      }
-    }
-  }`,
-    )
-    .join("\n");
-  return `query BatchFulfillmentOrders {\n${fragments}\n}`;
-}
-
-const FULFILLMENT_CREATE_MUTATION = `
-  mutation FulfillmentCreate($fulfillment: FulfillmentInput!) {
-    fulfillmentCreate(fulfillment: $fulfillment) {
-      fulfillment { id status }
-      userErrors { field message }
-    }
-  }
-`;
-
-// Rewrite raw Shopify access-denied / scope errors into something the merchant can act on.
-function scopeHint(msg: string): string {
-  if (
-    /access denied|fulfillmentOrders|not authorized|missing.*scope/i.test(msg)
-  ) {
-    return "Access denied — the app needs fulfillment-order permission. Please reinstall the app to grant the new scope.";
-  }
-  return msg;
-}
-
-// Batch current-delivery-state read for the merchant reschedule op: the
-// from→to history values, attribute rewrite, and tag replacement all derive
-// from the order state at write time (single call for the whole selection).
-const RESCHEDULE_ORDER_STATE_QUERY = `#graphql
-  query RescheduleOrderStates($ids: [ID!]!) {
-    nodes(ids: $ids) {
-      ... on Order {
-        id
-        tags
-        customAttributes {
-          key
-          value
-        }
-        currentDeliveryDate: metafield(namespace: "custom", key: "date") {
-          value
-        }
-        currentDeliveryTimeSlot: metafield(namespace: "custom", key: "time_slot") {
-          value
-        }
-        rescheduleHistory: metafield(namespace: "delivery", key: "reschedule_history") {
-          value
-        }
-      }
-    }
-  }
-`;
-
-// ─── Action result types ──────────────────────────────────────────────────────
-
-export type BulkActionName =
-  | "archive"
-  | "unarchive"
-  | "cancel"
-  | "tagsAdd"
-  | "tagsRemove"
-  | "markFulfilled"
-  | "reschedule";
-
-const BULK_ACTION_NAMES: readonly BulkActionName[] = [
-  "archive",
-  "unarchive",
-  "cancel",
-  "tagsAdd",
-  "tagsRemove",
-  "markFulfilled",
-  "reschedule",
-];
-const MAX_SELECTED_ORDER_IDS = 100;
-// Shopify's real per-tag cap is 40, not 255 (live-verified 2026-08-14: 40 is
-// accepted, 41 answers "Order tags is invalid"). The old 255 let a merchant's
-// long tag pass our validation and then fail at Shopify — and because one bad
-// tag fails the ENTIRE tagsAdd call, every other tag in that submit was lost
-// with it. Single-sourced in lib/order-tags.ts.
+// Shopify's real per-tag cap is 40, not 255 (live-verified 2026-08-14) —
+// single-sourced in lib/order-tags.ts.
 const MAX_TAG_LENGTH = MAX_ORDER_TAG_LENGTH;
 
-function isBulkActionName(value: string): value is BulkActionName {
-  return (BULK_ACTION_NAMES as readonly string[]).includes(value);
-}
-
-interface BulkActionItemResult {
-  orderId: string;
-  success: boolean;
-  message?: string;
-}
-
-export interface BulkActionResponse {
-  ok: boolean;
-  action: BulkActionName | null;
-  message?: string;
-  results: BulkActionItemResult[];
-  summary: { ok: number; failed: number };
-  // Reschedule only (REC-4): the target slot's capacity would be exceeded and
-  // the submit did not carry the explicit override — the modal re-renders as
-  // a confirm step showing the projected load instead of a toast.
-  code?: "capacity_override_required";
-  capacity?: {
-    capacity: number;
-    booked: number;
-    moving: number;
-    projected: number;
-  };
-}
 
 // ─── Action handler ───────────────────────────────────────────────────────────
 
@@ -833,68 +677,15 @@ export const action = async ({
     );
   }
 
-  const results: BulkActionItemResult[] = [];
-
-  const runOne = async (
-    id: string,
-    mutation: string,
-    variables: Record<string, unknown>,
-    rootKey: string,
-    errorsKey: "userErrors" | "orderCancelUserErrors",
-  ) => {
-    try {
-      const res = await admin.graphql(mutation, { variables });
-      const j = (await res.json()) as {
-        data?: Record<string, { [k: string]: unknown }>;
-        errors?: Array<{ message: string }>;
-      };
-      if (j.errors?.length) {
-        results.push({
-          orderId: id,
-          success: false,
-          message: j.errors.map((e) => e.message).join("; "),
-        });
-        return j;
-      }
-      const errs =
-        (j?.data?.[rootKey]?.[errorsKey] as Array<{ message: string }>) || [];
-      if (errs.length) {
-        results.push({
-          orderId: id,
-          success: false,
-          message: errs.map((e) => e.message).join("; "),
-        });
-      } else {
-        results.push({ orderId: id, success: true });
-      }
-      return j;
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "GraphQL error";
-      results.push({ orderId: id, success: false, message });
-      return undefined;
-    }
-  };
-
-  if (op === "archive") {
-    for (const id of orderIds) {
-      await runOne(
-        id,
-        ORDER_CLOSE_MUTATION,
-        { input: { id } },
-        "orderClose",
-        "userErrors",
-      );
-    }
-  } else if (op === "unarchive") {
-    for (const id of orderIds) {
-      await runOne(
-        id,
-        ORDER_OPEN_MUTATION,
-        { input: { id } },
-        "orderOpen",
-        "userErrors",
-      );
-    }
+  // ── Parse + validate op params (ADR-22 Phase B): validation happens BEFORE
+  //    the inline/job split, so a BulkOpParams is valid by construction
+  //    wherever it ends up — executed inline below, or snapshotted into a
+  //    BulkActionJob for the Cloud Tasks worker. The execution itself lives in
+  //    executeBulkAction (services/bulk-actions.server.ts), shared by both
+  //    paths so they cannot drift. ──────────────────────────────────────────
+  let opParams: BulkOpParams;
+  if (op === "archive" || op === "unarchive") {
+    opParams = { op };
   } else if (op === "cancel") {
     const validReasons = new Set([
       "CUSTOMER",
@@ -909,16 +700,13 @@ export const action = async ({
     const restock = fd.get("restock") === "1";
     const notifyCustomer = fd.get("notifyCustomer") === "1";
     const staffNoteRaw = String(fd.get("staffNote") || "").slice(0, 255);
-    const staffNote = staffNoteRaw.trim() || null;
-    for (const id of orderIds) {
-      await runOne(
-        id,
-        ORDER_CANCEL_MUTATION,
-        { orderId: id, reason, restock, notifyCustomer, staffNote },
-        "orderCancel",
-        "orderCancelUserErrors",
-      );
-    }
+    opParams = {
+      op: "cancel",
+      reason,
+      restock,
+      notifyCustomer,
+      staffNote: staffNoteRaw.trim() || null,
+    };
   } else if (op === "tagsAdd" || op === "tagsRemove") {
     const tags = String(fd.get("tags") || "")
       .split(",")
@@ -939,12 +727,7 @@ export const action = async ({
         { status: 400 },
       );
     }
-    const mutation =
-      op === "tagsAdd" ? TAGS_ADD_MUTATION : TAGS_REMOVE_MUTATION;
-    const rootKey = op === "tagsAdd" ? "tagsAdd" : "tagsRemove";
-    for (const id of orderIds) {
-      await runOne(id, mutation, { id, tags }, rootKey, "userErrors");
-    }
+    opParams = { op, tags };
   } else if (op === "markFulfilled") {
     const trackingUrl = String(fd.get("trackingUrl") || "").trim();
     const notifyCustomer = fd.get("notifyCustomer") === "1";
@@ -962,199 +745,8 @@ export const action = async ({
         { status: 400 },
       );
     }
-
-    // ── Step 1: Batch-fetch fulfillment orders (single API call) ─────────────
-    const SHOPIFY_ORDER_GID_RE = /^gid:\/\/shopify\/Order\/\d+$/;
-    const safeIds = orderIds.filter((id) => SHOPIFY_ORDER_GID_RE.test(id));
-    for (const id of orderIds) {
-      if (!SHOPIFY_ORDER_GID_RE.test(id)) {
-        results.push({ orderId: id, success: false, message: "Invalid order ID." });
-      }
-    }
-
-    type FulfillmentNode = {
-      id: string;
-      status: string;
-      supportedActions?: Array<{ action: string }>;
-    };
-    const fulfillableByOrderId = new Map<string, FulfillmentNode[]>();
-    let batchQueryFailed = false;
-
-    if (safeIds.length > 0) {
-      const batchQuery = buildBatchFulfillmentQuery(safeIds);
-      let batchJson: {
-        data?: Record<string, {
-          id: string;
-          fulfillmentOrders: { nodes: FulfillmentNode[] };
-        } | null>;
-        errors?: Array<{ message: string }>;
-      } = {};
-      try {
-        const batchRes = await admin.graphql(batchQuery);
-        batchJson = await batchRes.json();
-      } catch (e: unknown) {
-        batchQueryFailed = true;
-        const m =
-          e instanceof Error ? e.message : "Failed to read fulfillment orders";
-        for (const id of safeIds) {
-          results.push({ orderId: id, success: false, message: scopeHint(m) });
-        }
-      }
-
-      if (!batchQueryFailed) {
-        if (batchJson.errors?.length) {
-          batchQueryFailed = true;
-          const msg = batchJson.errors.map((e) => e.message).join("; ");
-          for (const id of safeIds) {
-            results.push({ orderId: id, success: false, message: scopeHint(msg) });
-          }
-        } else {
-          safeIds.forEach((id, i) => {
-            const orderData = batchJson.data?.[`o${i}`];
-            fulfillableByOrderId.set(
-              id,
-              (orderData?.fulfillmentOrders?.nodes ?? []).filter((n) =>
-                (n.supportedActions || []).some(
-                  (a) => a.action === "CREATE_FULFILLMENT",
-                ),
-              ),
-            );
-          });
-        }
-      }
-    }
-
-    // ── Step 2: Create fulfillments (one mutation per order) ─────────────────
-    if (!batchQueryFailed) {
-      for (const id of safeIds) {
-        const fulfillable = fulfillableByOrderId.get(id) ?? [];
-        if (fulfillable.length === 0) {
-          results.push({
-            orderId: id,
-            success: false,
-            message: "No fulfillable items remaining.",
-          });
-          continue;
-        }
-
-        const fulfillment: Record<string, unknown> = {
-          lineItemsByFulfillmentOrder: fulfillable.map((fo) => ({
-            fulfillmentOrderId: fo.id,
-          })),
-          notifyCustomer,
-        };
-        if (trackingUrl) {
-          fulfillment.trackingInfo = { url: trackingUrl };
-        }
-
-        const before = results.length;
-        const fulfillJson = await runOne(
-          id,
-          FULFILLMENT_CREATE_MUTATION,
-          { fulfillment },
-          "fulfillmentCreate",
-          "userErrors",
-        );
-        for (let i = before; i < results.length; i++) {
-          const r = results[i];
-          if (!r.success && r.message) r.message = scopeHint(r.message);
-        }
-
-        // ADR-16: record the Lalamove correlation right after the fulfillment
-        // that created it succeeds — never fails the fulfillment itself, a
-        // bad/mistyped id just gets logged (mirrors the tracking-tag write's
-        // guarded posture below). lalamoveOrderId is only ever truthy when
-        // orderIds.length === 1 (forced above), so `id` here is always that
-        // one order — no extra identity check needed.
-        if (lalamoveOrderId) {
-          const succeeded = results
-            .slice(before)
-            .some((r) => r.orderId === id && r.success);
-          const fulfillmentId = (
-            fulfillJson?.data?.fulfillmentCreate as
-              | { fulfillment?: { id?: string } }
-              | undefined
-          )?.fulfillment?.id;
-          if (succeeded && fulfillmentId) {
-            try {
-              const lalamoveResult = await recordLalamoveOrderId(
-                admin,
-                session.shop,
-                id,
-                fulfillmentId,
-                lalamoveOrderId,
-              );
-              if (lalamoveResult.status === "not_found") {
-                console.warn(
-                  `[markFulfilled] Lalamove order id "${lalamoveOrderId}" not found — check it's the numeric order id, not the tracking link.`,
-                );
-              } else if (
-                lalamoveResult.status === "lalamove_lookup_failed" ||
-                lalamoveResult.status === "shopify_write_failed"
-              ) {
-                console.warn(
-                  `[markFulfilled] Lalamove tracking record failed: ${lalamoveResult.error}`,
-                );
-              } else if (lalamoveResult.status === "already_tracked") {
-                console.warn(
-                  `[markFulfilled] Lalamove order id "${lalamoveOrderId}" is already linked to a different order — not re-linked to ${id}.`,
-                );
-              }
-            } catch (e: unknown) {
-              console.warn("[markFulfilled] Lalamove tracking record threw:", e);
-            }
-          }
-        }
-      }
-
-      // ── Step 3: timeline event tag, only for orders that actually got
-      //    tracking and only where the fulfillment succeeded. A tagging
-      //    failure never turns a successful fulfillment into a reported
-      //    failure — the tag is a mirror, like the reschedule sync's.
-      //    Fires on Tracking URL OR the Lalamove Order ID (ADR-16) — either
-      //    one alone still means "tracking got added to this fulfillment."
-      if (trackingUrl || lalamoveOrderId) {
-        const fulfilledIds = results
-          .filter((r) => r.success && safeIds.includes(r.orderId))
-          .map((r) => r.orderId);
-        if (fulfilledIds.length > 0) {
-          try {
-            const { timezone } = await getScheduleRules(session.shop);
-            const eventTag = buildOrderEventTag(
-              "trackingAdded",
-              getShopLocalDate(timezone),
-            );
-            if (eventTag) {
-              for (const id of fulfilledIds) {
-                const res = await admin.graphql(TAGS_ADD_MUTATION, {
-                  variables: { id, tags: [eventTag] },
-                });
-                const j = (await res.json()) as {
-                  data?: {
-                    tagsAdd?: { userErrors?: Array<{ message: string }> } | null;
-                  };
-                  errors?: Array<{ message: string }>;
-                };
-                const tagErrors = [
-                  ...(j.errors?.map((e) => e.message) ?? []),
-                  ...(j.data?.tagsAdd?.userErrors?.map((e) => e.message) ?? []),
-                ];
-                if (tagErrors.length > 0) {
-                  console.warn(
-                    "[markFulfilled] tracking event tag errors:",
-                    id,
-                    tagErrors,
-                  );
-                }
-              }
-            }
-          } catch (e: unknown) {
-            console.warn("[markFulfilled] tracking event tag threw:", e);
-          }
-        }
-      }
-    }
-  } else if (op === "reschedule") {
+    opParams = { op: "markFulfilled", trackingUrl, notifyCustomer, lalamoveOrderId };
+  } else {
     // Merchant reschedule = administrative override (§5, ADR-10). Only the
     // data-integrity checks bind this path; the customer self-service gates
     // (resched lock, ≥2-days, FULFILLED, cutoff/prep window) deliberately do
@@ -1172,83 +764,32 @@ export const action = async ({
       );
     }
 
-    const SHOPIFY_ORDER_GID_RE = /^gid:\/\/shopify\/Order\/\d+$/;
-    const safeIds = orderIds.filter((id) => SHOPIFY_ORDER_GID_RE.test(id));
-    for (const id of orderIds) {
-      if (!SHOPIFY_ORDER_GID_RE.test(id)) {
-        results.push({ orderId: id, success: false, message: "Invalid order ID." });
+    if (check.capacity) {
+      // Capacity projection needs current order state; the EXECUTOR re-reads
+      // state at write time (fresh per chunk on the worker path), so this
+      // read is projection-only. Orders already sitting in the target
+      // date+slot are not double-counted (§5 bulk rule) — the slot half of
+      // that "already there" test uses the SAME canonical comparison the
+      // booked-count matcher does (§4.2).
+      const stateFetch = await fetchRescheduleOrderStates(admin, orderIds);
+      if (!stateFetch.ok) {
+        return Response.json({
+          ...empty,
+          message: stateFetch.message,
+          results: orderIds.map((id) => ({
+            orderId: id,
+            success: false,
+            message: stateFetch.message,
+          })),
+          summary: { ok: 0, failed: orderIds.length },
+        } satisfies BulkActionResponse);
       }
-    }
-
-    type RescheduleOrderState = {
-      id: string;
-      tags?: string[] | null;
-      customAttributes?: Array<{ key: string; value: string }> | null;
-      currentDeliveryDate?: { value?: string | null } | null;
-      currentDeliveryTimeSlot?: { value?: string | null } | null;
-      rescheduleHistory?: { value?: string | null } | null;
-    };
-
-    const stateByOrderId = new Map<string, RescheduleOrderState>();
-    let stateQueryFailed = false;
-    if (safeIds.length > 0) {
-      try {
-        const stateRes = await admin.graphql(RESCHEDULE_ORDER_STATE_QUERY, {
-          variables: { ids: safeIds },
-        });
-        const stateJson = (await stateRes.json()) as {
-          data?: { nodes?: Array<RescheduleOrderState | null> };
-          errors?: Array<{ message: string }>;
-        };
-        if (stateJson.errors?.length) {
-          stateQueryFailed = true;
-          const msg = stateJson.errors.map((e) => e.message).join("; ");
-          for (const id of safeIds) {
-            results.push({ orderId: id, success: false, message: msg });
-          }
-        } else {
-          for (const node of stateJson.data?.nodes ?? []) {
-            if (node?.id) stateByOrderId.set(node.id, node);
-          }
-        }
-      } catch (e: unknown) {
-        stateQueryFailed = true;
-        const msg =
-          e instanceof Error ? e.message : "Failed to read order state.";
-        for (const id of safeIds) {
-          results.push({ orderId: id, success: false, message: msg });
-        }
-      }
-    }
-
-    const attrValueOf = (
-      state: RescheduleOrderState,
-      key: string,
-    ): string | null =>
-      state.customAttributes?.find((a) => a.key === key)?.value ?? null;
-    const currentDateOf = (state: RescheduleOrderState): string | null =>
-      state.currentDeliveryDate?.value?.trim() ||
-      attrValueOf(state, "Delivery Date");
-    const currentSlotOf = (state: RescheduleOrderState): string | null =>
-      state.currentDeliveryTimeSlot?.value?.trim() ||
-      attrValueOf(state, "Delivery Time");
-
-    if (!stateQueryFailed && check.capacity) {
-      // Orders already sitting in the target date+slot are not double-counted
-      // against the remaining capacity (§5 bulk rule) — `booked` already counts
-      // them. The slot half of that "already there" test must use the SAME
-      // canonical comparison the booked-count matcher does (§4.2): a raw
-      // compare treats a drifted stored spelling ("9:00AM - 12:00PM" vs the
-      // configured "9AM-12PM") as a move and asks the merchant to override a
-      // limit that was never going to be exceeded. The date half stays an exact
-      // ISO compare — the same slot on a different date IS moving in, and so is
-      // an order with nothing scheduled yet (null date, null slot).
-      const moving = safeIds.filter((id) => {
-        const state = stateByOrderId.get(id);
+      const moving = orderIds.filter((id) => {
+        const state = stateFetch.stateByOrderId.get(id);
         if (!state) return false;
         return (
-          currentDateOf(state) !== date ||
-          !slotValuesMatch(currentSlotOf(state), timeSlot)
+          rescheduleCurrentDateOf(state) !== date ||
+          !slotValuesMatch(rescheduleCurrentSlotOf(state), timeSlot)
         );
       }).length;
       const projected = check.capacity.booked + moving;
@@ -1270,71 +811,53 @@ export const action = async ({
       }
     }
 
-    if (!stateQueryFailed) {
-      const requestedAt = new Date().toISOString();
-      for (const id of safeIds) {
-        const state = stateByOrderId.get(id);
-        if (!state) {
-          results.push({
-            orderId: id,
-            success: false,
-            message: "Order not found.",
-          });
-          continue;
-        }
-        try {
-          const r = await rescheduleOrderDelivery(admin, {
-            orderId: id,
-            date,
-            timeSlot,
-            source: "merchant",
-            currentDeliveryDate: currentDateOf(state),
-            currentDeliveryTimeSlot: currentSlotOf(state),
-            currentTags: state.tags ?? [],
-            currentCustomAttributes: (state.customAttributes ?? []).map(
-              (a) => ({ key: a.key, value: a.value }),
-            ),
-            existingRescheduleHistoryValue:
-              state.rescheduleHistory?.value ?? null,
-            requestedAt,
-            shopTimezone: rules.timezone,
-          });
-          if (!r.ok) {
-            const msg =
-              [...r.canonicalErrors.graphql, ...r.canonicalErrors.user].join(
-                "; ",
-              ) || "Failed to update the delivery schedule.";
-            results.push({ orderId: id, success: false, message: msg });
-            continue;
-          }
-          const failedMirrors = [
-            r.historySync === "failed" ? "history" : null,
-            r.attributeSync === "failed" ? "attributes" : null,
-            r.tagSync === "failed" ? "tags" : null,
-          ].filter(Boolean);
-          results.push({
-            orderId: id,
-            success: true,
-            message:
-              failedMirrors.length > 0
-                ? `Rescheduled, but the ${failedMirrors.join(" + ")} sync failed.`
-                : undefined,
-          });
-        } catch (e: unknown) {
-          results.push({
-            orderId: id,
-            success: false,
-            message: e instanceof Error ? e.message : "Reschedule failed.",
-          });
-        }
-      }
-    }
-  } else {
-    return Response.json(
-      { ...empty, message: "Unknown action." },
-      { status: 400 },
-    );
+    opParams = {
+      op: "reschedule",
+      date,
+      timeSlot,
+      // Stamped once here so every chunk/retry writes the same history
+      // timestamp.
+      requestedAt: new Date().toISOString(),
+      shopTimezone: rules.timezone,
+    };
   }
+
+  // ── Inline vs job (ADR-22 Phase B; threshold = merchant decision
+  //    2026-08-26): small selections stay synchronous exactly as before,
+  //    large ones become a job the client polls — the response never again
+  //    outlives the embedded fetcher / Cloudflare window (S4). ─────────────
+  if (orderIds.length > BULK_INLINE_MAX) {
+    const { jobId } = await createBulkActionJob(session.shop, opParams, orderIds);
+    const enqueued = await enqueueBulkActionTask({ jobId });
+    if (!enqueued.ok) {
+      if (!enqueued.notConfigured) {
+        console.warn(
+          `[orders action] bulk-job enqueue failed (${enqueued.error}); running in-process.`,
+        );
+      }
+      // Local dev (no queue) or an enqueue hiccup: run in-process WITHOUT
+      // awaiting — the response must stay fast (the whole point of Phase B);
+      // the hourly sweep rescues the job if this process dies mid-run.
+      void runBulkJobToCompletion(jobId);
+    }
+    return Response.json({
+      ok: true,
+      action: op,
+      mode: "job",
+      jobId,
+      total: orderIds.length,
+      message: `Processing ${orderIds.length} orders in the background.`,
+      results: [],
+      summary: { ok: 0, failed: 0 },
+    } satisfies BulkActionResponse);
+  }
+
+  const results: BulkActionItemResult[] = await executeBulkAction(
+    admin,
+    session.shop,
+    opParams,
+    orderIds,
+  );
 
   const okCount = results.filter((r) => r.success).length;
   const failedCount = results.length - okCount;
@@ -1538,6 +1061,8 @@ function Extension() {
     handleAddTags,
     handleRemoveTags,
     handleMarkFulfilled,
+    activeJob,
+    jobProgress,
   } = useBulkActions(selectedResources, clearSelection, removeSelectedResources);
 
   // Shared row-level tags modal + KPI items-to-prepare modal — plain React
@@ -2105,6 +1630,26 @@ function Extension() {
                 : ""}{" "}
               — booked-slot counts may be undercounting these orders until the
               sync completes. Retry runs in the background.
+            </Text>
+          </Banner>
+        )}
+
+        {/* ── Background bulk-job progress (ADR-22 Phase B) — a large
+            selection runs server-side, chunk by chunk; this banner tracks the
+            poll until the completion toast fires ─────────────────────────── */}
+        {activeJob && (
+          <Banner
+            tone="info"
+            title={`Processing ${activeJob.total} order${
+              activeJob.total === 1 ? "" : "s"
+            } in the background`}
+          >
+            <Text as="p">
+              {jobProgress && jobProgress.done > 0
+                ? `${jobProgress.done} of ${jobProgress.total} processed…`
+                : "Starting…"}{" "}
+              The job continues on the server even if this page closes — the
+              result toast just needs the page open.
             </Text>
           </Banner>
         )}

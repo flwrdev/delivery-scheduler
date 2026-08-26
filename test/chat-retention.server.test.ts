@@ -16,6 +16,8 @@ const { prismaMock } = vi.hoisted(() => ({
     supportChatThread: { findMany: vi.fn(), deleteMany: vi.fn() },
     agentRateLimit: { deleteMany: vi.fn() },
     lookupAttempt: { deleteMany: vi.fn() },
+    bulkActionJob: { deleteMany: vi.fn() },
+    deliverySyncTask: { deleteMany: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -38,6 +40,8 @@ beforeEach(() => {
   prismaMock.supportChatThread.deleteMany.mockResolvedValue({ count: 0 });
   prismaMock.agentRateLimit.deleteMany.mockResolvedValue({ count: 7 });
   prismaMock.lookupAttempt.deleteMany.mockResolvedValue({ count: 2 });
+  prismaMock.bulkActionJob.deleteMany.mockResolvedValue({ count: 1 });
+  prismaMock.deliverySyncTask.deleteMany.mockResolvedValue({ count: 4 });
   // The real $transaction receives the (already-started) prisma promises and
   // awaits them; the stub just resolves whatever it was handed.
   prismaMock.$transaction.mockImplementation((ops: Array<Promise<unknown>>) => Promise.all(ops));
@@ -122,6 +126,25 @@ describe("runChatRetentionPurge", () => {
       customerAccountMessagesDeleted: 5,
       rateLimitRowsDeleted: 7,
       lookupAttemptsDeleted: 2,
+      bulkJobsDeleted: 1,
+      deliverySyncTasksDeleted: 4,
+    });
+  });
+
+  it("purges the ADR-22 ops queues: finished bulk jobs at 7d, DONE sync tasks at 30d — failed sync tasks kept", async () => {
+    await runChatRetentionPurge(NOW);
+
+    expect(prismaMock.bulkActionJob.deleteMany).toHaveBeenCalledWith({
+      where: {
+        status: { in: ["done", "failed"] },
+        updatedAt: { lt: expectedCutoff(RETENTION.bulkJobFinishedDays) },
+      },
+    });
+    expect(prismaMock.deliverySyncTask.deleteMany).toHaveBeenCalledWith({
+      where: {
+        status: "done",
+        updatedAt: { lt: expectedCutoff(RETENTION.deliverySyncDoneDays) },
+      },
     });
   });
 });
