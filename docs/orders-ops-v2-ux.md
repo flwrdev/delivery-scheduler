@@ -1,11 +1,11 @@
 # Orders Operations V2 — UX Architecture (Polaris React rewrite)
 
 > Part of the docs set. Source of truth: [architecture.md](./architecture.md).
-> **Status: DESIGN FINAL (locked 2026-07-11 — two decision batches, see §10/§10a).
-> Phase 0 shipped; Phases 1–5 not yet built.** This doc is the design blueprint
-> approved before code. Supersedes the presentation half of
-> [orders-ui.md](./orders-ui.md) once shipped; the data-flow half of orders-ui.md
-> stays valid.
+> **Status: SHIPPED — all of Phases 1–5 built 2026-07-11/12.** This doc is the
+> design blueprint approved before code, kept as the historical record of the
+> rewrite (decision batches in §10/§10a). For the CURRENT page architecture,
+> read [orders-ui.md](./orders-ui.md) (rewritten 2026-08-26) — it supersedes
+> this doc for anything about how the page works today.
 
 Goal: make `/app/orders` feel like a **native Shopify Admin Orders page** — same
 interaction model, same visual language — using **Polaris React** components only.
