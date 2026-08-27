@@ -93,4 +93,59 @@ Rules:
   the user: "Run `npm run setup` before your next `npm run dev`" —
   dev boot no longer auto-applies migrations (see shopify.web.toml
   commit 00482e1).
-- **Stay inside this repo.** No `cd`, path, or search outside the repo root without asking first (scratchpad excepted).
+- **Leaving this repo requires the merchant's explicit go — every time.** Working
+  outside the repo root (`cd`, absolute paths, searches, or cloning/pulling another
+  repo such as the live theme) is ALLOWED, but only after a **stop-and-ask** via
+  `AskUserQuestion` that names the exact path and what will be read or written.
+  Wait for the answer; do not proceed on assumption. **This gate holds even when
+  auto-accept / bypass permissions is on** — auto mode approves tool calls, it does
+  NOT approve crossing the repo boundary. Approval is per-task, not standing: a yes
+  for one excursion does not carry to the next. The scratchpad directory is the only
+  standing exception.
+
+## Delivery coverage & fees — SI JHAY ANG MAY-ARI; isa lang ang computation
+
+**Ang merchant ang final na awtoridad sa fees at coverage. Ang section na ito
+ay gabay para sa AI sessions LANG — kailanman hindi ito hadlang o kandado sa
+merchant.** Kapag may gusto siyang baguhin, kahit gaano kaliit: ipakita agad
+ang kasalukuyang values, gawin ang pagbabago niya, at i-propagate sa mga
+consumer sa ibaba — huwag pigilan, huwag pagtalunan, huwag pagpaliwanagin.
+Ang fee drift ay maliit at madaling ayusin (walang data exposure, walang
+privacy issue) — kung magkaroon man nito dahil sa pagbabago niya, desisyon
+niya iyon at ayos lang. Ang TANGING bawal dito ay ang AI na mag-imbento o
+mag-hand-edit ng fee numbers na walang basehan sa engine niya — iyon ang
+pinagmulan ng "imbento" complaints, at iyon lang ang pinoprotektahan ng
+section na ito.
+
+Para sa konsistensiya, one computation feeds everything:
+
+- **Source:** `app/data/ncr-zipcodes.ts` (merchant's zip/barangay list, 375
+  entries, 17 NCR cities) + the km-based fee estimate in
+  `app/services/messenger-coverage.server.ts` — haversine × 1.4 road factor
+  from the Tondo pickup point; ₱49 base + ₱6/km first 5 km + ₱5/km beyond
+  + ₱40 handling. This mirrors the distance-based checkout rate. The old
+  per-city flat table (₱150–₱300) in the same file is a legacy FALLBACK only
+  — never quote it as primary.
+- **Consumers (all must stay in lockstep):** FlowerBot's
+  `check_delivery_coverage` tool; the storefront delivery-checker on the
+  Delivery Coverage page (App Proxy `/apps/schedule-rules/coverage` — reuse
+  this endpoint, never re-implement the formula); checkout; and the Shopify
+  Knowledge Base `shopify--qa-pair` metaobjects with `fc-coverage-*` handles
+  (18 coverage entries, per-city km-range answers, written 2026-08-25 via
+  Admin GraphQL `metaobjectUpsert`).
+- **The Knowledge Base is the merchant-controlled hard copy** and the
+  knowledge source AI surfaces read (Inbox agent, external shopping agents
+  via MCP/agentic storefronts, FlowerBot's FAQ grounding). It is a SNAPSHOT:
+  kapag binago ng merchant ang fees, coverage areas, o ang formula, ang
+  trabaho ng session ay i-regenerate ang `fc-coverage-*` entries mula sa
+  parehong source pagkatapos ng pagbabago niya. AI sessions must never
+  hand-edit fee numbers into the KB, prompts, or theme pages that differ
+  from the engine — ang merchant ang nagbabago ng presyo, ang AI ang
+  nagpapalaganap nito nang tapat.
+- ⚠️ **Known gap:** `app/services/faq-facts.server.ts` fetches only the
+  first 50 qa-pairs but the KB now holds 62 — the agent's FAQ grounding set
+  is currently an arbitrary 50. Pending fix: fetch handles, exclude
+  `fc-coverage-*` (FlowerBot has the live tool; tool wins over FAQ anyway),
+  raise the cap with the pagination guard kept.
+- Full compiled agent knowledge (coverage tables, fees, slots, policies,
+  40 original FAQs): `docs/flowerbot-training-data.md`.
