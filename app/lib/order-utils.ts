@@ -434,19 +434,32 @@ export function getAttr(attrs: CustomAttribute[], ...keys: string[]): string {
 
 // ─── Line item helpers ────────────────────────────────────────────────────────
 
-export function getFirstItemImageUrl(order: Order): string | undefined {
-  const item = order.lineItems?.edges?.[0]?.node ?? null;
-  return item?.image?.url || item?.product?.featuredImage?.url || undefined;
+export interface ItemThumbnail {
+  url: string;
+  altText: string;
 }
 
-export function getFirstItemAltText(order: Order): string {
-  const item = order.lineItems?.edges?.[0]?.node ?? null;
-  if (!item) return "Product image";
-  return (
-    item.image?.altText ||
-    item.product?.featuredImage?.altText ||
-    `Image of ${item.name}`
-  );
+/**
+ * Up to `max` line-item images for the table's stacked thumbnails. Per item:
+ * variant image first, product featured image as fallback; items without any
+ * image are skipped so the second slot can still fill from a later item.
+ */
+export function getItemImages(order: Order, max = 2): ItemThumbnail[] {
+  const images: ItemThumbnail[] = [];
+  for (const edge of order.lineItems?.edges ?? []) {
+    const item = edge.node;
+    const url = item?.image?.url || item?.product?.featuredImage?.url;
+    if (!url) continue;
+    images.push({
+      url,
+      altText:
+        item.image?.altText ||
+        item.product?.featuredImage?.altText ||
+        `Image of ${item.name}`,
+    });
+    if (images.length >= max) break;
+  }
+  return images;
 }
 
 // ─── Shipping address helpers ─────────────────────────────────────────────────
