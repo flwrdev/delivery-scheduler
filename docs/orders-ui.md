@@ -30,7 +30,7 @@ props-only component fed from that single loader.
 | --- | --- | --- |
 | **Route** | `app/routes/app.orders.tsx` | Loader, `action` (all ops), `shouldRevalidate`, `Extension()` page component, `GET_ORDERS_QUERY`, KPI computations, tab defs, modal wiring (~2,200 lines) |
 | Fetcher route | `app/routes/app.orders_.reschedule-rules.ts` | Rules + live booked counts for the Reschedule modal (the page's only secondary fetch) |
-| **Table** | `app/components/orders/OrdersIndexTable.tsx` | Polaris `IndexFilters` + `IndexTable`; tabs, sort, search, selection (`useIndexResourceState`), row diff badges |
+| **Table** | `app/components/orders/OrdersIndexTable.tsx` | Polaris `IndexFilters` + `IndexTable`; tabs, sort, search, selection (`useIndexResourceState`), row diff badges; **stacked product thumbnails** sa Items column (2026-08-27): hanggang 2 line-item images via `getItemImages` sa `order-utils.ts` — ang unang item ay buong kita sa harap (may manipis na white ring para may separation sa likod), ang pangalawa ay kalahati lang ang silip sa likod nito; items na walang image ay nilalaktawan para may laman pa rin ang pangalawang slot |
 | **Panel** | `app/components/orders/OrderDetailsPanel.tsx` | Right-side details panel (lazy-loaded chunk), URL-driven via `?order=`; Esc-close scoped by `escDisabled` |
 | Panel sections | `app/components/orders/panel/DeliverySection.tsx` | Delivery date/slot/address block; shop-local "today" via `todayISO` prop |
 | | `app/components/orders/panel/DeliveryTimeline.tsx` | Reschedule history + Fulfilled/Delivered + email-sent + reminder-conversion entries |
