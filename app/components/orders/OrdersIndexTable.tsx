@@ -33,8 +33,7 @@ import {
   getCustomerName,
   getCity,
   getInstructionValue,
-  getFirstItemImageUrl,
-  getFirstItemAltText,
+  getItemImages,
 } from "../../lib/order-utils";
 import { polarisBadgeTone } from "./panel/badge-tone";
 import type { BulkModalName } from "../../hooks/useBulkActions";
@@ -305,7 +304,7 @@ export function OrdersIndexTable({
           : itemCount >= 10
             ? "10+ items"
             : `${itemCount} items`;
-    const thumbnailUrl = getFirstItemImageUrl(order);
+    const itemImages = getItemImages(order);
     const meaningfulTags = getMeaningfulTags(order.tags || []);
     const shownTags = meaningfulTags.slice(0, 2);
     const extraTags = meaningfulTags.length - shownTags.length;
@@ -371,12 +370,40 @@ export function OrdersIndexTable({
 
         <IndexTable.Cell>
           <InlineStack gap="200" blockAlign="center" wrap={false}>
-            {thumbnailUrl && (
-              <Thumbnail
-                source={thumbnailUrl}
-                alt={getFirstItemAltText(order)}
-                size="small"
-              />
+            {itemImages.length > 0 && (
+              <span style={{ display: "inline-flex", alignItems: "center" }}>
+                <span
+                  style={{
+                    position: "relative",
+                    zIndex: 1,
+                    display: "inline-flex",
+                    borderRadius: "var(--p-border-radius-200, 8px)",
+                    boxShadow: "0 0 0 2px var(--p-color-bg-surface, #fff)",
+                  }}
+                >
+                  <Thumbnail
+                    source={itemImages[0].url}
+                    alt={itemImages[0].altText}
+                    size="small"
+                  />
+                </span>
+                {itemImages[1] && (
+                  <span
+                    style={{
+                      position: "relative",
+                      zIndex: 0,
+                      display: "inline-flex",
+                      marginLeft: "-20px",
+                    }}
+                  >
+                    <Thumbnail
+                      source={itemImages[1].url}
+                      alt={itemImages[1].altText}
+                      size="small"
+                    />
+                  </span>
+                )}
+              </span>
             )}
             <Text as="span">{itemsText}</Text>
           </InlineStack>
