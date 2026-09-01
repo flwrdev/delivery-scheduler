@@ -92,12 +92,3 @@ Rules:
   commit 00482e1).
 
 
-Para sa konsistensiya, one computation feeds everything:
-
-- **Source:** `app/data/ncr-zipcodes.ts` merchant's zip/barangay list, 375
-  entries, 17 NCR cities) + the km-based fee estimate in
-  `app/services/messenger-coverage.server.ts` — haversine × 1.4 road factor
-  from the Tondo pickup point; ₱49 base + ₱6/km first 5 km + ₱5/km beyond
-  + ₱40 handling. This mirrors the distance-based checkout rate. The old
-  per-city flat table (₱150–₱300) in the same file is a legacy FALLBACK only
-

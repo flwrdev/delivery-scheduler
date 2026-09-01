@@ -147,78 +147,6 @@ model EmailSendLog {
   @@index([shop, shopifyOrderId])
 }
 
-// Occasion reminder emails (auto-send retention feature): app-side reminder
-// rows — never Shopify delivery state, so none of these three models join the
-// order write-path contract in docs/api.md §2. Same side-table posture as
-// LalamoveTracking / EmailSendLog above. Rows recur yearly via roll-forward
-// (a SENT 7d row seeds next year's occasionYear rows), so the Shopify order
-// search only ever looks one year back.
-model OccasionReminder {
-  id                 String    @id @default(cuid())
-  shop               String
-  shopifyOrderId     String
-  occasionDate       DateTime  @db.Date // the UPCOMING occurrence being reminded about
-  occasionYear       Int
-  occasionType       String // "anniversary" | "birthday" | "other" | "generic"
-  touch              String // "7d" | "3d" — which reminder in the pair this is
-  detectSource       String // "card_message" | "order_note" | "none"
-  customerEmail      String?
-  customerFirstName  String?
-  recipientHint      String? // parsed greeting name ("Maria"); null when unclear
-  cardMessageExcerpt String? // <=140 chars; live reader = /app/reminders activity card
-  productTitles      String? // for the "same bouquet?" copy
-  status             String    @default("PENDING") // PENDING | SENT | SUPPRESSED | FAILED | SKIPPED_REORDERED
-  attemptCount       Int       @default(0)
-  // Consecutive prior years this occasion was reminded (0 = first year;
-  // +1 per roll-forward) — feeds the year-aware copy line.
-  priorYearsSent     Int       @default(0)
-  suggestedAt        DateTime  @default(now())
-  sentAt             DateTime?
-  // Conversion attribution (2026-08-21 addendum): stamped when the customer
-  // places a (non-cancelled) order after this reminder was sent — via the
-  // nightly sweep or the 3d re-order skip. Read-only orders search only.
-  convertedAt        DateTime?
-  convertedOrderId   String?
-  updatedAt          DateTime  @updatedAt
-
-  @@unique([shop, shopifyOrderId, occasionYear, touch])
-  @@index([shop, status, occasionDate])
-}
-
-// Unsubscribe / do-not-remind list. scope "all" silences every reminder for
-// the email; scope "order:<shopifyOrderId>" silences just that occasion chain.
-// Checked at scan AND at send time, and it cuts the yearly roll-forward.
-model ReminderSuppression {
-  id        String   @id @default(cuid())
-  shop      String
-  email     String // stored lowercased
-  scope     String   @default("all") // "all" | "order:<shopifyOrderId>"
-  source    String   @default("unsubscribe_link") // | "merchant"
-  createdAt DateTime @default(now())
-
-  @@unique([shop, email, scope])
-  @@index([shop, email])
-}
-
-// Kill switch for the nightly reminder scan — enabled=false (the default)
-// means the scan short-circuits and no email ever leaves, even with the
-// Cloud Scheduler job live. Touch offsets (7d/3d) are code constants, not
-// config, per merchant decision 2026-08-21.
-model ReminderConfig {
-  shop      String   @id
-  enabled   Boolean  @default(false)
-  // Merchant-editable email templates (2026-08-21 addendum). Null = use the
-  // built-in defaults in reminder-copy.server.ts. Token syntax: {name},
-  // {recipient}, {occasion}, {date}, {weekday}, {past_date}, {product},
-  // {cutoff}, {discount_code}, {discount_label}, {store_url}. The unsubscribe
-  // footer is ALWAYS server-appended after rendering — edits cannot strip it.
-  subject7d String?
-  body7d    String?
-  subject3d String?
-  body3d    String?
-  updatedAt DateTime @updatedAt
-}
-
 // Support chat (customer-account + storefront widget, agent-core phase 2/3):
 // enqueue-then-poll job records for a chat turn. Neon holds the CONVERSATION
 // + JOB STATUS only — same posture as MessengerThread/MessengerMessage
@@ -380,8 +308,7 @@ model DeliveryScheduleConfig {
 // Merchant-editable storefront chat widget copy/colors, set from the app's
 // Messenger admin page (merchant chose to fold widget settings into that
 // page rather than a dedicated nav item, 2026-08-23). Null column = use the
-// built-in default in widget-config.server.ts — same convention as
-// ReminderConfig's email templates. Read by
+// built-in default in widget-config.server.ts. Read by
 // apps.schedule-rules.widget-config.ts (App Proxy) on every storefront page
 // load, so widget-config.server.ts caches this in-process; the Theme Editor
 // block settings in app-embed.liquid are NOT removed — they stay as the

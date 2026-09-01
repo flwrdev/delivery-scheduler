@@ -4,7 +4,7 @@
 // deleted them; the storefront widget is reachable from every page of the
 // store, so left alone these tables grow without bound. This service is the
 // nightly Cloud Scheduler-driven purge (route: internal.chat-retention.ts,
-// same shared-secret pattern as internal.reminder-scan.ts).
+// same shared-secret pattern as internal.lalamove-poll.ts).
 //
 // Retention policy (merchant decision 2026-08-24, "Standard" preset):
 //   - SupportChatJob rows            > 7 days  — a job is a one-poll-cycle

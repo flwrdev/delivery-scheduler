@@ -5,7 +5,7 @@ import { runChatRetentionPurge } from "../services/chat-retention.server";
 
 // Chat-data retention purge — triggered nightly by the Google Cloud Scheduler
 // job `delivery-scheduler-chat-retention` (Cloud Run has no native cron; same
-// shared-secret pattern as internal.reminder-scan.ts / internal.lalamove-poll.ts).
+// shared-secret pattern as internal.lalamove-poll.ts).
 //
 // ZERO Shopify writes and zero Admin API reads — the purge is Postgres-only
 // (SupportChat* / AgentRateLimit / LookupAttempt; Messenger tables untouched).

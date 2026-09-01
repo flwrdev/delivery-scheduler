@@ -33,7 +33,7 @@ props-only component fed from that single loader.
 | **Table** | `app/components/orders/OrdersIndexTable.tsx` | Polaris `IndexFilters` + `IndexTable`; tabs, sort, search, selection (`useIndexResourceState`), row diff badges; **stacked product thumbnails** sa Items column (2026-08-27): hanggang 2 line-item images via `getItemImages` sa `order-utils.ts` — ang unang item ay buong kita sa harap (may manipis na white ring para may separation sa likod), ang pangalawa ay kalahati lang ang silip sa likod nito; items na walang image ay nilalaktawan para may laman pa rin ang pangalawang slot |
 | **Panel** | `app/components/orders/OrderDetailsPanel.tsx` | Right-side details panel (lazy-loaded chunk), URL-driven via `?order=`; Esc-close scoped by `escDisabled` |
 | Panel sections | `app/components/orders/panel/DeliverySection.tsx` | Delivery date/slot/address block; shop-local "today" via `todayISO` prop |
-| | `app/components/orders/panel/DeliveryTimeline.tsx` | Reschedule history + Fulfilled/Delivered + email-sent + reminder-conversion entries |
+| | `app/components/orders/panel/DeliveryTimeline.tsx` | Reschedule history + Fulfilled/Delivered + email-sent entries |
 | | `app/components/orders/panel/ItemsSection.tsx`, `panel/badge-tone.ts` | Line items + totals; badge tone mapping |
 | **Modals** | `CancelModal`, `ArchiveModal`, `UnarchiveModal`, `AddTagsModal`, `RemoveTagsModal` | Bulk-op confirm modals (post to the route `action`) |
 | | `MarkFulfilledModal.tsx` | Fulfill + optional Lalamove Order ID paste (ADR-16 `recordLalamoveOrderId`) |
@@ -103,11 +103,10 @@ Loader sequence (all in `app.orders.tsx`):
    `delivery.reschedule_history`), customAttributes, line items, addresses,
    price sets, customer, and `fulfillments { createdAt deliveredAt }` (for the
    timeline's Fulfilled/Delivered entries).
-7. **Postgres enrichment, one guarded `Promise.all`:** `emailSendLog` rows
-   (panel timeline "email sent" entries) + `occasionReminder` conversions
-   (ADR-19) for this page's order ids → attached as `order.emailLog` /
-   `order.reminderConversions`. Panel-timeline garnish, not page-critical: a
-   Neon cold-start rejection degrades both to empty lists, never 500s the page.
+7. **Postgres enrichment, one guarded query:** `emailSendLog` rows (panel
+   timeline "email sent" entries) for this page's order ids → attached as
+   `order.emailLog`. Panel-timeline garnish, not page-critical: a Neon
+   cold-start rejection degrades it to an empty list, never 500s the page.
 8. **Sync-issue count (ADR-22), separately guarded:** `getDeliverySyncIssues`
    counts failed/stuck `DeliverySyncTask` rows for the warning banner —
    degrades to zero on DB trouble, never page-critical.
@@ -242,7 +241,7 @@ loader (app.orders.tsx)
   ├─ authenticate.admin → build query (server filters; NO metafield terms)
   ├─ getScheduleRules → todayISO (shop-local)          [guarded fallback]
   ├─ admin.graphql(GET_ORDERS_QUERY) → orders: Order[]
-  ├─ Promise.all(emailSendLog, occasionReminder)       [guarded → empty]
+  ├─ emailSendLog.findMany                             [guarded → empty]
   └─ Response.json(orders, pageInfo, params, todayISO, pageSize, mapsApiKey)
         │ useLoaderData()                (Cache-Control: no-store)
         ▼

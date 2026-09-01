@@ -156,27 +156,13 @@ Matching/write logic: [lalamove-tracking.server.ts](../app/services/lalamove-tra
 
 Env: `LALAMOVE_API_KEY`, `LALAMOVE_API_SECRET`, `LALAMOVE_MARKET` (`PH`), `LALAMOVE_ENV` (`sandbox`/`production`), `LALAMOVE_SHOP` (single-shop app, same convention as `MESSENGER_SHOP`), `LALAMOVE_POLL_SECRET`. All required for the listener to do anything; a missing key degrades to a logged no-op, never a 5xx.
 
-## Occasion reminder emails (ADR-19 — nightly auto-send, zero order writes)
-
-Nightly scan+send for the occasion reminder feature ([occasion-reminders.server.ts](../app/services/occasion-reminders.server.ts)): finds orders whose delivery date recurs in 7 or 3 days (last-year orders via a `created_at:`-range orders search — deliberately NOT `metafields.custom.date:`, which the orders query silently ignores; older years roll forward from the app's own `OccasionReminder` rows) and auto-sends the merchant's reminder template through `sendCustomerEmail`. The 3-day email carries the `ANNIV200` code and is skipped when the customer has re-ordered since the 7-day send (an `email:`-scoped orders search). Sends are HELD whenever `REMINDER_UNSUBSCRIBE_SECRET`/`SHOPIFY_APP_URL` is missing — never an email without a working opt-out link.
-
-| Path | File | Auth |
-| --- | --- | --- |
-| `POST /internal/reminder-scan` | [internal.reminder-scan.ts](../app/routes/internal.reminder-scan.ts) | Shared-secret header (`x-reminder-scan-secret` vs `REMINDER_SCAN_SECRET`), timing-safe compare — same pattern as the Lalamove poller. Triggered by the Google Cloud Scheduler job `delivery-scheduler-reminder-scan` (daily, 21:00 UTC = 05:00 Asia/Manila). |
-| `GET /public/reminder-unsubscribe` | [public.reminder-unsubscribe.ts](../app/routes/public.reminder-unsubscribe.ts) | Signed HMAC token in `?token=` (keyed with `REMINDER_UNSUBSCRIBE_SECRET`) — clicked from the email footer; no session. Invalid tokens get the same generic 200 page (no enumeration oracle). |
-| `/app/reminders` | [app.reminders.tsx](../app/routes/app.reminders.tsx) | `authenticate.admin` (embedded page) — kill-switch toggle, merchant-editable email templates (token render sa shared [reminder-template.ts](../app/lib/reminder-template.ts); unsubscribe footer hindi matatanggal), performance stats (conversion attribution via `convertedAt` + live ANNIV200 usage count — the page's only Admin GraphQL call, read-only), activity feed + merchant Suppress. |
-
-**Everything here is read-only against Shopify** — orders searches only, no mutations; the writes are Postgres rows (`OccasionReminder`, `ReminderSuppression`, `ReminderConfig`, plus the same `EmailSendLog` audit row the `sendEmail` op writes) — so this feature sits OUTSIDE the §2 write-path contract, same posture as `sendEmail`. Machine-enforced: the read-only grep guard in [test/occasion-reminders.test.ts](../test/occasion-reminders.test.ts) fails the suite if any reminder source ever grows a mutation string. Email copy lives in [reminder-copy.server.ts](../app/services/reminder-copy.server.ts) (the merchant's own template — see [brand-voice.md](./brand-voice.md)); occasion keyword detection in [occasion-detection.server.ts](../app/services/occasion-detection.server.ts).
-
-Env: `REMINDER_SCAN_SECRET`, `REMINDER_SHOP` (single-shop convention), `REMINDER_UNSUBSCRIBE_SECRET`; reuses `EMAIL_SMTP_*`/`EMAIL_FROM_NAME` and `SHOPIFY_APP_URL`. The `ReminderConfig.enabled` kill switch defaults to OFF — deploying + scheduling alone sends nothing until the merchant flips it on at `/app/reminders`.
-
 ## Chat-data retention purge (2026-08-24 — nightly Postgres cleanup, zero Shopify calls)
 
 The counterweight to the agent channels' insert-only Postgres posture: every support-chat turn writes 1 `SupportChatJob` + 2 `SupportChatMessage` rows and nothing ever deleted them, and the storefront widget is reachable from every page of the store. A nightly Cloud Scheduler job now purges per the merchant's "Standard" retention decision (2026-08-24): jobs > 7 days; idle **storefront** threads (whole thread: messages + jobs + thread row) > 30 days; **customer-account** messages > 90 days (the thread row itself is kept — one per customer, cheap, preserves thread identity); stale `AgentRateLimit` rows > 2 days; stale `LookupAttempt` rows > 30 days. **`MessengerThread`/`MessengerMessage` are deliberately untouched** — live ordering state (`conversationOrderKey`, `humanControl`) rides on those rows; purging them is a product decision, not hygiene.
 
 | Path | File | Auth |
 | --- | --- | --- |
-| `POST /internal/chat-retention` | [internal.chat-retention.ts](../app/routes/internal.chat-retention.ts) | Shared-secret header (`x-chat-retention-secret` vs `CHAT_RETENTION_SECRET`), timing-safe compare — same pattern as the reminder scan / Lalamove poller. Triggered by the Google Cloud Scheduler job `delivery-scheduler-chat-retention` (daily). |
+| `POST /internal/chat-retention` | [internal.chat-retention.ts](../app/routes/internal.chat-retention.ts) | Shared-secret header (`x-chat-retention-secret` vs `CHAT_RETENTION_SECRET`), timing-safe compare — same pattern as the Lalamove poller. Triggered by the Google Cloud Scheduler job `delivery-scheduler-chat-retention` (daily). |
 
 Purge logic lives in [chat-retention.server.ts](../app/services/chat-retention.server.ts) (`runChatRetentionPurge`, batch-capped at 500 storefront threads per run so a backlog drains across nights). **Zero Shopify calls of any kind** — the route never imports `shopify.server`; machine-enforced by the grep guard in [test/chat-retention.server.test.ts](../test/chat-retention.server.test.ts). Sits OUTSIDE the §2 write-path contract by construction. Env: `CHAT_RETENTION_SECRET`.
 

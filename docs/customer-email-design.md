@@ -166,12 +166,13 @@ the order has no customer email) → `sendCustomerEmail(...)` → typed response
 
 ## 7. Out of scope (future enhancements, in likely order)
 
-> **2026-08-21 update:** the "delivery reminder" idea in #1 shipped in a
-> bigger form as the **occasion reminder emails** feature (ADR-19) — an
-> automated second caller of `sendCustomerEmail` with its own template module
-> ([`reminder-copy.server.ts`](../app/services/reminder-copy.server.ts)),
-> suppression/unsubscribe layer, and `EmailSendLog` reuse. See
-> [api.md § Occasion reminder emails](./api.md) for the route/auth detail.
+> **2026-08-21 → reverted 2026-08-28:** the "delivery reminder" idea in #1 was
+> built as the **occasion reminder emails** feature (ADR-19) but **removed from
+> the codebase on 2026-08-28** — it detected nothing (year-over-year design vs.
+> pre-migration orders that had no `custom.date` metafield) and the merchant
+> moved to a dedicated third-party Shopify reminder app. See
+> [decisions.md ADR-19](./decisions.md) (Reverted note). `sendCustomerEmail` +
+> `EmailSendLog` remain for the manual compose-email feature.
 
 1. **Template presets** (reschedule confirmation / delay notice / delivery
    reminder) prefilled from order data — natural once the modal exists.

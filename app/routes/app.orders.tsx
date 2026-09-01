@@ -447,43 +447,25 @@ export const loader = async ({
 
   // Email-sent history (E-5 revisit, docs/customer-email-design.md) lives in
   // Postgres, never on the Shopify order — one lookup keyed by this page's
-  // order ids, grouped and attached below. The occasion-reminder conversions
-  // (ADR-19) ride the same guarded fetch. Both are panel-timeline garnish,
-  // not page-critical: a Neon cold-start rejection here must degrade to
-  // empty lists, never 500 the whole ops page — and on the Today view this
-  // loader re-runs every 5 minutes, so the exposure is constant.
+  // order ids, grouped and attached below. Panel-timeline garnish, not
+  // page-critical: a Neon cold-start rejection here must degrade to an empty
+  // list, never 500 the whole ops page — and on the Today view this loader
+  // re-runs every 5 minutes, so the exposure is constant.
   const orderIds = orders.map((o) => o.id);
   let emailLogRows: Array<{
     shopifyOrderId: string;
     sentAt: Date;
     to: string;
   }> = [];
-  let conversionRows: Array<{
-    convertedOrderId: string | null;
-    touch: string;
-    occasionType: string;
-    sentAt: Date | null;
-  }> = [];
   if (orderIds.length > 0) {
     try {
-      [emailLogRows, conversionRows] = await Promise.all([
-        prisma.emailSendLog.findMany({
-          where: { shop: session.shop, shopifyOrderId: { in: orderIds } },
-          orderBy: { sentAt: "desc" },
-        }),
-        prisma.occasionReminder.findMany({
-          where: { shop: session.shop, convertedOrderId: { in: orderIds } },
-          select: {
-            convertedOrderId: true,
-            touch: true,
-            occasionType: true,
-            sentAt: true,
-          },
-        }),
-      ]);
+      emailLogRows = await prisma.emailSendLog.findMany({
+        where: { shop: session.shop, shopifyOrderId: { in: orderIds } },
+        orderBy: { sentAt: "desc" },
+      });
     } catch (error) {
       console.warn(
-        `[orders loader] email/reminder enrichment skipped: ${
+        `[orders loader] email enrichment skipped: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -497,23 +479,6 @@ export const loader = async ({
   }
   for (const order of orders) {
     order.emailLog = emailLogByOrderId.get(order.id) ?? [];
-  }
-  const conversionsByOrderId = new Map<
-    string,
-    { touch: string; occasionType: string; sentAt: string | null }[]
-  >();
-  for (const row of conversionRows) {
-    if (!row.convertedOrderId) continue;
-    const list = conversionsByOrderId.get(row.convertedOrderId) ?? [];
-    list.push({
-      touch: row.touch,
-      occasionType: row.occasionType,
-      sentAt: row.sentAt ? row.sentAt.toISOString() : null,
-    });
-    conversionsByOrderId.set(row.convertedOrderId, list);
-  }
-  for (const order of orders) {
-    order.reminderConversions = conversionsByOrderId.get(order.id) ?? [];
   }
 
   // Sync-issue banner count (ADR-22): same guarded posture as the enrichment
