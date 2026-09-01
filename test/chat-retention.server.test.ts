@@ -1,9 +1,8 @@
 // Chat-data retention purge (2026-08-24). Same prisma-stub idiom as
 // test/agent-rate-limit.server.test.ts — never touches a real DB.
 //
-// Also carries the read-only guard this repo uses for side-channel routes
-// (see test/occasion-reminders.test.ts): the purge must never grow a Shopify
-// Admin API dependency.
+// Also carries the read-only guard this repo uses for side-channel routes:
+// the purge must never grow a Shopify Admin API dependency.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -149,7 +148,7 @@ describe("runChatRetentionPurge", () => {
   });
 });
 
-describe("read-only guard (grep, same idiom as the reminder-scan guard)", () => {
+describe("read-only guard (grep)", () => {
   it("the purge service and route never touch Shopify or the Messenger tables", () => {
     for (const relative of [
       ["app", "services", "chat-retention.server.ts"],
