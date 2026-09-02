@@ -31,6 +31,7 @@ const ADMIN = { graphql: vi.fn() };
 // wall-clock time. cutoffHour is 17 in the fixture below.
 const MANILA_6PM_SEP_1 = new Date("2026-09-01T10:00:00Z"); // past cutoff
 const MANILA_10AM_SEP_1 = new Date("2026-09-01T02:00:00Z"); // before cutoff
+const SEP_1_CUTOFF_ISO = "2026-09-01T09:00:00.000Z"; // 5PM Manila, Sep 1
 
 const SLOT_VALUES = ["9AM-12PM", "12PM-3PM", "3PM-6PM", "6PM-11PM"];
 
@@ -54,6 +55,14 @@ async function callLoader() {
   );
   const response = (await loader({ request, params: {}, context: {} } as never)) as Response;
   return { response, body: await response.json() };
+}
+
+// Every slot entry carries the two verdict flags plus a `lastOrderAt` instant;
+// the flags are what each case is about, so assert them exactly and only
+// type-check the instant here (its value is pinned separately below).
+function expectSlot(slot: unknown, flags: { available: boolean; blocked: boolean }) {
+  expect(slot).toMatchObject(flags);
+  expect(typeof (slot as { lastOrderAt: unknown }).lastOrderAt).toBe("string");
 }
 
 beforeEach(() => {
@@ -88,13 +97,13 @@ describe("apps.schedule-rules loader — availabilityWindow", () => {
     const today = window.dates["2026-09-01"];
     expect(today.dateBlocked).toBe(false);
     for (const slot of SLOT_VALUES) {
-      expect(today.slots[slot]).toEqual({ available: false, blocked: false });
+      expectSlot(today.slots[slot], { available: false, blocked: false });
     }
 
     const tomorrow = window.dates["2026-09-02"];
     expect(tomorrow.dateBlocked).toBe(false);
     for (const slot of SLOT_VALUES) {
-      expect(tomorrow.slots[slot]).toEqual({ available: true, blocked: false });
+      expectSlot(tomorrow.slots[slot], { available: true, blocked: false });
     }
   });
 
@@ -108,9 +117,9 @@ describe("apps.schedule-rules loader — availabilityWindow", () => {
     const day = body.availabilityWindow.dates["2026-09-05"];
 
     expect(day.dateBlocked).toBe(false);
-    expect(day.slots["12PM-3PM"]).toEqual({ available: false, blocked: true });
-    expect(day.slots["9AM-12PM"]).toEqual({ available: true, blocked: false });
-    expect(day.slots["3PM-6PM"]).toEqual({ available: true, blocked: false });
+    expectSlot(day.slots["12PM-3PM"], { available: false, blocked: true });
+    expectSlot(day.slots["9AM-12PM"], { available: true, blocked: false });
+    expectSlot(day.slots["3PM-6PM"], { available: true, blocked: false });
   });
 
   it("a disabledSlots entry with drifted spelling still blocks (canonical matching, not exact)", async () => {
@@ -122,8 +131,8 @@ describe("apps.schedule-rules loader — availabilityWindow", () => {
     const { body } = await callLoader();
     const day = body.availabilityWindow.dates["2026-09-05"];
 
-    expect(day.slots["12PM-3PM"]).toEqual({ available: false, blocked: true });
-    expect(day.slots["9AM-12PM"]).toEqual({ available: true, blocked: false });
+    expectSlot(day.slots["12PM-3PM"], { available: false, blocked: true });
+    expectSlot(day.slots["9AM-12PM"], { available: true, blocked: false });
   });
 
   it("a slot at capacity (booked >= capacity) is blocked and unavailable; under capacity stays open", async () => {
@@ -143,9 +152,9 @@ describe("apps.schedule-rules loader — availabilityWindow", () => {
     const day = body.availabilityWindow.dates["2026-09-05"];
 
     expect(day.dateBlocked).toBe(false);
-    expect(day.slots["3PM-6PM"]).toEqual({ available: false, blocked: true });
-    expect(day.slots["6PM-11PM"]).toEqual({ available: true, blocked: false });
-    expect(day.slots["9AM-12PM"]).toEqual({ available: true, blocked: false });
+    expectSlot(day.slots["3PM-6PM"], { available: false, blocked: true });
+    expectSlot(day.slots["6PM-11PM"], { available: true, blocked: false });
+    expectSlot(day.slots["9AM-12PM"], { available: true, blocked: false });
   });
 
   it("a date in disabledDates is dateBlocked with every slot unavailable — but slot.blocked stays false (renderer owns precedence)", async () => {
@@ -157,7 +166,7 @@ describe("apps.schedule-rules loader — availabilityWindow", () => {
 
     expect(day.dateBlocked).toBe(true);
     for (const slot of SLOT_VALUES) {
-      expect(day.slots[slot]).toEqual({ available: false, blocked: false });
+      expectSlot(day.slots[slot], { available: false, blocked: false });
     }
 
     // The date is still inside the window map (not dropped), and its neighbours are open.
@@ -179,13 +188,13 @@ describe("apps.schedule-rules loader — availabilityWindow", () => {
 
     const future = window.dates["2026-09-03"];
     expect(future.dateBlocked).toBe(false);
-    expect(future.slots["9AM-12PM"]).toEqual({ available: true, blocked: false });
+    expectSlot(future.slots["9AM-12PM"], { available: true, blocked: false });
 
     // Today at 10:00 with prepHours 1: the 9AM slot's start already passed, so it
     // is unavailable WITHOUT being blocked; 12PM (order by 11:00) is still open.
     const today = window.dates["2026-09-01"];
-    expect(today.slots["9AM-12PM"]).toEqual({ available: false, blocked: false });
-    expect(today.slots["12PM-3PM"]).toEqual({ available: true, blocked: false });
+    expectSlot(today.slots["9AM-12PM"], { available: false, blocked: false });
+    expectSlot(today.slots["12PM-3PM"], { available: true, blocked: false });
   });
 
   it("guards a blank getShopLocalDate: no dates[\"\"] key, today and the map start fall back to minDate", async () => {
@@ -211,9 +220,69 @@ describe("apps.schedule-rules loader — availabilityWindow", () => {
     expect(Object.keys(window.dates)).not.toContain("");
     expect(Object.keys(window.dates)[0]).toBe("2026-09-02");
     expect(Object.keys(window.dates)).toHaveLength(25);
+    // cutoffAt follows whatever `today` resolved to — the fallback date's cutoff.
+    expect(window.cutoffAt).toBe("2026-09-02T09:00:00.000Z");
 
     vi.doUnmock("../app/lib/delivery-availability");
     vi.resetModules();
+  });
+});
+
+describe("apps.schedule-rules loader — cutoffAt + lastOrderAt (additive instants)", () => {
+  it("past cutoff: cutoffAt is present and EARLIER than now, and the dates map still starts at today", async () => {
+    vi.setSystemTime(MANILA_6PM_SEP_1);
+
+    const { body } = await callLoader();
+    const window = body.availabilityWindow;
+
+    expect(window.cutoffAt).toBe(SEP_1_CUTOFF_ISO);
+    expect(new Date(window.cutoffAt).getTime()).toBeLessThan(Date.now());
+    expect(Object.keys(window.dates)[0]).toBe("2026-09-01");
+    expect(window.today).toBe("2026-09-01");
+  });
+
+  it("before cutoff: cutoffAt is present and LATER than now", async () => {
+    vi.setSystemTime(MANILA_10AM_SEP_1);
+
+    const { body } = await callLoader();
+    const window = body.availabilityWindow;
+
+    expect(window.cutoffAt).toBe(SEP_1_CUTOFF_ISO);
+    expect(new Date(window.cutoffAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("every slot on every date carries lastOrderAt = slot start minus prepHours (uniform, no today special-casing)", async () => {
+    vi.setSystemTime(MANILA_6PM_SEP_1);
+
+    const { body } = await callLoader();
+    const { dates } = body.availabilityWindow;
+
+    const dateKeys = Object.keys(dates);
+    expect(dateKeys).toHaveLength(26);
+    for (const date of dateKeys) {
+      for (const slot of SLOT_VALUES) {
+        const value = dates[date].slots[slot].lastOrderAt;
+        expect(typeof value).toBe("string");
+        expect(Number.isNaN(new Date(value).getTime())).toBe(false);
+        expect(value.endsWith("Z")).toBe(true);
+      }
+    }
+
+    // Exact values: 12PM Manila = 04:00Z, minus prepHours 1 → 03:00Z on that date.
+    expect(dates["2026-09-05"].slots["12PM-3PM"].lastOrderAt).toBe("2026-09-05T03:00:00.000Z");
+    // Today (past cutoff) is NOT special-cased: same arithmetic, 9AM − 1h = 00:00Z.
+    expect(dates["2026-09-01"].slots["9AM-12PM"].lastOrderAt).toBe("2026-09-01T00:00:00.000Z");
+    expect(dates["2026-09-26"].slots["6PM-11PM"].lastOrderAt).toBe("2026-09-26T09:00:00.000Z");
+  });
+
+  it("lastOrderAt scales with prepHours", async () => {
+    vi.setSystemTime(MANILA_10AM_SEP_1);
+    getRulesMock.mockResolvedValue(baseRules({ prepHours: 3 }));
+
+    const { body } = await callLoader();
+    expect(body.availabilityWindow.dates["2026-09-05"].slots["12PM-3PM"].lastOrderAt).toBe(
+      "2026-09-05T01:00:00.000Z",
+    );
   });
 });
 
@@ -247,5 +316,31 @@ describe("apps.schedule-rules loader — byte-compatibility (D5)", () => {
 
     expect(appProxyMock).toHaveBeenCalledTimes(1);
     expect(getRulesMock).toHaveBeenCalledWith(SHOP, ADMIN);
+  });
+
+  it("availabilityWindow itself only GAINED keys: the original window/slot keys are intact and the new ones are appended after them", async () => {
+    vi.setSystemTime(MANILA_10AM_SEP_1);
+
+    const { body } = await callLoader();
+    const window = body.availabilityWindow;
+
+    // Original 2026-09-02 window keys first, `cutoffAt` appended.
+    expect(Object.keys(window)).toEqual(["today", "minDate", "maxDate", "dates", "cutoffAt"]);
+    expect(window.today).toBe("2026-09-01");
+    expect(window.minDate).toBe("2026-09-01");
+    expect(window.maxDate).toBe("2026-09-25");
+
+    // Original date + slot keys first, `lastOrderAt` appended — on every entry.
+    for (const [date, entry] of Object.entries<{ dateBlocked: boolean; slots: Record<string, object> }>(window.dates)) {
+      expect(Object.keys(entry)).toEqual(["dateBlocked", "slots"]);
+      expect(Object.keys(entry.slots)).toEqual(SLOT_VALUES);
+      for (const slot of SLOT_VALUES) {
+        expect(Object.keys(entry.slots[slot]), `${date} ${slot}`).toEqual([
+          "available",
+          "blocked",
+          "lastOrderAt",
+        ]);
+      }
+    }
   });
 });
