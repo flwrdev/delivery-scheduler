@@ -124,6 +124,7 @@ type ZonedNowParts = {
 
 const MINUTES_PER_HOUR = 60;
 const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
+const MS_PER_MINUTE = 60_000;
 
 const zonedDateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
 
@@ -387,6 +388,64 @@ function getSlotStartSerial(dateStr: string, slotValue: string): number | null {
 
 function getCutoffMinutes(rules: DeliveryScheduleRules) {
   return Number(rules.cutoffHour) * MINUTES_PER_HOUR;
+}
+
+// Zone offset (minutes, local − UTC) in effect at a minute-aligned instant.
+function zoneOffsetMinutesAt(timezone: string, instantMs: number): number {
+  const parts = getZonedNowParts(timezone, new Date(instantMs));
+  return toLocalSerial(parts.date, parts.minutes) - instantMs / MS_PER_MINUTE;
+}
+
+/**
+ * Inverse of getZonedNowParts: the absolute instant at which `timezone`'s wall
+ * clock reads `wallSerial` (minutes since epoch of the LOCAL calendar, the
+ * same unit toLocalSerial produces). Treat the wall clock as UTC, correct by
+ * the zone's offset at that guess, then re-check once so a DST transition
+ * between the guess and the answer still lands on the right side.
+ */
+function zonedWallClockToInstant(timezone: string, wallSerial: number): Date {
+  const guessMs = wallSerial * MS_PER_MINUTE;
+  const firstOffset = zoneOffsetMinutesAt(timezone, guessMs);
+  let instantMs = (wallSerial - firstOffset) * MS_PER_MINUTE;
+
+  const secondOffset = zoneOffsetMinutesAt(timezone, instantMs);
+  if (secondOffset !== firstOffset) {
+    instantMs = (wallSerial - secondOffset) * MS_PER_MINUTE;
+  }
+
+  return new Date(instantMs);
+}
+
+/** The instant `dateStr`'s same-day cutoff (`cutoffHour`, shop-local) passes. */
+export function getCutoffInstant(
+  rules: DeliveryScheduleRules,
+  dateStr: string,
+): Date {
+  return zonedWallClockToInstant(
+    rules.timezone,
+    toLocalSerial(dateStr, getCutoffMinutes(rules)),
+  );
+}
+
+/**
+ * The instant after which `slotValue` on `dateStr` can no longer be ordered:
+ * slot start minus `prepHours`, shop-local. Null when the slot value's start
+ * time is unparseable (isSlotAvailable rejects those slots too).
+ */
+export function getSlotLastOrderInstant(
+  rules: DeliveryScheduleRules,
+  dateStr: string,
+  slotValue: string,
+): Date | null {
+  const slotStartSerial = getSlotStartSerial(dateStr, slotValue);
+  if (slotStartSerial == null) {
+    return null;
+  }
+
+  return zonedWallClockToInstant(
+    rules.timezone,
+    slotStartSerial - Number(rules.prepHours) * MINUTES_PER_HOUR,
+  );
 }
 
 export function getMinSelectableDate(

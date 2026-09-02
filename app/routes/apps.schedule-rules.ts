@@ -2,9 +2,11 @@ import type { LoaderFunctionArgs } from "react-router";
 
 import {
   addDays,
+  getCutoffInstant,
   getMaxSelectableDate,
   getMinSelectableDate,
   getShopLocalDate,
+  getSlotLastOrderInstant,
   isDateBlocked,
   isIsoDateString,
   isSlotAtCapacity,
@@ -18,6 +20,8 @@ import { authenticate } from "../shopify.server";
 interface AvailabilityWindowSlot {
   available: boolean;
   blocked: boolean;
+  /** ISO 8601 (UTC): slot start minus prepHours. Null when the slot value's start time is unparseable. */
+  lastOrderAt: string | null;
 }
 
 interface AvailabilityWindowDate {
@@ -30,13 +34,17 @@ export interface AvailabilityWindow {
   minDate: string;
   maxDate: string;
   dates: Record<string, AvailabilityWindowDate>;
+  /** ISO 8601 (UTC): when `today`'s same-day cutoff passes. Always present, even once passed — the client compares. */
+  cutoffAt: string;
 }
 
 // Data only — the storefront renderer owns precedence:
 //   dateBlocked > date before minDate (cutoff-passed today) > blocked > cutoff/prep.
 // `blocked` is NOT ANDed into the window: it is the stable config + live-count
 // verdict, while `available` is the full time-aware gate (cutoff + prepHours), so
-// the two can legitimately disagree and the renderer needs both.
+// the two can legitimately disagree and the renderer needs both. `cutoffAt` and
+// every slot's `lastOrderAt` are the same clock facts as absolute instants, so a
+// client can re-evaluate the time-based part locally without a refetch.
 function buildAvailabilityWindow(
   rules: DeliveryScheduleRules,
   now: Date,
@@ -64,12 +72,20 @@ function buildAvailabilityWindow(
         blocked:
           isSlotBlocked(rules, date, slot.value) ||
           isSlotAtCapacity(rules, date, slot.value),
+        lastOrderAt:
+          getSlotLastOrderInstant(rules, date, slot.value)?.toISOString() ?? null,
       };
     }
     dates[date] = { dateBlocked: isDateBlocked(rules, date), slots };
   }
 
-  return { today, minDate, maxDate, dates };
+  return {
+    today,
+    minDate,
+    maxDate,
+    dates,
+    cutoffAt: getCutoffInstant(rules, today).toISOString(),
+  };
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
