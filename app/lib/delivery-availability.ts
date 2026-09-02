@@ -214,7 +214,7 @@ function toDateOrdinal(dateStr: string): number {
   return Math.floor(Date.UTC(year, month - 1, day) / 86400000);
 }
 
-function addDays(dateStr: string, days: number): string {
+export function addDays(dateStr: string, days: number): string {
   const [year, month, day] = dateStr.split("-").map(Number);
   const nextDate = new Date(Date.UTC(year, month - 1, day));
   nextDate.setUTCDate(nextDate.getUTCDate() + days);
