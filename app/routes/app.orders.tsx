@@ -526,11 +526,15 @@ export const loader = async ({
   const tabDates =
     tabParam === "today"
       ? [dateRefs.todayISO]
-      : tabParam === "tomorrow"
-        ? [dateRefs.tomorrowISO]
-        : tabParam === "thisWeek"
-          ? enumerateISODates(dateRefs.startWeekISO, dateRefs.endWeekISO)
-          : [];
+      : tabParam === "yesterday"
+        ? [dateRefs.yesterdayISO]
+        : tabParam === "tomorrow"
+          ? [dateRefs.tomorrowISO]
+          : tabParam === "thisWeek"
+            ? enumerateISODates(dateRefs.startWeekISO, dateRefs.endWeekISO)
+            : tabParam === "lastWeek"
+              ? enumerateISODates(dateRefs.lastWeekStartISO, dateRefs.lastWeekEndISO)
+              : [];
   const tabDateTerm = buildDeliveryDateTagQuery(tabDates);
   if (tabDateTerm) queryParts.push(tabDateTerm);
   const filterDateTerm = deliveryDateParam
@@ -547,8 +551,10 @@ export const loader = async ({
   // 250 is a generous ceiling rather than the whole workable window.
   const needsClientFilter =
     tabParam === "today" ||
+    tabParam === "yesterday" ||
     tabParam === "tomorrow" ||
     tabParam === "thisWeek" ||
+    tabParam === "lastWeek" ||
     Boolean(deliveryDateParam) ||
     Boolean(timeWindowParam);
   const pageSize = needsClientFilter ? 250 : 25;
@@ -1002,8 +1008,10 @@ export const action = async ({
 type ActiveTab =
   | "all"
   | "today"
+  | "yesterday"
   | "tomorrow"
   | "thisWeek"
+  | "lastWeek"
   | "unfulfilled"
   | "unpaid"
   | "archived";
@@ -1066,6 +1074,10 @@ function Extension() {
       list = list.filter(
         (order) => getDeliveryDateValue(order) === dateRefs.todayISO,
       );
+    } else if (tabParam === "yesterday") {
+      list = list.filter(
+        (order) => getDeliveryDateValue(order) === dateRefs.yesterdayISO,
+      );
     } else if (tabParam === "tomorrow") {
       list = list.filter(
         (order) => getDeliveryDateValue(order) === dateRefs.tomorrowISO,
@@ -1075,6 +1087,15 @@ function Extension() {
         const d = getDeliveryDateValue(order);
         return (
           d !== "—" && d >= dateRefs.startWeekISO && d <= dateRefs.endWeekISO
+        );
+      });
+    } else if (tabParam === "lastWeek") {
+      list = list.filter((order) => {
+        const d = getDeliveryDateValue(order);
+        return (
+          d !== "—" &&
+          d >= dateRefs.lastWeekStartISO &&
+          d <= dateRefs.lastWeekEndISO
         );
       });
     }
@@ -1686,6 +1707,9 @@ function Extension() {
     return {
       today: orders.filter((o) => getDeliveryDateValue(o) === dateRefs.todayISO)
         .length,
+      yesterday: orders.filter(
+        (o) => getDeliveryDateValue(o) === dateRefs.yesterdayISO,
+      ).length,
       tomorrow: orders.filter(
         (o) => getDeliveryDateValue(o) === dateRefs.tomorrowISO,
       ).length,
@@ -1693,6 +1717,14 @@ function Extension() {
         const d = getDeliveryDateValue(o);
         return (
           d !== "—" && d >= dateRefs.startWeekISO && d <= dateRefs.endWeekISO
+        );
+      }).length,
+      lastWeek: orders.filter((o) => {
+        const d = getDeliveryDateValue(o);
+        return (
+          d !== "—" &&
+          d >= dateRefs.lastWeekStartISO &&
+          d <= dateRefs.lastWeekEndISO
         );
       }).length,
       unfulfilled: orders.filter(
@@ -1747,6 +1779,10 @@ function Extension() {
     { id: "today", label: "Today", count: tabCount("today", tabCounts.today), approximate: tabCountsPartial },
     { id: "tomorrow", label: "Tomorrow", count: tabCount("tomorrow", tabCounts.tomorrow), approximate: tabCountsPartial },
     { id: "thisWeek", label: "This week", count: tabCount("thisWeek", tabCounts.thisWeek), approximate: tabCountsPartial },
+    // Past views sit after the forward-looking ones so the first four tabs
+    // keep their positions (Today is the merchant's daily landing tab).
+    { id: "yesterday", label: "Yesterday", count: tabCount("yesterday", tabCounts.yesterday), approximate: tabCountsPartial },
+    { id: "lastWeek", label: "Last week", count: tabCount("lastWeek", tabCounts.lastWeek), approximate: tabCountsPartial },
     { id: "unfulfilled", label: "Unfulfilled", count: tabCount("unfulfilled", tabCounts.unfulfilled), approximate: tabCountsPartial },
     { id: "unpaid", label: "Unpaid", count: tabCount("unpaid", tabCounts.unpaid), approximate: tabCountsPartial },
     // Archived orders are excluded from every other view's query, so no
@@ -1770,8 +1806,10 @@ function Extension() {
     if (!searchParam || displayedOrders.length > 0) return [];
     const clientFilterActive =
       tabParam === "today" ||
+      tabParam === "yesterday" ||
       tabParam === "tomorrow" ||
       tabParam === "thisWeek" ||
+      tabParam === "lastWeek" ||
       Boolean(deliveryDateFilter) ||
       Boolean(timeWindowParam);
     if (!clientFilterActive) return [];
