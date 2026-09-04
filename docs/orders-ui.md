@@ -35,10 +35,10 @@ props-only component fed from that single loader.
 | Panel sections | `app/components/orders/panel/DeliverySection.tsx` | Delivery date/slot/address block; shop-local "today" via `todayISO` prop |
 | | `app/components/orders/panel/DeliveryTimeline.tsx` | Reschedule history + Fulfilled/Delivered + email-sent entries |
 | | `app/components/orders/panel/ItemsSection.tsx`, `panel/badge-tone.ts` | Line items + totals; badge tone mapping |
-| **Banner** | `app/components/orders/RecentReschedulesBanner.tsx` | "Rescheduled today" (2026-09-04): customer reschedules from the last 48 h not yet marked Seen, on **every** tab. Open → All + search + `?order=`; Seen → `markRescheduleSeen` |
+| **Banner** | `app/components/orders/RecentReschedulesBanner.tsx` | "Rescheduled today" (2026-09-04): customer **and** merchant reschedules from the last 48 h not yet marked Seen, on **every** tab. Open → All + search + `?order=`; Seen / "Mark all N as seen" → `markRescheduleSeen` (parallel pairs) |
 | **Modals** | `CancelModal`, `ArchiveModal`, `UnarchiveModal`, `AddTagsModal`, `RemoveTagsModal` | Bulk-op confirm modals (post to the route `action`) |
 | | `MarkFulfilledModal.tsx` | Fulfill + optional Lalamove Order ID paste (ADR-16 `recordLalamoveOrderId`) |
-| | `RescheduleModal.tsx` | Merchant reschedule; rules/capacity via the fetcher route; canonical slot matching via `lib/slot-value` |
+| | `RescheduleModal.tsx` | Merchant reschedule; rules/capacity via the fetcher route; canonical slot matching via `lib/slot-value`; "Email the customer about the new schedule" checkbox (default on, 2026-09-04) → `notifyCustomer` |
 | | `SendEmailModal.tsx` | In-app customer-email compose (`sendEmail` op — zero order writes) |
 | | `EditDetailsModal.tsx` | Shipping-address rewrite (`editDetails` op); Google Places autocomplete via `lib/google-places.client.ts` + loader's `mapsApiKey` |
 | | `SharedTagsModal.tsx`, `KpiProductsModal.tsx` | Row-tags viewer; products-to-prepare KPI drill-down |
@@ -54,7 +54,8 @@ props-only component fed from that single loader.
 | **Services (action side)** | `services/reschedule-order-delivery.server.ts` | The shared reschedule write orchestration (REC-1/2 — same code path as the customer-account reschedule) |
 | | `services/send-customer-email.server.ts` | `handleSendEmailOp` — SMTP send + `EmailSendLog` row |
 | | `services/update-order-contact.server.ts` | `handleEditDetailsOp` |
-| | `services/reschedule-seen.server.ts` | `handleMarkRescheduleSeenOp` — writes `$app.reschedule_seen_at` (order write, **not** a delivery write) |
+| | `services/reschedule-seen.server.ts` | `handleMarkRescheduleSeenOp` — writes `$app.reschedule_seen_at` for one or N orders (order write, **not** a delivery write) |
+| | `services/reschedule-notice.server.ts` | `sendRescheduleNotice` — customer email after a merchant reschedule, through the existing SMTP path (outbound only + `EmailSendLog` row; recipient read from the order, E-4). Called by the executor's `reschedule` op when `notifyCustomer` is set |
 | | `services/lalamove-tracking.server.ts` | `recordLalamoveOrderId` (ADR-16 status listener, not dispatch) |
 | | `services/delivery-sync-task.server.ts` | `getDeliverySyncIssues` (loader banner count) + `retryDeliverySyncIssues` (the `retryDeliverySync` op) — ADR-22 |
 | | `services/bulk-actions.server.ts` | **The shared bulk executor** (`executeBulkAction`) + all bulk mutations, `BulkActionName`/`BulkActionResponse` types, `BULK_INLINE_MAX` — ADR-22 Phase B (extracted from this route 2026-08-27) |
@@ -169,9 +170,12 @@ default behavior.
   not dismissible — it reports a real capacity-count gap and clears itself
   once the sync completes.
 - **Recent-reschedules banner (2026-09-04)** — `RecentReschedulesBanner`
-  fed by `loaderData.recentReschedules`, rendered on **every** tab (the moved
-  order has, by definition, just left the view being looked at). Per row:
-  order, customer, from → to, shop-local time, source. **Open** →
+  fed by `loaderData.recentReschedules` (customer **and** merchant sources,
+  `RECENT_RESCHEDULE_SOURCES`), rendered on **every** tab (the moved order
+  has, by definition, just left the view being looked at). Per row: order,
+  customer, from → to, shop-local time, source. With 2+ rows the banner
+  action is "Mark all N as seen" (one `markRescheduleSeen` post with parallel
+  pairs — a 30-order bulk move is one round trip, not thirty). **Open** →
   `openRecentReschedule`: clears tab/date/slot filters, sets
   `search=<number>` + `?order=` — the panel renders only orders on the loaded
   page, so All + search guarantees the row is there. **Seen** →
@@ -240,7 +244,13 @@ The route `action` dispatches on `_action`:
 - The **only delivery write** on this page is the `reschedule` op, which goes
   through the shared `rescheduleOrderDelivery()` service — the same
   orchestration the customer-account reschedule uses (REC-1/2), so merchant
-  and customer writes cannot drift.
+  and customer writes cannot drift. Since 2026-09-04 the op also carries
+  `notifyCustomer` (modal checkbox, default on): after a successful write the
+  executor sends the customer a plain-text notice through the existing SMTP
+  path (`reschedule-notice.server.ts`) — an outbound side effect plus an
+  `EmailSendLog` row, not an order write — and reports sent / no-email /
+  failed inside a still-successful item. Works identically on the inline path
+  and the Cloud Tasks worker (same executor, same env).
 
 Which metafields/tags/attributes each op touches, auth, and failure contract:
 **[api.md §2](./api.md)** — do not restate it here, and never assume a write

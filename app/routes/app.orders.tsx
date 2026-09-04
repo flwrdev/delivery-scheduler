@@ -904,6 +904,10 @@ export const action = async ({
       op: "reschedule",
       date,
       timeSlot,
+      // Customer notice (2026-09-04): the modal's checkbox, default on. The
+      // executor sends it AFTER a successful write and never lets a send
+      // failure fail the reschedule.
+      notifyCustomer: fd.get("notifyCustomer") === "1",
       // Stamped once here so every chunk/retry writes the same history
       // timestamp.
       requestedAt: new Date().toISOString(),
@@ -1208,24 +1212,32 @@ function Extension() {
   const rescheduleSeenFetcher = useFetcher<{ ok: boolean; message: string }>();
   const pendingSeenIds = useMemo(() => {
     const ids = new Set<string>();
-    const id = rescheduleSeenFetcher.formData?.get("orderId");
-    if (rescheduleSeenFetcher.state !== "idle" && typeof id === "string") {
-      ids.add(id);
+    if (rescheduleSeenFetcher.state !== "idle") {
+      for (const id of rescheduleSeenFetcher.formData?.getAll("orderId") ?? []) {
+        if (typeof id === "string") ids.add(id);
+      }
     }
     return ids;
   }, [rescheduleSeenFetcher.state, rescheduleSeenFetcher.formData]);
-  const markRescheduleSeen = useCallback(
-    (item: RecentRescheduleItem) => {
-      rescheduleSeenFetcher.submit(
-        {
-          _action: "markRescheduleSeen",
-          orderId: item.orderId,
-          requestedAt: item.requestedAt,
-        },
-        { method: "post" },
-      );
+  // One op for both buttons: parallel orderId/requestedAt pairs (the service
+  // chunks the metafield writes), so "Mark all" after a 30-order bulk
+  // reschedule is one round trip, not thirty.
+  const submitReschedulesSeen = useCallback(
+    (items: RecentRescheduleItem[]) => {
+      if (items.length === 0) return;
+      const fd = new FormData();
+      fd.append("_action", "markRescheduleSeen");
+      for (const item of items) {
+        fd.append("orderId", item.orderId);
+        fd.append("requestedAt", item.requestedAt);
+      }
+      rescheduleSeenFetcher.submit(fd, { method: "post" });
     },
     [rescheduleSeenFetcher],
+  );
+  const markRescheduleSeen = useCallback(
+    (item: RecentRescheduleItem) => submitReschedulesSeen([item]),
+    [submitReschedulesSeen],
   );
 
   const ordersDiffTitle = useMemo(() => {
@@ -1831,6 +1843,7 @@ function Extension() {
           }
           onOpen={openRecentReschedule}
           onSeen={markRescheduleSeen}
+          onSeenAll={submitReschedulesSeen}
         />
 
         {/* ── Search hit hidden by the dated tab / date-slot filter ───────── */}
@@ -2103,12 +2116,13 @@ function Extension() {
         rules={rescheduleRulesFetcher.data ?? null}
         rulesLoading={rescheduleRulesFetcher.state !== "idle"}
         serverCapacity={rescheduleServerCapacity}
-        onConfirm={(date, timeSlot, override) =>
+        onConfirm={(date, timeSlot, override, notifyCustomer) =>
           submitReschedule(
             panelRescheduleIds ?? selectedResources,
             date,
             timeSlot,
             override,
+            notifyCustomer,
           )
         }
       />

@@ -15,6 +15,8 @@ export interface RecentReschedulesBannerProps {
   errorMessage?: string | null;
   onOpen: (item: RecentRescheduleItem) => void;
   onSeen: (item: RecentRescheduleItem) => void;
+  /** Mark every visible row seen in one op (a bulk merchant reschedule can list dozens). */
+  onSeenAll: (items: RecentRescheduleItem[]) => void;
 }
 
 function sourceLabel(source: string): string {
@@ -30,13 +32,25 @@ export function RecentReschedulesBanner({
   errorMessage,
   onOpen,
   onSeen,
+  onSeenAll,
 }: RecentReschedulesBannerProps) {
   const visible = items.filter((item) => !pendingSeenIds.has(item.orderId));
   if (visible.length === 0) return null;
   const rows = visible.slice(0, MAX_ROWS);
 
   return (
-    <Banner tone="info" title={recentReschedulesTitle(visible)}>
+    <Banner
+      tone="info"
+      title={recentReschedulesTitle(visible)}
+      action={
+        visible.length > 1
+          ? {
+              content: `Mark all ${visible.length} as seen`,
+              onAction: () => onSeenAll(visible),
+            }
+          : undefined
+      }
+    >
       <BlockStack gap="200">
         {rows.map((item) => (
           <InlineStack
@@ -72,7 +86,7 @@ export function RecentReschedulesBanner({
         {visible.length > rows.length && (
           <Text as="p" tone="subdued" variant="bodySm">
             +{visible.length - rows.length} more — mark the rows above as seen
-            to reveal them.
+            to reveal them, or use the Mark all button.
           </Text>
         )}
         {errorMessage && (

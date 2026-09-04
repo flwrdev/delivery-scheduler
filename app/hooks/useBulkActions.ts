@@ -156,6 +156,7 @@ export function useBulkActions(
       date: string,
       timeSlot: string,
       capacityOverride: boolean,
+      notifyCustomer: boolean = true,
     ) => {
       if (orderIds.length === 0 || !date || !timeSlot) return;
       const fd = new FormData();
@@ -164,6 +165,7 @@ export function useBulkActions(
       fd.append("date", date);
       fd.append("timeSlot", timeSlot);
       fd.append("capacityOverride", capacityOverride ? "1" : "0");
+      fd.append("notifyCustomer", notifyCustomer ? "1" : "0");
       fetcher.submit(fd, { method: "post" });
     },
     [fetcher],

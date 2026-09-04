@@ -25,6 +25,7 @@
 //   duplicate history entry.
 
 import { rescheduleOrderDelivery } from "./reschedule-order-delivery.server";
+import { sendRescheduleNotice } from "./reschedule-notice.server";
 import { recordLalamoveOrderId } from "./lalamove-tracking.server";
 import { getScheduleRules } from "./schedule-rules.server";
 import { buildOrderEventTag } from "../lib/order-tags";
@@ -128,6 +129,10 @@ export type BulkOpParams =
       // history timestamp.
       requestedAt: string;
       shopTimezone: string;
+      // Email the customer after a successful write (2026-09-04). Optional so
+      // BulkActionJob rows queued before the field existed still parse; absent
+      // means no email.
+      notifyCustomer?: boolean;
     };
 
 // ─── Mutations / queries (moved verbatim from app.orders.tsx) ────────────────
@@ -240,7 +245,15 @@ const RESCHEDULE_ORDER_STATE_QUERY = `#graphql
     nodes(ids: $ids) {
       ... on Order {
         id
+        name
+        email
         tags
+        customer {
+          firstName
+          defaultEmailAddress {
+            emailAddress
+          }
+        }
         customAttributes {
           key
           value
@@ -265,6 +278,14 @@ const SHOPIFY_ORDER_GID_RE = /^gid:\/\/shopify\/Order\/\d+$/;
 
 export type RescheduleOrderState = {
   id: string;
+  // Recipient fields for the customer notice — server-read from the order
+  // (E-4: never a client-supplied address).
+  name?: string | null;
+  email?: string | null;
+  customer?: {
+    firstName?: string | null;
+    defaultEmailAddress?: { emailAddress?: string | null } | null;
+  } | null;
   tags?: string[] | null;
   customAttributes?: Array<{ key: string; value: string }> | null;
   currentDeliveryDate?: { value?: string | null } | null;
@@ -712,13 +733,42 @@ export async function executeBulkAction(
               r.attributeSync === "failed" ? "attributes" : null,
               r.tagSync === "failed" ? "tags" : null,
             ].filter(Boolean);
+            const notes: string[] = [];
+            if (failedMirrors.length > 0) {
+              notes.push(
+                `Rescheduled, but the ${failedMirrors.join(" + ")} sync failed.`,
+              );
+            }
+            // Customer notice runs only after the canonical write succeeded
+            // and is reported, never thrown: the reschedule already happened,
+            // so an SMTP hiccup must not read as a failed reschedule (and a
+            // worker retry must not re-run the write to re-send the mail).
+            if (params.notifyCustomer) {
+              const notice = await sendRescheduleNotice(shop, {
+                orderId: id,
+                orderName: state.name ?? null,
+                to:
+                  state.customer?.defaultEmailAddress?.emailAddress?.trim() ||
+                  state.email?.trim() ||
+                  null,
+                firstName: state.customer?.firstName ?? null,
+                fromDate: rescheduleCurrentDateOf(state),
+                fromTimeSlot: rescheduleCurrentSlotOf(state),
+                toDate: date,
+                toTimeSlot: timeSlot,
+              });
+              if (notice.status === "sent") {
+                notes.push(`Customer emailed at ${notice.to}.`);
+              } else if (notice.status === "skipped_no_email") {
+                notes.push("No customer email on file, so no email was sent.");
+              } else {
+                notes.push(`Customer email failed: ${notice.error}`);
+              }
+            }
             results.push({
               orderId: id,
               success: true,
-              message:
-                failedMirrors.length > 0
-                  ? `Rescheduled, but the ${failedMirrors.join(" + ")} sync failed.`
-                  : undefined,
+              message: notes.length > 0 ? notes.join(" ") : undefined,
             });
           } catch (e: unknown) {
             results.push({

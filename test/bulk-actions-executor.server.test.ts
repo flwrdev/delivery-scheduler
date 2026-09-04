@@ -10,14 +10,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // - reschedule: metafields EXACTLY at the target skip the write (no duplicate
 //   history), while a drifted spelling still gets the repair write.
 
-const { rescheduleMock, recordLalamoveMock, rulesMock } = vi.hoisted(() => ({
+const { rescheduleMock, recordLalamoveMock, rulesMock, noticeMock } = vi.hoisted(() => ({
   rescheduleMock: vi.fn(),
   recordLalamoveMock: vi.fn(),
   rulesMock: vi.fn(),
+  noticeMock: vi.fn(),
 }));
 
 vi.mock("../app/services/reschedule-order-delivery.server", () => ({
   rescheduleOrderDelivery: rescheduleMock,
+}));
+
+vi.mock("../app/services/reschedule-notice.server", () => ({
+  sendRescheduleNotice: noticeMock,
 }));
 
 vi.mock("../app/services/lalamove-tracking.server", () => ({
@@ -58,6 +63,7 @@ beforeEach(() => {
     tagSync: "ok",
     canonicalErrors: { graphql: [], user: [] },
   });
+  noticeMock.mockResolvedValue({ status: "sent", to: "buyer@example.com" });
 });
 
 describe("executeBulkAction — cancel retry idempotency", () => {
@@ -152,6 +158,12 @@ describe("executeBulkAction — reschedule skip guard", () => {
             nodes: [
               {
                 id: ORDER_1,
+                name: "#1001",
+                email: "buyer@example.com",
+                customer: {
+                  firstName: "Ana",
+                  defaultEmailAddress: { emailAddress: "buyer@example.com" },
+                },
                 tags: [],
                 customAttributes: [],
                 currentDeliveryDate: metaDate == null ? null : { value: metaDate },
@@ -208,6 +220,135 @@ describe("executeBulkAction — reschedule skip guard", () => {
         source: "merchant",
         shopTimezone: "Asia/Manila",
       }),
+    );
+  });
+});
+
+// 2026-09-04: customer notice after a merchant reschedule — sent only after a
+// successful write, reported in the item message, never a failure.
+describe("executeBulkAction — reschedule customer notice", () => {
+  function stateAdmin(metaDate: string | null, metaSlot: string | null) {
+    return makeAdmin((query) => {
+      if (query.includes("RescheduleOrderStates")) {
+        return {
+          data: {
+            nodes: [
+              {
+                id: ORDER_1,
+                name: "#1001",
+                email: "fallback@example.com",
+                customer: {
+                  firstName: "Ana",
+                  defaultEmailAddress: { emailAddress: "buyer@example.com" },
+                },
+                tags: [],
+                customAttributes: [],
+                currentDeliveryDate: metaDate == null ? null : { value: metaDate },
+                currentDeliveryTimeSlot: metaSlot == null ? null : { value: metaSlot },
+                rescheduleHistory: null,
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`unexpected query: ${query.slice(0, 60)}`);
+    });
+  }
+
+  const base = {
+    op: "reschedule" as const,
+    date: "2026-09-28",
+    timeSlot: "9AM-12PM",
+    requestedAt: "2026-09-04T00:00:00.000Z",
+    shopTimezone: "Asia/Manila",
+  };
+
+  it("emails the customer (from the order's own address) after a successful write", async () => {
+    const results = await executeBulkAction(
+      stateAdmin("2026-09-04", "9AM-12PM"),
+      SHOP,
+      { ...base, notifyCustomer: true },
+      [ORDER_1],
+    );
+    expect(noticeMock).toHaveBeenCalledTimes(1);
+    expect(noticeMock).toHaveBeenCalledWith(SHOP, {
+      orderId: ORDER_1,
+      orderName: "#1001",
+      to: "buyer@example.com",
+      firstName: "Ana",
+      fromDate: "2026-09-04",
+      fromTimeSlot: "9AM-12PM",
+      toDate: "2026-09-28",
+      toTimeSlot: "9AM-12PM",
+    });
+    expect(results).toEqual([
+      { orderId: ORDER_1, success: true, message: "Customer emailed at buyer@example.com." },
+    ]);
+  });
+
+  it("does not email when the checkbox is off, when the field is absent (older jobs), or when nothing changed", async () => {
+    await executeBulkAction(stateAdmin("2026-09-04", "9AM-12PM"), SHOP, { ...base, notifyCustomer: false }, [ORDER_1]);
+    await executeBulkAction(stateAdmin("2026-09-04", "9AM-12PM"), SHOP, base, [ORDER_1]);
+    await executeBulkAction(stateAdmin("2026-09-28", "9AM-12PM"), SHOP, { ...base, notifyCustomer: true }, [ORDER_1]);
+    expect(noticeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not email when the canonical write failed", async () => {
+    rescheduleMock.mockResolvedValueOnce({
+      ok: false,
+      historySync: "skipped",
+      attributeSync: "skipped",
+      tagSync: "skipped",
+      canonicalErrors: { graphql: [], user: ["boom"] },
+    });
+    const results = await executeBulkAction(
+      stateAdmin("2026-09-04", "9AM-12PM"),
+      SHOP,
+      { ...base, notifyCustomer: true },
+      [ORDER_1],
+    );
+    expect(results[0].success).toBe(false);
+    expect(noticeMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed or skipped notice inside a still-successful item", async () => {
+    noticeMock.mockResolvedValueOnce({ status: "failed", error: "Mailbox rejected the message." });
+    const failed = await executeBulkAction(
+      stateAdmin("2026-09-04", "9AM-12PM"),
+      SHOP,
+      { ...base, notifyCustomer: true },
+      [ORDER_1],
+    );
+    expect(failed).toEqual([
+      { orderId: ORDER_1, success: true, message: "Customer email failed: Mailbox rejected the message." },
+    ]);
+
+    noticeMock.mockResolvedValueOnce({ status: "skipped_no_email" });
+    const skipped = await executeBulkAction(
+      stateAdmin("2026-09-04", "9AM-12PM"),
+      SHOP,
+      { ...base, notifyCustomer: true },
+      [ORDER_1],
+    );
+    expect(skipped[0].message).toBe("No customer email on file, so no email was sent.");
+  });
+
+  it("keeps the mirror-sync note ahead of the notice note", async () => {
+    rescheduleMock.mockResolvedValueOnce({
+      ok: true,
+      historySync: "ok",
+      attributeSync: "ok",
+      tagSync: "failed",
+      canonicalErrors: { graphql: [], user: [] },
+    });
+    const results = await executeBulkAction(
+      stateAdmin("2026-09-04", "9AM-12PM"),
+      SHOP,
+      { ...base, notifyCustomer: true },
+      [ORDER_1],
+    );
+    expect(results[0].message).toBe(
+      "Rescheduled, but the tags sync failed. Customer emailed at buyer@example.com.",
     );
   });
 });
