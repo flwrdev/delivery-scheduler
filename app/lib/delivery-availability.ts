@@ -266,16 +266,35 @@ export function getAvailableTimeSlots(
 // rules (same cutoffHour semantics as storefront date selection). This keeps the
 // reschedule gate in parity with the merchant's configured lead time instead of
 // a hardcoded lead window.
+//
+// When the booking's current slot is known, "still sellable" is asked of THAT
+// slot too (slot start minus prepHours — the same instant the storefront stops
+// selling it). The day-level cutoff alone let order #4292 be moved at 8:47 AM
+// on delivery day, 13 minutes before its 9AM-12PM window, after the merchant
+// had prepared it (2026-09-04). An unparseable slot keeps the day-level answer
+// rather than locking on bad data.
 export function canRescheduleDelivery(
   deliveryDate: string,
   currentDate = new Date(),
   rules: DeliveryScheduleRules = DEFAULT_DELIVERY_SCHEDULE_RULES,
+  timeSlot?: string | null,
 ): boolean {
   if (!isIsoDateString(deliveryDate)) {
     return false;
   }
 
-  return deliveryDate >= getMinSelectableDate(rules, currentDate);
+  if (deliveryDate < getMinSelectableDate(rules, currentDate)) {
+    return false;
+  }
+
+  if (typeof timeSlot === "string" && timeSlot.trim()) {
+    const lastOrderAt = getSlotLastOrderInstant(rules, deliveryDate, timeSlot);
+    if (lastOrderAt && currentDate.getTime() >= lastOrderAt.getTime()) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export function buildDeliveryTags(

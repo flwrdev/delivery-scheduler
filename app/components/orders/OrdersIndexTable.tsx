@@ -480,7 +480,12 @@ export function OrdersIndexTable({
           ) : (
             <InlineStack gap="100" blockAlign="center" wrap={false}>
               {shownTags.map((tag) => (
-                <Badge key={tag}>{tagDisplayLabel(tag)}</Badge>
+                <Badge key={tag}>
+                  {tag.trim().toLowerCase() === "resched" &&
+                  order.rescheduleBadgeLabel
+                    ? order.rescheduleBadgeLabel
+                    : tagDisplayLabel(tag)}
+                </Badge>
               ))}
               {extraTags > 0 && (
                 // Stop the click so the row's open-panel handler doesn't also fire.
