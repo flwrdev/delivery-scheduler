@@ -598,7 +598,7 @@ flowchart LR
     subgraph ORDERS["/app/orders"]
         O_LOAD["loader → Admin GraphQL (direct)"]:::act
         O_LIST["Polaris table:<br/>select, name, items, customer, city,<br/>deliveryDate, timeWindow,<br/>payment, fulfillment, total, tags"]:::screen
-        O_FILT["toolbar: search + delivery-date<br/>+ time-slot + reset;<br/>URL tabs: all / today / tomorrow /<br/>thisWeek / unfulfilled / unpaid"]:::screen
+        O_FILT["toolbar: search + delivery-date<br/>+ time-slot + reset;<br/>URL tabs: all / today / tomorrow /<br/>thisWeek / yesterday / lastWeek /<br/>unfulfilled / unpaid"]:::screen
     end
 
     subgraph SCHED["/app/scheduler — merged page (Scheduler V2 Phase 3)"]

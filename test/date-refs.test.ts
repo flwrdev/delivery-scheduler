@@ -8,9 +8,14 @@ describe("computeDateRefs", () => {
   it("uses a Sunday-through-Saturday calendar week (the 2026-07-12 Sunday case)", () => {
     expect(computeDateRefs("2026-07-12")).toEqual({
       todayISO: "2026-07-12",
+      yesterdayISO: "2026-07-11",
       tomorrowISO: "2026-07-13",
       startWeekISO: "2026-07-12",
       endWeekISO: "2026-07-18",
+      // On a Sunday "last week" ends yesterday — the two week views must
+      // still tile the calendar with no gap.
+      lastWeekStartISO: "2026-07-05",
+      lastWeekEndISO: "2026-07-11",
     });
   });
 
@@ -18,9 +23,12 @@ describe("computeDateRefs", () => {
     // Thu Sep 4 2026 → Sun Aug 30 .. Sat Sep 5
     expect(computeDateRefs("2026-09-04")).toEqual({
       todayISO: "2026-09-04",
+      yesterdayISO: "2026-09-03",
       tomorrowISO: "2026-09-05",
       startWeekISO: "2026-08-30",
       endWeekISO: "2026-09-05",
+      lastWeekStartISO: "2026-08-23",
+      lastWeekEndISO: "2026-08-29",
     });
   });
 
@@ -28,12 +36,31 @@ describe("computeDateRefs", () => {
     expect(computeDateRefs("2026-12-31").tomorrowISO).toBe("2027-01-01");
   });
 
+  it("rolls yesterday back over month and year boundaries", () => {
+    expect(computeDateRefs("2026-09-01").yesterdayISO).toBe("2026-08-31");
+    expect(computeDateRefs("2027-01-01").yesterdayISO).toBe("2026-12-31");
+  });
+
+  it("puts last week's Saturday on the day before this week's Sunday, on every weekday", () => {
+    // Sun Aug 30 .. Sat Sep 5 2026 is one calendar week; every day of it
+    // must resolve to the same previous week (Aug 23 .. Aug 29).
+    for (const day of ["2026-08-30", "2026-08-31", "2026-09-02", "2026-09-05"]) {
+      const refs = computeDateRefs(day);
+      expect(refs.lastWeekStartISO).toBe("2026-08-23");
+      expect(refs.lastWeekEndISO).toBe("2026-08-29");
+      expect(refs.startWeekISO).toBe("2026-08-30");
+    }
+  });
+
   it("collapses an unusable today onto itself instead of producing NaN dates", () => {
     expect(computeDateRefs("nope")).toEqual({
       todayISO: "nope",
+      yesterdayISO: "nope",
       tomorrowISO: "nope",
       startWeekISO: "nope",
       endWeekISO: "nope",
+      lastWeekStartISO: "nope",
+      lastWeekEndISO: "nope",
     });
   });
 });

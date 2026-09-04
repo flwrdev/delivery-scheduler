@@ -93,8 +93,11 @@ Loader sequence (all in `app.orders.tsx`):
      ignores metafield search terms unless the definition is indexed as
      filterable (verified live 2026-07-11).
    - **Delivery-date TAG terms ARE sent (2026-09-04):** the dated views add
-     `tag:<YYYY-MM-DD>` — `today`/`tomorrow` one day, `thisWeek` the seven
-     days ORed, the `deliveryDate` filter its own day — built by
+     `tag:<YYYY-MM-DD>` — `today`/`yesterday`/`tomorrow` one day,
+     `thisWeek`/`lastWeek` their seven days ORed (Sunday–Saturday; last week
+     is the same shape shifted back seven days, so the two week views tile
+     the calendar with no gap or overlap — added 2026-09-04 evening), the
+     `deliveryDate` filter its own day — built by
      `buildDeliveryDateTagQuery` (`lib/order-tags.ts`) from
      `computeDateRefs(todayISO)` (`lib/date-refs.ts`, the same helper the
      client uses). Tag search is exact-match and every synced order carries
@@ -106,8 +109,8 @@ Loader sequence (all in `app.orders.tsx`):
      or whose `orders/create` sync hasn't landed yet is absent until the tag
      exists — the sync-issue banner covers the failure case.
 4. `pageSize`: **250** when a client-side date/slot filter needs rows to
-   filter from (`today`/`tomorrow`/`thisWeek` tab, `deliveryDate` or
-   `timeWindow` filter), otherwise **25**. On date-scoped pages 250 is now a
+   filter from (`today`/`yesterday`/`tomorrow`/`thisWeek`/`lastWeek` tab,
+   `deliveryDate` or `timeWindow` filter), otherwise **25**. On date-scoped pages 250 is now a
    generous ceiling for one day, not the whole workable window. Echoed to
    the client — see tab counts below.
 5. Shop timezone via `getScheduleRules(session.shop)` — guarded; a Postgres
@@ -157,8 +160,8 @@ default behavior.
 ## 3. Client composition (`Extension()`)
 
 - **`dateRefs`** — `computeDateRefs(loaderData.todayISO)` (`lib/date-refs.ts`,
-  shared with the loader) deriving tomorrow/this-week boundaries with UTC
-  arithmetic. Every date tab, overdue chip, and "due today" figure runs off
+  shared with the loader) deriving yesterday/tomorrow/this-week/last-week
+  boundaries with UTC arithmetic. Every date tab, overdue chip, and "due today" figure runs off
   it; never off `new Date()`.
 - **`displayedOrders`** — the loader page, client-filtered for the
   date/slot views (step 3 above — on dated views this is now a safety net
@@ -168,8 +171,12 @@ default behavior.
   Unpaid (count + pending total), Unfulfilled (+ due today), products-to-prepare
   (opens `KpiProductsModal`), Delivery fees. All `useMemo` computations off the
   loaded page — deliberately not store-wide numbers.
-- **Tabs** — `tabDefs`: All / Today / Tomorrow / This week / Unfulfilled /
-  Unpaid / Archived. **Count honesty:** counts render only when
+- **Tabs** — `tabDefs`: All / Today / Tomorrow / This week / Yesterday /
+  Last week / Unfulfilled / Unpaid / Archived. The two past views
+  (2026-09-04) sit after the forward-looking ones so the first four tabs
+  keep their positions — Today is the merchant's daily landing tab. Every
+  dated tab shares the same shape: a server-side date-tag term (step 3) plus
+  the client-side metafield filter as a safety net. **Count honesty:** counts render only when
   `pageSize >= 250` (a 25-row page can't produce representative counts), get a
   `+` suffix when `pageInfo` says more pages exist, and Archived never shows a
   count (it's excluded from every other view's query, so nothing client-side
