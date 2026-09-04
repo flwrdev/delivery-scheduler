@@ -458,7 +458,7 @@ Both are called out in `extensions/support-chat/README.md` and repeated in [veri
 
 ## ADR-23 — Customer self-service reschedule closes at the slot's own last-order instant; merchant sees customer reschedules through a Seen-marker banner, not notifications
 
-**Date:** 2026-09-04 · **Status:** Implemented, NOT yet deployed. 1087/1087 tests (+26), typecheck/lint clean. Backend-only change (no extension, toml, or migration).
+**Date:** 2026-09-04 · **Status:** Implemented and DEPLOYED the same day — commit `191bebc`, Cloud Run revision `delivery-scheduler-00269-9f8` (100% traffic), live-verified on the prod Orders Ops page (banner, hidden-search hint, badge time); the slot gate is unit-tested, not yet live-exercised. 1087/1087 tests (+26), typecheck/lint clean. Backend-only change (no extension, toml, or migration).
 
 **Context:** Order #4292 (Sep 4, 9AM-12PM) was rescheduled by the customer to Sep 28 at 8:47 AM on delivery day — 13 minutes before its window — after the merchant had prepared it. The write itself was correct on every surface. Three things were wrong around it: the customer gate (`canRescheduleDelivery`, ADR-10 §5) asked only whether the delivery *day* was still bookable (`cutoffHour` 17), so a morning slot stayed movable long after the storefront had stopped selling it; nothing told the merchant — the order simply vanished from the Today list; and a search for "4292" on the Today tab returned nothing because the dated tabs apply their client-side date filter on top of the search (the order was already Sep 28). The merchant's framing: visibility is the main problem, the gate is the one guard needed so the near-miss cannot repeat.
 
