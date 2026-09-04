@@ -101,7 +101,11 @@ import {
   getScheduleRules,
   getScheduleRulesWithBookedCounts,
 } from "../services/schedule-rules.server";
-import { MAX_ORDER_TAG_LENGTH } from "../lib/order-tags";
+import {
+  MAX_ORDER_TAG_LENGTH,
+  buildDeliveryDateTagQuery,
+} from "../lib/order-tags";
+import { computeDateRefs, enumerateISODates } from "../lib/date-refs";
 import { authenticate } from "../shopify.server";
 import panelStylesHref from "../styles/order-details-panel.css?url";
 
@@ -425,6 +429,8 @@ type LoaderData = {
   syncIssues: DeliverySyncIssueSummary;
   /** Customer reschedules from the last 48 h not yet marked Seen — the "Rescheduled today" banner; degrades to empty. */
   recentReschedules: RecentRescheduleItem[];
+  /** True when the page was server-scoped by a delivery-date tag (dated tab or date filter) — other tabs' counts are then unknowable. */
+  dateScoped: boolean;
 };
 
 export const loader = async ({
@@ -451,17 +457,33 @@ export const loader = async ({
   const after = url.searchParams.get("after") || null;
   const before = url.searchParams.get("before") || null;
 
+  // "Today" is the SHOP's calendar day (event tags, cutoffs, and the booked
+  // counts all already run on rules.timezone — the client must agree). The
+  // timezone read is non-critical: a Postgres hiccup falls back to the shop
+  // default instead of failing the page. Resolved BEFORE the query is built
+  // because the dated views now send the day's tag as a server term.
+  let shopTimezone = DEFAULT_DELIVERY_SCHEDULE_RULES.timezone;
+  try {
+    ({ timezone: shopTimezone } = await getScheduleRules(session.shop));
+  } catch (error) {
+    console.warn(
+      `[orders loader] timezone read failed, using ${shopTimezone}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const todayISO = getShopLocalDate(shopTimezone) || toLocalISODate(new Date());
+
   // Build composite Shopify query string from the SERVER-supported filters.
   //
-  // ⚠️ Delivery date / time-slot terms (`metafields.custom.date` /
-  // `metafields.custom.time_slot`) are deliberately NOT sent: Shopify silently
-  // ignores metafield search terms on the orders query unless the metafield
-  // definition is indexed as filterable (verified live 2026-07-11 — an applied
-  // time-slot filter returned every order unfiltered). All delivery-date /
-  // time-slot filtering (Today/Tomorrow tabs, the two toolbar filters) is done
-  // CLIENT-side over an enlarged page, same as the pre-existing thisWeek
-  // pattern. Enabling the filterable capability on those definitions could
-  // move this server-side later — documented in the verification log.
+  // ⚠️ Metafield terms (`metafields.custom.date` / `metafields.custom.time_slot`)
+  // are deliberately NOT sent: Shopify silently ignores metafield search terms
+  // on the orders query unless the definition is indexed as filterable
+  // (verified live 2026-07-11 — an applied time-slot filter returned every
+  // order unfiltered). The delivery-date TAG, however, IS exact-match
+  // searchable, and since 2026-09-04 the dated views send it (below); the
+  // time-slot filter stays CLIENT-side (slot tags carry legacy spelling
+  // variants) over the enlarged page, as before.
   const queryParts: string[] = [];
 
   if (searchParam) {
@@ -493,9 +515,36 @@ export const loader = async ({
     queryParts.push("-status:closed");
   }
 
+  // Dated views (2026-09-04): every synced order carries its delivery date
+  // as a bare `YYYY-MM-DD` tag (written by the orders/create sync, re-synced
+  // by both reschedule paths), and tag search is exact-match. Sending it
+  // means a dated tab lists EVERY order for that day; the old 250-newest
+  // window silently dropped old pre-orders and far-forward reschedules
+  // (#4030, placed Aug 7 for Sep 5, was invisible on Tomorrow). The client's
+  // metafield filter below still runs as the safety net.
+  const dateRefs = computeDateRefs(todayISO);
+  const tabDates =
+    tabParam === "today"
+      ? [dateRefs.todayISO]
+      : tabParam === "tomorrow"
+        ? [dateRefs.tomorrowISO]
+        : tabParam === "thisWeek"
+          ? enumerateISODates(dateRefs.startWeekISO, dateRefs.endWeekISO)
+          : [];
+  const tabDateTerm = buildDeliveryDateTagQuery(tabDates);
+  if (tabDateTerm) queryParts.push(tabDateTerm);
+  const filterDateTerm = deliveryDateParam
+    ? buildDeliveryDateTagQuery([deliveryDateParam])
+    : "";
+  if (filterDateTerm) queryParts.push(filterDateTerm);
+  // Echoed to the client: a date-scoped page can only count its own view.
+  const dateScoped = Boolean(tabDateTerm || filterDateTerm);
+
   const compositeQuery = queryParts.join(" ") || null;
 
-  // Client-side date/slot filtering needs more rows to filter from.
+  // Client-side slot filtering (and the metafield safety net) needs rows to
+  // filter from. Dated views are server-scoped to the day's orders now, so
+  // 250 is a generous ceiling rather than the whole workable window.
   const needsClientFilter =
     tabParam === "today" ||
     tabParam === "tomorrow" ||
@@ -512,22 +561,6 @@ export const loader = async ({
     query: compositeQuery,
     reverse: sortParam !== "orderDate asc",
   };
-
-  // "Today" is the SHOP's calendar day (event tags, cutoffs, and the booked
-  // counts all already run on rules.timezone — the client must agree). The
-  // timezone read is non-critical: a Postgres hiccup falls back to the shop
-  // default instead of failing the page.
-  let shopTimezone = DEFAULT_DELIVERY_SCHEDULE_RULES.timezone;
-  try {
-    ({ timezone: shopTimezone } = await getScheduleRules(session.shop));
-  } catch (error) {
-    console.warn(
-      `[orders loader] timezone read failed, using ${shopTimezone}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-  const todayISO = getShopLocalDate(shopTimezone) || toLocalISODate(new Date());
 
   // The banner's query rides alongside the page query; it fails open on its
   // own, so it can never take the table down with it.
@@ -623,6 +656,7 @@ export const loader = async ({
       pageSize,
       syncIssues,
       recentReschedules,
+      dateScoped,
       // Client-exposed by design (Maps JS SDK requires it in the browser) —
       // the key itself must be locked down in the Google Cloud console:
       // HTTP-referrer restriction + Places API only.
@@ -1011,32 +1045,12 @@ function Extension() {
   // shop's midnight; the old once-per-mount version kept filtering "Today"
   // on yesterday during a past-midnight prep session. All arithmetic is UTC
   // over the ISO string, so no timezone conversion can shift the day.
-  const dateRefs = useMemo(() => {
-    const todayISO = loaderData.todayISO;
-    const [y, m, d] = todayISO.split("-").map(Number);
-    const toISO = (dt: Date) =>
-      `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(
-        dt.getUTCDate(),
-      ).padStart(2, "0")}`;
-    const base = new Date(Date.UTC(y, m - 1, d));
-    const tom = new Date(base);
-    tom.setUTCDate(base.getUTCDate() + 1);
-    // "This week" = the current CALENDAR week, Sunday through Saturday. The
-    // previous Monday-start window made the tab empty on Sundays for every
-    // upcoming delivery (2026-07-12 smoke test: today Sun Jul 12, delivery
-    // Sat Jul 18 → excluded from the Mon Jul 6 – Sun Jul 12 window).
-    const dow = base.getUTCDay();
-    const weekStart = new Date(base);
-    weekStart.setUTCDate(base.getUTCDate() - dow);
-    const weekEnd = new Date(weekStart);
-    weekEnd.setUTCDate(weekStart.getUTCDate() + 6);
-    return {
-      todayISO,
-      tomorrowISO: toISO(tom),
-      startWeekISO: toISO(weekStart),
-      endWeekISO: toISO(weekEnd),
-    };
-  }, [loaderData.todayISO]);
+  // Same helper the loader uses for its server-side date-tag terms
+  // (lib/date-refs.ts) — one definition of tomorrow / this week on both ends.
+  const dateRefs = useMemo(
+    () => computeDateRefs(loaderData.todayISO),
+    [loaderData.todayISO],
+  );
 
   // ── Client-side view shaping — every delivery-date/time-slot constraint is
   //    applied HERE, not in the loader query: Shopify ignores metafield search
@@ -1715,18 +1729,26 @@ function Extension() {
   // ("Today (2)" while 15 exist) — counts render only when the enlarged
   // 250-row page was loaded. Even then a further server page may exist
   // (cursor pagination), so counts show as lower bounds ("12+").
+  //
+  // Date-scoped pages (2026-09-04): the server already narrowed the page to
+  // ONE day (or one week), so the page knows its own count exactly but
+  // nothing about the other tabs — only the active tab shows a count there.
   const tabCountsVisible = loaderData.pageSize >= 250;
   const tabCountsPartial = Boolean(
     pageInfo?.hasNextPage || pageInfo?.hasPreviousPage,
   );
-  const tabCount = (n: number): number | null => (tabCountsVisible ? n : null);
+  const tabCount = (id: string, n: number): number | null => {
+    if (!tabCountsVisible) return null;
+    if (loaderData.dateScoped && id !== tabParam) return null;
+    return n;
+  };
   const tabDefs: OrdersTabDef[] = [
-    { id: "all", label: "All", count: tabCount(orders.length), approximate: tabCountsPartial },
-    { id: "today", label: "Today", count: tabCount(tabCounts.today), approximate: tabCountsPartial },
-    { id: "tomorrow", label: "Tomorrow", count: tabCount(tabCounts.tomorrow), approximate: tabCountsPartial },
-    { id: "thisWeek", label: "This week", count: tabCount(tabCounts.thisWeek), approximate: tabCountsPartial },
-    { id: "unfulfilled", label: "Unfulfilled", count: tabCount(tabCounts.unfulfilled), approximate: tabCountsPartial },
-    { id: "unpaid", label: "Unpaid", count: tabCount(tabCounts.unpaid), approximate: tabCountsPartial },
+    { id: "all", label: "All", count: tabCount("all", orders.length), approximate: tabCountsPartial },
+    { id: "today", label: "Today", count: tabCount("today", tabCounts.today), approximate: tabCountsPartial },
+    { id: "tomorrow", label: "Tomorrow", count: tabCount("tomorrow", tabCounts.tomorrow), approximate: tabCountsPartial },
+    { id: "thisWeek", label: "This week", count: tabCount("thisWeek", tabCounts.thisWeek), approximate: tabCountsPartial },
+    { id: "unfulfilled", label: "Unfulfilled", count: tabCount("unfulfilled", tabCounts.unfulfilled), approximate: tabCountsPartial },
+    { id: "unpaid", label: "Unpaid", count: tabCount("unpaid", tabCounts.unpaid), approximate: tabCountsPartial },
     // Archived orders are excluded from every other view's query, so no
     // client-side count is knowable here — the label renders without one.
     { id: "archived", label: "Archived", count: null },

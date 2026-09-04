@@ -146,3 +146,21 @@ export function orderEventTagLabel(tag: string | null | undefined): string | nul
   });
   return `${EVENT_LABELS[parsed.event]} · ${label}`;
 }
+
+const ISO_DATE_TAG_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Orders-search term selecting orders whose bare delivery-date tag
+ * (`YYYY-MM-DD`) is one of `dates`. Tag search is exact-match, which is why
+ * this works where metafield terms are ignored (the dated Orders Ops views
+ * used to rely on a 250-newest window and lost old pre-orders, 2026-09-04).
+ * Returns "" when nothing is usable so the caller sends no date term; an OR
+ * of several days is parenthesised so it ANDs cleanly with status terms.
+ */
+export function buildDeliveryDateTagQuery(dates: ReadonlyArray<string>): string {
+  const terms = Array.from(
+    new Set(dates.filter((d) => ISO_DATE_TAG_RE.test(d))),
+  ).map((d) => `tag:${d}`);
+  if (terms.length === 0) return "";
+  return terms.length === 1 ? terms[0] : `(${terms.join(" OR ")})`;
+}

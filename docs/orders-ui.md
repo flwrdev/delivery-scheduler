@@ -89,19 +89,32 @@ Loader sequence (all in `app.orders.tsx`):
      `unpaid` → pending/authorized/partially_paid + `status:open`;
      `archived` → `status:closed`; every other view → `-status:closed`
      (NOT `status:open`, so cancelled orders stay visible with a badge).
-   - ⚠️ Delivery date/slot terms are deliberately **never** sent: Shopify
-     silently ignores metafield search terms unless the definition is indexed
-     as filterable (verified live 2026-07-11). All date/slot filtering
-     (Today/Tomorrow/This-week tabs, the two toolbar filters) is **client-side**
-     over an enlarged page.
+   - ⚠️ Metafield terms are deliberately **never** sent: Shopify silently
+     ignores metafield search terms unless the definition is indexed as
+     filterable (verified live 2026-07-11).
+   - **Delivery-date TAG terms ARE sent (2026-09-04):** the dated views add
+     `tag:<YYYY-MM-DD>` — `today`/`tomorrow` one day, `thisWeek` the seven
+     days ORed, the `deliveryDate` filter its own day — built by
+     `buildDeliveryDateTagQuery` (`lib/order-tags.ts`) from
+     `computeDateRefs(todayISO)` (`lib/date-refs.ts`, the same helper the
+     client uses). Tag search is exact-match and every synced order carries
+     the bare date tag, so a dated tab now lists **every** order for that
+     day; the previous 250-newest window silently dropped old pre-orders and
+     far-forward reschedules (#4030, placed Aug 7 for Sep 5, was invisible on
+     Tomorrow). Time-slot filtering stays client-side (slot tags have legacy
+     spelling variants). Caveat: an order whose date tag was manually removed
+     or whose `orders/create` sync hasn't landed yet is absent until the tag
+     exists — the sync-issue banner covers the failure case.
 4. `pageSize`: **250** when a client-side date/slot filter needs rows to
    filter from (`today`/`tomorrow`/`thisWeek` tab, `deliveryDate` or
-   `timeWindow` filter), otherwise **25**. Echoed to the client — see tab
-   counts below.
+   `timeWindow` filter), otherwise **25**. On date-scoped pages 250 is now a
+   generous ceiling for one day, not the whole workable window. Echoed to
+   the client — see tab counts below.
 5. Shop timezone via `getScheduleRules(session.shop)` — guarded; a Postgres
    hiccup falls back to the default timezone instead of failing the page.
    `todayISO = getShopLocalDate(shopTimezone)` — the **shop-local** calendar
-   day. The client never derives "today" from the browser clock.
+   day. The client never derives "today" from the browser clock. Resolved
+   **before** step 3 since 2026-09-04 (the date terms need it).
 6. `admin.graphql(GET_ORDERS_QUERY)` — orders with delivery metafields
    (`custom.date`, `custom.time_slot`, `delivery.*` mirrors,
    `delivery.reschedule_history`), customAttributes, line items, addresses,
@@ -140,11 +153,13 @@ default behavior.
 
 ## 3. Client composition (`Extension()`)
 
-- **`dateRefs`** — a `useMemo` keyed on `loaderData.todayISO` deriving
-  tomorrow/this-week boundaries with UTC arithmetic. Every date tab, overdue
-  chip, and "due today" figure runs off it; never off `new Date()`.
+- **`dateRefs`** — `computeDateRefs(loaderData.todayISO)` (`lib/date-refs.ts`,
+  shared with the loader) deriving tomorrow/this-week boundaries with UTC
+  arithmetic. Every date tab, overdue chip, and "due today" figure runs off
+  it; never off `new Date()`.
 - **`displayedOrders`** — the loader page, client-filtered for the
-  date/slot views (step 3 above). Table rows, KPIs, and tab counts all
+  date/slot views (step 3 above — on dated views this is now a safety net
+  over an already date-scoped page). Table rows, KPIs, and tab counts all
   consume this or the raw `orders` array.
 - **KPI band (REC-8: page-scope only)** — Orders count, Revenue (+ avg/order),
   Unpaid (count + pending total), Unfulfilled (+ due today), products-to-prepare
@@ -155,7 +170,9 @@ default behavior.
   `pageSize >= 250` (a 25-row page can't produce representative counts), get a
   `+` suffix when `pageInfo` says more pages exist, and Archived never shows a
   count (it's excluded from every other view's query, so nothing client-side
-  can know it).
+  can know it). On a **date-scoped** page (`loaderData.dateScoped`, 2026-09-04)
+  only the active tab shows a count — the server narrowed the page to that
+  day, so the other tabs' counts are unknowable from it.
 - **Details panel** — opened by row click writing `?order=<id>`; the order
   object is `orders.find(o => o.id === selectedOrderId)` — no separate fetch,
   so the panel always reflects the loader's data. Lazy-loaded
