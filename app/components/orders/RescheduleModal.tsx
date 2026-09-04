@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Banner,
   BlockStack,
+  Checkbox,
   Modal,
   Select,
   Text,
@@ -40,7 +41,12 @@ export interface RescheduleModalProps {
   // Server-side capacity backstop (action responded capacity_override_required
   // because the client's booked counts were stale).
   serverCapacity: RescheduleCapacityInfo | null;
-  onConfirm: (date: string, timeSlot: string, override: boolean) => void;
+  onConfirm: (
+    date: string,
+    timeSlot: string,
+    override: boolean,
+    notifyCustomer: boolean,
+  ) => void;
 }
 
 export function RescheduleModal({
@@ -55,6 +61,9 @@ export function RescheduleModal({
 }: RescheduleModalProps) {
   const [date, setDate] = useState("");
   const [slot, setSlot] = useState("");
+  // Default ON: a merchant-side move is the one schedule change the customer
+  // did not make themselves, so silence is the surprising option.
+  const [notifyCustomer, setNotifyCustomer] = useState(true);
   // The server capacity warning belongs to one specific submit — remember
   // what was submitted so editing the date/slot afterwards drops the warning.
   const [lastSubmitted, setLastSubmitted] = useState<{
@@ -166,7 +175,7 @@ export function RescheduleModal({
 
   const handleConfirm = () => {
     setLastSubmitted({ date, slot });
-    onConfirm(date, slot, Boolean(capacityWarning));
+    onConfirm(date, slot, Boolean(capacityWarning), notifyCustomer);
   };
 
   return (
@@ -252,6 +261,13 @@ export function RescheduleModal({
               </Text>
             </Banner>
           )}
+          <Checkbox
+            label="Email the customer about the new schedule"
+            checked={notifyCustomer}
+            onChange={setNotifyCustomer}
+            disabled={isSubmitting}
+            helpText="Plain-text email from your business mailbox, sent right after the update. Skipped for orders without a customer email."
+          />
         </BlockStack>
       </Modal.Section>
     </Modal>

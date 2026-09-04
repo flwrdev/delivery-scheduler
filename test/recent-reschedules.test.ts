@@ -102,19 +102,23 @@ describe("selectRecentReschedules", () => {
     });
   });
 
-  it("skips merchant reschedules by default and includes them when asked", () => {
+  it("includes merchant reschedules by default and can be narrowed to customers", () => {
     const merchant = order([event({ source: "merchant" })]);
-    expect(
-      selectRecentReschedules([merchant], { now: NOW, todayISO: TODAY, timezone: MANILA }),
-    ).toHaveLength(0);
+    const items = selectRecentReschedules([merchant], {
+      now: NOW,
+      todayISO: TODAY,
+      timezone: MANILA,
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].source).toBe("merchant");
     expect(
       selectRecentReschedules([merchant], {
         now: NOW,
         todayISO: TODAY,
         timezone: MANILA,
-        sources: ["customer", "merchant"],
+        sources: ["customer"],
       }),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
   });
 
   it("drops events older than the 48-hour window and labels yesterday's", () => {

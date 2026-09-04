@@ -41,9 +41,13 @@ export function buildRecentRescheduleTagQuery(
   return terms.join(" OR ");
 }
 
-// Merchant reschedules happen on this very page with their own toast, so the
-// banner defaults to customer-originated events only. One-line change to widen.
-export const RECENT_RESCHEDULE_SOURCES: ReadonlyArray<string> = ["customer"];
+// Both sources by merchant request (2026-09-04): the banner doubles as the
+// day's reschedule log, so a VA's merchant-side move is visible to the owner
+// too. Narrow with the `sources` option if that ever gets noisy.
+export const RECENT_RESCHEDULE_SOURCES: ReadonlyArray<string> = [
+  "customer",
+  "merchant",
+];
 
 export interface RecentRescheduleItem {
   orderId: string;
