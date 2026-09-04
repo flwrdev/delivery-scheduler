@@ -131,7 +131,9 @@ export function DeliverySection({
       label: "Delivery status",
       content: (
         <Badge tone={polarisBadgeTone(deliveryStatus.tone)} size="small">
-          {deliveryStatus.label}
+          {deliveryStatus.label === "Rescheduled" && order.rescheduleBadgeLabel
+            ? order.rescheduleBadgeLabel
+            : deliveryStatus.label}
         </Badge>
       ),
     },

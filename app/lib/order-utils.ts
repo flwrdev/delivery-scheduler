@@ -86,6 +86,12 @@ export interface Order {
   customTimeSlot: Metafield | null;
   rescheduleHistory: Metafield | null;
   rescheduleStatus?: Metafield | null;
+  /** Numeric Shopify id — only the recent-reschedules banner query fetches it. */
+  legacyResourceId?: string | null;
+  /** `$app.reschedule_seen_at` — the requestedAt of the last reschedule the merchant acknowledged. */
+  rescheduleSeenAt?: Metafield | null;
+  /** Loader-computed, shop-local: "Rescheduled · 8:47 AM" (today) or "Rescheduled · Sep 3, 5:09 PM". */
+  rescheduleBadgeLabel?: string | null;
   shippingAddress: ShippingAddress | null;
   billingAddress: BillingAddress | null;
   note: string | null;

@@ -26,6 +26,7 @@ import {
   getMeaningfulTags,
   getDeliveryDateValue,
   getDeliveryTimeValue,
+  formatDeliveryDate,
 } from "../lib/order-utils";
 import {
   useLoaderData,
@@ -55,14 +56,23 @@ import { MarkFulfilledModal } from "../components/orders/MarkFulfilledModal";
 import { RescheduleModal } from "../components/orders/RescheduleModal";
 import { SendEmailModal } from "../components/orders/SendEmailModal";
 import { EditDetailsModal } from "../components/orders/EditDetailsModal";
+import { RecentReschedulesBanner } from "../components/orders/RecentReschedulesBanner";
 import {
   DEFAULT_DELIVERY_SCHEDULE_RULES,
   getShopLocalDate,
   validateMerchantRescheduleSelection,
 } from "../lib/delivery-availability";
 import { slotValuesMatch } from "../lib/slot-value";
+import {
+  type RecentRescheduleItem,
+  buildRecentRescheduleTagQuery,
+  rescheduleBadgeLabel,
+  selectRecentReschedules,
+} from "../lib/recent-reschedules";
 import { handleSendEmailOp } from "../services/send-customer-email.server";
 import { handleEditDetailsOp } from "../services/update-order-contact.server";
+import { handleMarkRescheduleSeenOp } from "../services/reschedule-seen.server";
+import type { AdminGraphQLClient } from "../services/order-delivery-metafields.server";
 import {
   getDeliverySyncIssues,
   retryDeliverySyncIssues,
@@ -277,6 +287,92 @@ const GET_ORDERS_QUERY = `
   }
 `;
 
+// ─── Recent reschedules (the "Rescheduled today" banner, 2026-09-04) ──────────
+//
+// A second, small query per load: orders tagged `resched-<day>` for the last
+// three shop-local days (query string built in lib/recent-reschedules). It is
+// separate from GET_ORDERS_QUERY on purpose — the banner must show on EVERY
+// tab, and the rescheduled order has usually just left the tab being viewed.
+const RECENT_RESCHEDULE_PAGE = 50;
+
+const GET_RECENT_RESCHEDULES_QUERY = `
+  query GetRecentReschedules($first: Int!, $query: String!) {
+    orders(first: $first, query: $query, sortKey: UPDATED_AT, reverse: true) {
+      edges {
+        node {
+          id
+          legacyResourceId
+          name
+          tags
+          customer {
+            id
+            firstName
+            lastName
+            numberOfOrders
+            defaultEmailAddress {
+              emailAddress
+            }
+            defaultPhoneNumber {
+              phoneNumber
+            }
+          }
+          customAttributes {
+            key
+            value
+          }
+          customDate: metafield(namespace: "custom", key: "date") {
+            value
+          }
+          customTimeSlot: metafield(namespace: "custom", key: "time_slot") {
+            value
+          }
+          rescheduleHistory: metafield(namespace: "delivery", key: "reschedule_history") {
+            value
+            jsonValue
+          }
+          rescheduleSeenAt: metafield(namespace: "$app", key: "reschedule_seen_at") {
+            value
+          }
+        }
+      }
+    }
+  }
+`;
+
+// Banner garnish, never page-critical: every failure degrades to "no banner".
+async function fetchRecentRescheduleOrders(
+  admin: AdminGraphQLClient,
+  todayISO: string,
+): Promise<Order[]> {
+  const query = buildRecentRescheduleTagQuery(todayISO);
+  if (!query) return [];
+  try {
+    const response = await admin.graphql(GET_RECENT_RESCHEDULES_QUERY, {
+      variables: { first: RECENT_RESCHEDULE_PAGE, query },
+    });
+    const body = (await response.json()) as {
+      data?: { orders?: { edges?: Array<{ node: Order }> } };
+      errors?: Array<{ message: string }>;
+    };
+    if (body.errors?.length) {
+      console.warn(
+        `[orders loader] recent reschedules skipped: ${body.errors
+          .map((e) => e.message)
+          .join("; ")}`,
+      );
+      return [];
+    }
+    return body.data?.orders?.edges?.map((edge) => edge.node) ?? [];
+  } catch (error) {
+    console.warn(
+      `[orders loader] recent reschedules skipped: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return [];
+  }
+}
+
 // ─── Runtime safety helpers ───────────────────────────────────────────────────
 
 function isIsoDateParam(value: string | null): value is string {
@@ -327,6 +423,8 @@ type LoaderData = {
   mapsApiKey: string;
   /** Delivery-sync tasks stuck/failed for this shop (ADR-22) — drives the ops banner; degrades to zero on DB trouble. */
   syncIssues: DeliverySyncIssueSummary;
+  /** Customer reschedules from the last 48 h not yet marked Seen — the "Rescheduled today" banner; degrades to empty. */
+  recentReschedules: RecentRescheduleItem[];
 };
 
 export const loader = async ({
@@ -431,7 +529,12 @@ export const loader = async ({
   }
   const todayISO = getShopLocalDate(shopTimezone) || toLocalISODate(new Date());
 
-  const response = await admin.graphql(GET_ORDERS_QUERY, { variables });
+  // The banner's query rides alongside the page query; it fails open on its
+  // own, so it can never take the table down with it.
+  const [response, recentRescheduleOrders] = await Promise.all([
+    admin.graphql(GET_ORDERS_QUERY, { variables }),
+    fetchRecentRescheduleOrders(admin, todayISO),
+  ]);
   const body = (await response.json()) as {
     data?: {
       orders?: {
@@ -481,6 +584,18 @@ export const loader = async ({
     order.emailLog = emailLogByOrderId.get(order.id) ?? [];
   }
 
+  // Shop-local reschedule labels are stamped here, not in the browser: the
+  // client has todayISO but not the shop timezone, and a VA on a non-Manila
+  // machine must read the same "8:47 AM" as the merchant.
+  const shopLocal = { todayISO, timezone: shopTimezone };
+  for (const order of orders) {
+    order.rescheduleBadgeLabel = rescheduleBadgeLabel(order, shopLocal);
+  }
+  const recentReschedules = selectRecentReschedules(
+    recentRescheduleOrders,
+    shopLocal,
+  );
+
   // Sync-issue banner count (ADR-22): same guarded posture as the enrichment
   // above — banner garnish, never page-critical.
   let syncIssues: DeliverySyncIssueSummary = { count: 0, orderNames: [] };
@@ -507,6 +622,7 @@ export const loader = async ({
       todayISO,
       pageSize,
       syncIssues,
+      recentReschedules,
       // Client-exposed by design (Maps JS SDK requires it in the browser) —
       // the key itself must be locked down in the Google Cloud console:
       // HTTP-referrer restriction + Places API only.
@@ -558,6 +674,14 @@ export const action = async ({
   // Postgres (EmailSendLog) purely for the panel timeline, not a delivery write.
   if (opRaw === "sendEmail") {
     return handleSendEmailOp(admin, fd, session.shop);
+  }
+
+  // Seen on the "Rescheduled today" banner: records the acknowledged event's
+  // requestedAt on `$app.reschedule_seen_at`. An order write, NOT a delivery
+  // write (none of the api.md §2 fields) — single orderId, so it dispatches
+  // before the bulk machinery like the ops around it.
+  if (opRaw === "markRescheduleSeen") {
+    return handleMarkRescheduleSeenOp(admin, fd);
   }
 
   // Edit details: single-order shipping-address rewrite from the panel's
@@ -1077,6 +1201,33 @@ function Extension() {
   // retry runs, and its completion revalidates the loader (banner updates).
   const syncRetryFetcher = useFetcher<{ ok: boolean; message: string }>();
 
+  // "Rescheduled today" banner: Seen goes through its own fetcher (it counts
+  // into actionInFlight like the retry above). The acknowledged row hides
+  // optimistically while the submit + revalidation run, then the loader stops
+  // returning it — no client-side list surgery.
+  const rescheduleSeenFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const pendingSeenIds = useMemo(() => {
+    const ids = new Set<string>();
+    const id = rescheduleSeenFetcher.formData?.get("orderId");
+    if (rescheduleSeenFetcher.state !== "idle" && typeof id === "string") {
+      ids.add(id);
+    }
+    return ids;
+  }, [rescheduleSeenFetcher.state, rescheduleSeenFetcher.formData]);
+  const markRescheduleSeen = useCallback(
+    (item: RecentRescheduleItem) => {
+      rescheduleSeenFetcher.submit(
+        {
+          _action: "markRescheduleSeen",
+          orderId: item.orderId,
+          requestedAt: item.requestedAt,
+        },
+        { method: "post" },
+      );
+    },
+    [rescheduleSeenFetcher],
+  );
+
   const ordersDiffTitle = useMemo(() => {
     const parts: string[] = [];
     if (newOrderIds.size > 0) {
@@ -1216,6 +1367,29 @@ function Extension() {
       navigate(`?${params.toString()}`, { preventScrollReset: true });
     },
     [searchParams, navigate, closeModal],
+  );
+
+  // Banner "Open": the moved order is usually OUTSIDE the current view (it
+  // just left Today), and the panel only renders orders present on the loaded
+  // page — so jump to All + search by order number (guarantees it is on the
+  // page), then open it.
+  const openRecentReschedule = useCallback(
+    (item: RecentRescheduleItem) => {
+      closeModal();
+      setTagsModalOrderId(null);
+      setKpiProductsOpen(false);
+      const params = new URLSearchParams(searchParams);
+      params.delete("tab");
+      params.delete("timeWindow");
+      params.delete("deliveryDate");
+      params.delete("after");
+      params.delete("before");
+      params.set("search", item.name.replace(/^#/, ""));
+      params.set("order", item.legacyId);
+      clearSelection();
+      navigate(`?${params.toString()}`);
+    },
+    [searchParams, navigate, closeModal, clearSelection],
   );
 
   const handleCloseDrawer = useCallback(() => {
@@ -1553,6 +1727,50 @@ function Extension() {
     tabParam !== "all",
   );
 
+  // A search typed on a dated tab (or with a date/slot filter) still gets the
+  // client-side filter applied on top, so the row the merchant is looking for
+  // can be on the loaded page yet hidden by the tab — exactly what happens
+  // after a customer moves an order off Today. Name those hits instead of
+  // showing a bare empty state.
+  const hiddenSearchMatches = useMemo(() => {
+    if (!searchParam || displayedOrders.length > 0) return [];
+    const clientFilterActive =
+      tabParam === "today" ||
+      tabParam === "tomorrow" ||
+      tabParam === "thisWeek" ||
+      Boolean(deliveryDateFilter) ||
+      Boolean(timeWindowParam);
+    if (!clientFilterActive) return [];
+    return orders.slice(0, 3).map((o) => {
+      const date = getDeliveryDateValue(o);
+      const slot = getDeliveryTimeValue(o);
+      const when = [
+        date !== "—" ? formatDeliveryDate(date) : "",
+        slot !== "—" ? slot : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return { id: o.id, name: o.name, when: when || "no delivery date" };
+    });
+  }, [
+    searchParam,
+    displayedOrders.length,
+    tabParam,
+    deliveryDateFilter,
+    timeWindowParam,
+    orders,
+  ]);
+  const showSearchInAll = useCallback((): void => {
+    const params = new URLSearchParams(searchParams);
+    params.delete("tab");
+    params.delete("timeWindow");
+    params.delete("deliveryDate");
+    params.delete("after");
+    params.delete("before");
+    clearSelection();
+    navigate(`?${params.toString()}`, { replace: true });
+  }, [searchParams, navigate, clearSelection]);
+
   const selectedCount = selectedResources.length;
 
   return (
@@ -1595,6 +1813,37 @@ function Extension() {
                 : ""}{" "}
               — booked-slot counts may be undercounting these orders until the
               sync completes. Retry runs in the background.
+            </Text>
+          </Banner>
+        )}
+
+        {/* ── Recent customer reschedules (2026-09-04) — on EVERY tab, because
+            the moved order has by definition just left the view being looked
+            at. Rows clear on Seen or after 48 h; no dismiss on purpose. ──── */}
+        <RecentReschedulesBanner
+          items={loaderData.recentReschedules}
+          pendingSeenIds={pendingSeenIds}
+          errorMessage={
+            rescheduleSeenFetcher.state === "idle" &&
+            rescheduleSeenFetcher.data?.ok === false
+              ? rescheduleSeenFetcher.data.message
+              : null
+          }
+          onOpen={openRecentReschedule}
+          onSeen={markRescheduleSeen}
+        />
+
+        {/* ── Search hit hidden by the dated tab / date-slot filter ───────── */}
+        {hiddenSearchMatches.length > 0 && (
+          <Banner
+            tone="info"
+            title="No match in this view"
+            action={{ content: "Show in All", onAction: showSearchInAll }}
+          >
+            <Text as="p">
+              Found in All:{" "}
+              {hiddenSearchMatches.map((m) => `${m.name} · ${m.when}`).join(", ")}
+              {orders.length > hiddenSearchMatches.length ? " and more" : ""}.
             </Text>
           </Banner>
         )}

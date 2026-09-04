@@ -35,6 +35,7 @@ props-only component fed from that single loader.
 | Panel sections | `app/components/orders/panel/DeliverySection.tsx` | Delivery date/slot/address block; shop-local "today" via `todayISO` prop |
 | | `app/components/orders/panel/DeliveryTimeline.tsx` | Reschedule history + Fulfilled/Delivered + email-sent entries |
 | | `app/components/orders/panel/ItemsSection.tsx`, `panel/badge-tone.ts` | Line items + totals; badge tone mapping |
+| **Banner** | `app/components/orders/RecentReschedulesBanner.tsx` | "Rescheduled today" (2026-09-04): customer reschedules from the last 48 h not yet marked Seen, on **every** tab. Open → All + search + `?order=`; Seen → `markRescheduleSeen` |
 | **Modals** | `CancelModal`, `ArchiveModal`, `UnarchiveModal`, `AddTagsModal`, `RemoveTagsModal` | Bulk-op confirm modals (post to the route `action`) |
 | | `MarkFulfilledModal.tsx` | Fulfill + optional Lalamove Order ID paste (ADR-16 `recordLalamoveOrderId`) |
 | | `RescheduleModal.tsx` | Merchant reschedule; rules/capacity via the fetcher route; canonical slot matching via `lib/slot-value` |
@@ -49,9 +50,11 @@ props-only component fed from that single loader.
 | | `app/lib/delivery-availability.ts` | `getShopLocalDate`, rules types, merchant reschedule validation |
 | | `app/lib/slot-value.ts` | `normalizeSlotValueForMatch` / `findSlotOverrideKey` / `slotValuesMatch` — the ONLY legal way to compare slot strings |
 | | `app/lib/order-tags.ts` | `MAX_ORDER_TAG_LENGTH` (40 — Shopify's real cap), `buildOrderEventTag` |
+| | `app/lib/recent-reschedules.ts` | Pure helpers behind the banner + the "Rescheduled · 8:47 AM" badge (2026-09-04): `buildRecentRescheduleTagQuery`, `selectRecentReschedules` (48 h window, customer-only source, `$app.reschedule_seen_at` marker), `rescheduleBadgeLabel` — all shop-local |
 | **Services (action side)** | `services/reschedule-order-delivery.server.ts` | The shared reschedule write orchestration (REC-1/2 — same code path as the customer-account reschedule) |
 | | `services/send-customer-email.server.ts` | `handleSendEmailOp` — SMTP send + `EmailSendLog` row |
 | | `services/update-order-contact.server.ts` | `handleEditDetailsOp` |
+| | `services/reschedule-seen.server.ts` | `handleMarkRescheduleSeenOp` — writes `$app.reschedule_seen_at` (order write, **not** a delivery write) |
 | | `services/lalamove-tracking.server.ts` | `recordLalamoveOrderId` (ADR-16 status listener, not dispatch) |
 | | `services/delivery-sync-task.server.ts` | `getDeliverySyncIssues` (loader banner count) + `retryDeliverySyncIssues` (the `retryDeliverySync` op) — ADR-22 |
 | | `services/bulk-actions.server.ts` | **The shared bulk executor** (`executeBulkAction`) + all bulk mutations, `BulkActionName`/`BulkActionResponse` types, `BULK_INLINE_MAX` — ADR-22 Phase B (extracted from this route 2026-08-27) |
@@ -103,6 +106,16 @@ Loader sequence (all in `app.orders.tsx`):
    `delivery.reschedule_history`), customAttributes, line items, addresses,
    price sets, customer, and `fulfillments { createdAt deliveredAt }` (for the
    timeline's Fulfilled/Delivered entries).
+   **6b. Recent-reschedules query (2026-09-04), in parallel with 6 via
+   `Promise.all`:** `GET_RECENT_RESCHEDULES_QUERY` over
+   `buildRecentRescheduleTagQuery(todayISO)` — `tag:resched-<today> OR
+   <yesterday> OR <day before>`, first 50, `UPDATED_AT` desc. The event tag is
+   the only server-side handle (metafield terms are ignored, see 3), and three
+   days cover a 48 h window across the shop-day boundary. Fail-open to `[]`.
+   `selectRecentReschedules` then applies the exact window, the customer-only
+   source filter, and the `$app.reschedule_seen_at` marker. Every page order
+   also gets a loader-computed `rescheduleBadgeLabel` — shop-local time, stamped
+   here because the client has `todayISO` but not the timezone.
 7. **Postgres enrichment, one guarded query:** `emailSendLog` rows (panel
    timeline "email sent" entries) for this page's order ids → attached as
    `order.emailLog`. Panel-timeline garnish, not page-critical: a Neon
@@ -112,7 +125,7 @@ Loader sequence (all in `app.orders.tsx`):
    degrades to zero on DB trouble, never page-critical.
 9. `Response.json({...} satisfies LoaderData, { headers: { "Cache-Control": "no-store" } })`
    returning: `orders`, `pageInfo`, `errors`, the echoed filter params,
-   `todayISO`, `pageSize`, `syncIssues`, and `mapsApiKey` (client-exposed by
+   `todayISO`, `pageSize`, `syncIssues`, `recentReschedules`, and `mapsApiKey` (client-exposed by
    design — the Maps JS SDK needs it in the browser; the key must be locked
    down in Google Cloud console to the Cloud Run referrer + Maps JavaScript
    API/Places API (New) only).
@@ -155,6 +168,26 @@ default behavior.
   `actionInFlight`, so auto-refresh pauses while a retry runs). Deliberately
   not dismissible — it reports a real capacity-count gap and clears itself
   once the sync completes.
+- **Recent-reschedules banner (2026-09-04)** — `RecentReschedulesBanner`
+  fed by `loaderData.recentReschedules`, rendered on **every** tab (the moved
+  order has, by definition, just left the view being looked at). Per row:
+  order, customer, from → to, shop-local time, source. **Open** →
+  `openRecentReschedule`: clears tab/date/slot filters, sets
+  `search=<number>` + `?order=` — the panel renders only orders on the loaded
+  page, so All + search guarantees the row is there. **Seen** →
+  `markRescheduleSeen` on its own fetcher (counts into `actionInFlight`); the
+  row hides optimistically via `pendingSeenIds` until the post-action
+  revalidation stops returning it. Not dismissible; rows age out after 48 h.
+- **Hidden-search hint** — `hiddenSearchMatches`: a search on a dated tab (or
+  with a date/slot filter) that yields zero displayed rows while the loaded
+  page has hits → info banner naming up to three of them with "Show in All"
+  (`showSearchInAll`, keeps the search, drops the client-side filters). This is
+  what the merchant hit on 2026-09-04 searching "4292" on Today after the
+  customer had moved it to Sep 28.
+- **Reschedule time on badges** — the row's `resched` tag badge and the
+  panel's Delivery status badge render `order.rescheduleBadgeLabel`
+  ("Rescheduled · 8:47 AM" today, "Rescheduled · Sep 3, 5:09 PM" otherwise)
+  when the loader stamped one; plain "Rescheduled" otherwise.
 - **Modal state** — one `activeModal` discriminated union in the route
   (`cancel` / `archive` / `unarchive` / `markFulfilled` / `reschedule` /
   `sendEmail` / `editDetails` / `addTags` / `removeTags`), plus the two
@@ -187,10 +220,12 @@ The route `action` dispatches on `_action`:
 - **Single-order/no-selection ops, dispatched before the bulk machinery:**
   `sendEmail` (SMTP compose — writes **nothing** to the Shopify order, logs to
   `EmailSendLog` for the timeline), `editDetails` (shipping-address rewrite —
-  an order write but **not** a delivery write), and `retryDeliverySync`
+  an order write but **not** a delivery write), `retryDeliverySync`
   (ADR-22 — re-arms failed/stuck `DeliverySyncTask` rows and re-enqueues the
   worker; posted by the warning banner's "Retry sync" button, no order
-  selection involved).
+  selection involved), and `markRescheduleSeen` (2026-09-04 — the
+  recent-reschedules banner's Seen button; writes `$app.reschedule_seen_at`
+  only, an order write but **not** a delivery write).
 - **Bulk ops** (`BulkActionName`, max **100** selected ids): `archive`,
   `unarchive`, `cancel`, `tagsAdd`, `tagsRemove`, `markFulfilled` (+ optional
   Lalamove Order ID → `recordLalamoveOrderId`, ADR-16), `reschedule`.
@@ -240,9 +275,11 @@ path without checking there first.
 loader (app.orders.tsx)
   ├─ authenticate.admin → build query (server filters; NO metafield terms)
   ├─ getScheduleRules → todayISO (shop-local)          [guarded fallback]
-  ├─ admin.graphql(GET_ORDERS_QUERY) → orders: Order[]
+  ├─ Promise.all ─┬─ admin.graphql(GET_ORDERS_QUERY) → orders: Order[]
+  │               └─ GET_RECENT_RESCHEDULES_QUERY (tag:resched-<3 days>) [fail-open → []]
   ├─ emailSendLog.findMany                             [guarded → empty]
-  └─ Response.json(orders, pageInfo, params, todayISO, pageSize, mapsApiKey)
+  ├─ rescheduleBadgeLabel per order + selectRecentReschedules (shop-local)
+  └─ Response.json(orders, pageInfo, params, todayISO, pageSize, recentReschedules, mapsApiKey)
         │ useLoaderData()                (Cache-Control: no-store)
         ▼
   Extension()
@@ -256,7 +293,9 @@ loader (app.orders.tsx)
   ?order= ─► orders.find(id) ─► <Suspense><OrderDetailsPanel/></Suspense>
         │        (props-only; todayISO + escDisabled passed down)
         ▼
+  RecentReschedulesBanner (every tab) ─ Open → All + search + ?order=
+                                       └ Seen → rescheduleSeenFetcher ─► markRescheduleSeen
   Modals ─► useBulkActions fetcher ─► route action ─► services
-             (archive/…/reschedule │ sendEmail │ editDetails)
+             (archive/…/reschedule │ sendEmail │ editDetails │ markRescheduleSeen)
              contract: api.md §2   └─ revalidate on settle
 ```
