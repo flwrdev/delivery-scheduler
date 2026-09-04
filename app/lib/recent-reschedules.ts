@@ -41,6 +41,21 @@ export function buildRecentRescheduleTagQuery(
   return terms.join(" OR ");
 }
 
+/**
+ * The full orders-search string the banner's loader query sends: the event-tag
+ * OR plus `-status:closed`. Archived orders are hidden from every main view of
+ * the page, so an archived reschedule must not linger in the banner — and its
+ * Open would land on an empty All view (#4313, archived 10:09 AM while still
+ * on the banner, 2026-09-04).
+ */
+export function buildRecentRescheduleSearchQuery(
+  todayISO: string,
+  days: number = RECENT_RESCHEDULE_TAG_DAYS,
+): string {
+  const tags = buildRecentRescheduleTagQuery(todayISO, days);
+  return tags ? `(${tags}) -status:closed` : "";
+}
+
 // Both sources by merchant request (2026-09-04): the banner doubles as the
 // day's reschedule log, so a VA's merchant-side move is visible to the owner
 // too. Narrow with the `sources` option if that ever gets noisy.

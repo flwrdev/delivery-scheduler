@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Order } from "../app/lib/order-utils";
 import {
+  buildRecentRescheduleSearchQuery,
   buildRecentRescheduleTagQuery,
   formatShopLocalTime,
   latestRescheduleEvent,
@@ -236,5 +237,14 @@ describe("buildRecentRescheduleTagQuery", () => {
       "tag:resched-2026-09-01 OR tag:resched-2026-08-31",
     );
     expect(buildRecentRescheduleTagQuery("garbage")).toBe("");
+  });
+});
+
+describe("buildRecentRescheduleSearchQuery", () => {
+  it("wraps the tag OR and excludes archived orders, like every main view", () => {
+    expect(buildRecentRescheduleSearchQuery("2026-09-04")).toBe(
+      "(tag:resched-2026-09-04 OR tag:resched-2026-09-03 OR tag:resched-2026-09-02) -status:closed",
+    );
+    expect(buildRecentRescheduleSearchQuery("garbage")).toBe("");
   });
 });

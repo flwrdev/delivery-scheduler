@@ -122,10 +122,13 @@ Loader sequence (all in `app.orders.tsx`):
    timeline's Fulfilled/Delivered entries).
    **6b. Recent-reschedules query (2026-09-04), in parallel with 6 via
    `Promise.all`:** `GET_RECENT_RESCHEDULES_QUERY` over
-   `buildRecentRescheduleTagQuery(todayISO)` — `tag:resched-<today> OR
-   <yesterday> OR <day before>`, first 50, `UPDATED_AT` desc. The event tag is
-   the only server-side handle (metafield terms are ignored, see 3), and three
-   days cover a 48 h window across the shop-day boundary. Fail-open to `[]`.
+   `buildRecentRescheduleSearchQuery(todayISO)` — `(tag:resched-<today> OR
+   <yesterday> OR <day before>) -status:closed`, first 50, `UPDATED_AT` desc.
+   The event tag is the only server-side handle (metafield terms are ignored,
+   see 3), three days cover a 48 h window across the shop-day boundary, and
+   archived orders are excluded like every main view (an archived reschedule
+   would otherwise linger in the banner with an Open that lands on an empty
+   All view — #4313, archived while still on the banner). Fail-open to `[]`.
    `selectRecentReschedules` then applies the exact window, the customer-only
    source filter, and the `$app.reschedule_seen_at` marker. Every page order
    also gets a loader-computed `rescheduleBadgeLabel` — shop-local time, stamped
@@ -198,7 +201,8 @@ default behavior.
   page, so All + search guarantees the row is there. **Seen** →
   `markRescheduleSeen` on its own fetcher (counts into `actionInFlight`); the
   row hides optimistically via `pendingSeenIds` until the post-action
-  revalidation stops returning it. Not dismissible; rows age out after 48 h.
+  revalidation stops returning it. Not dismissible; rows age out after 48 h,
+  on Seen, or when the order is archived.
 - **Hidden-search hint** — `hiddenSearchMatches`: a search on a dated tab (or
   with a date/slot filter) that yields zero displayed rows while the loaded
   page has hits → info banner naming up to three of them with "Show in All"

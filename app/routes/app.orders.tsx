@@ -65,7 +65,7 @@ import {
 import { slotValuesMatch } from "../lib/slot-value";
 import {
   type RecentRescheduleItem,
-  buildRecentRescheduleTagQuery,
+  buildRecentRescheduleSearchQuery,
   rescheduleBadgeLabel,
   selectRecentReschedules,
 } from "../lib/recent-reschedules";
@@ -348,7 +348,7 @@ async function fetchRecentRescheduleOrders(
   admin: AdminGraphQLClient,
   todayISO: string,
 ): Promise<Order[]> {
-  const query = buildRecentRescheduleTagQuery(todayISO);
+  const query = buildRecentRescheduleSearchQuery(todayISO);
   if (!query) return [];
   try {
     const response = await admin.graphql(GET_RECENT_RESCHEDULES_QUERY, {
