@@ -18,6 +18,7 @@ import {
 } from "../app/lib/delivery-availability";
 import { RESCHEDULED_ORDER_TAG } from "../app/lib/constants";
 import {
+  buildDeliveryDateTagQuery,
   buildOrderEventTag,
   isOrderEventTag,
   orderEventTagLabel,
@@ -186,5 +187,25 @@ describe("getShopLocalDate", () => {
       getShopLocalDate("Asia/Manila", EARLY_MORNING_MANILA),
     );
     expect(tag).toBe("resched-2026-08-12");
+  });
+});
+
+// 2026-09-04: the dated Orders Ops views now send the delivery-date tag as a
+// server-side term (exact-match tag search), replacing the 250-newest window
+// that dropped old pre-orders and far-forward reschedules.
+describe("buildDeliveryDateTagQuery", () => {
+  it("emits a bare term for one day and a parenthesised OR for several", () => {
+    expect(buildDeliveryDateTagQuery(["2026-09-05"])).toBe("tag:2026-09-05");
+    expect(buildDeliveryDateTagQuery(["2026-08-30", "2026-08-31", "2026-09-01"])).toBe(
+      "(tag:2026-08-30 OR tag:2026-08-31 OR tag:2026-09-01)",
+    );
+  });
+
+  it("dedupes, drops anything that is not a bare ISO date, and returns '' when nothing is left", () => {
+    expect(buildDeliveryDateTagQuery(["2026-09-05", "2026-09-05", "9AM-12PM", "resched-2026-09-05", ""])).toBe(
+      "tag:2026-09-05",
+    );
+    expect(buildDeliveryDateTagQuery([])).toBe("");
+    expect(buildDeliveryDateTagQuery(["garbage"])).toBe("");
   });
 });
