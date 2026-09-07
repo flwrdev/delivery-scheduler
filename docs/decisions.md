@@ -497,3 +497,36 @@ Both are called out in `extensions/support-chat/README.md` and repeated in [veri
 **Trade-off accepted:** an order with no date tag — manually removed, or whose `orders/create` sync has not landed yet — is absent from the dated tabs until the tag exists (it still shows on All). The manual case is already documented as a side channel in api.md; the sync case is covered by the sync-issue banner and self-heals when the task completes. Rejected: enabling the filterable capability on the metafield definitions (a definition change on live data for the same outcome the tag already gives) and a larger page (still a window, just a bigger one).
 
 **Consequence:** the dated views are now correct for pre-orders and far-forward reschedules of any age; `todayISO` is resolved before the query is built; orders-ui.md §2/§3 updated. Follow-up noted, not built: a "Redelivery" reading of FULFILLED orders whose latest reschedule post-dates their fulfillment (they currently count as Fulfilled in the KPIs and Items to prepare) — the Shopify-native alternative is to cancel the fulfillment when a rider returns a parcel.
+
+## Messenger Agent — Phase Deviations Log (moved from messenger-progress.md)
+
+**Note:** `docs/messenger-progress.md` is a phase-by-phase build/handoff log (gate result, evidence, files touched, open questions). Its explicit decision-and-rationale content (the "Deviations" sections, and the LLM provider choice) is consolidated here per the docs/decisions.md-is-the-only-rationale-doc convention; the rest of that log (gate results, evidence, file tables, open questions) stays there untouched.
+
+**Phase 4 — LLM provider (2026-08-01):** Claude Sonnet 5 via `@anthropic-ai/sdk` was the merchant-approved provider, pinned in `messenger-llm.server.ts` (the one provider-swap file).
+
+**Phase 4 deviations:**
+1. **Official Anthropic SDK** (not plain fetch like the Messenger side): the master doc's "no SDK wrapper" rule targets the Messenger/Graph transport; the LLM sits behind a thin interface, so the SDK stays a one-file swap.
+2. **Slot quick replies auto-attached by code, not the LLM**, from the turn's last successful `get_available_slots` call — "the LLM handles language; the code advances state."
+
+**Phase 3 deviations (2026-08-01, Queue + Neon):**
+1. **HMAC task auth instead of Cloud Tasks OIDC.** The GCP-idiomatic OIDC token verification would need `google-auth-library` + a JWKS fetch; HMAC on the task payload (same `sha256=<hex>` format as Meta's, same tested verifier lib) is zero new dependencies. The worker URL is public, but every task is signed.
+2. **Prod Neon repair not part of the original plan:** the `_prisma_migrations` table went missing from the prod DB (P3005 on any new revision boot; cause unknown, not from the repo). Merchant-approved fix: baseline ×3 via `prisma migrate resolve --applied` + `migrate deploy`.
+3. **TEMP `[force-timeout]` gate hook** (45s stall after send): deployed on `00177-9xt` to prove the gate, removed immediately on `00178-trn`.
+4. **Inline fallback when no queue is configured:** not in the master doc; added so local dev works without a Cloud Tasks emulator. Prod always has the queue configured.
+
+**Phase 2 deviations (2026-08-01, Echo bot):**
+1. **Inline send before the 200,** not fast-ack-then-process: the master doc says "return 200 fast, before any processing," but RR7/Cloud Run has no `waitUntil` — once the response returns, Cloud Run throttles CPU and kills fire-and-forget work (the exact trap the master doc's own Phase 3 note warns about). So Phase 2 verifies, processes, and `await`s one echo send (5s timeout) before the 200 — one Graph call, well under Meta's delivery timeout. True fast-ack + enqueue arrived in Phase 3 (Cloud Tasks).
+2. **Malformed JSON with a valid signature answers 200, not 400** — Meta cannot fix a malformed redelivery body; logged only.
+3. **Echo truncated at 2000 chars** — Messenger's hard text limit; not in the literal spec but needed so a long echo isn't rejected.
+4. **No dedupe in Phase 2** — `mid`-unique dedupe is Phase 3 (Neon); a Meta redelivery could double-echo, accepted for an echo bot.
+5. **Progress handoff kept in the repo** (`docs/messenger-progress.md`) rather than the Drive folder, since `flowercart-messenger-build` wasn't synced to this machine yet; the human uploads to Drive separately.
+6. **Page token proxied by Claude (2026-07-27, explicit merchant authorization).** The master-doc rule "human pastes secrets only" was waived by the merchant to unblock the gate: Claude generated the token in the Meta dashboard, stored it in Secret Manager (v2), and updated Cloud Run. The token passed through the Claude session context. Obligation recorded at the time: rotate `messenger-page-token` before declaring production-ready — closed 2026-08-03 (the merchant generated a new page token in the Meta dashboard and uploaded it directly to Secret Manager, bypassing Claude).
+
+**Phase 8 deviations (2026-08-03):**
+1. **Profile-setup success/failure feedback uses the App Bridge toast** (`useAppBridge().toast.show`, same idiom as the scheduler op-plumbing) — the brief said "toast"; this is the closest existing pattern in the repo.
+2. **Ice breakers use the locale-wrapped shape** (`[{ locale: "default", call_to_actions: [...] }]`) because that is the current Graph API format (the flat `[{question,payload}]` shape is the old v7 form).
+3. **Typing indicator is `void` fire-and-forget** (not awaited): the send is never-throws by design, and the worker request stays alive while the LLM turn runs, so it isn't cut off by Cloud Run CPU throttling.
+
+**Phase 10 deviations (2026-08-03, add-on upsell + follow-up):**
+1. The add-on is a **required step** in the state machine, not an optional flag — the simplest way for the code (not LLM memory) to guarantee the one-time offer; "decline" is a first-class decision.
+2. Follow-up favors **zero-duplicate over guaranteed delivery**: if the send fails after the claim, it is not retried — it's a nudge, not a transactional message.
