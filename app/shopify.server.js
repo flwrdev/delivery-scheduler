@@ -4,13 +4,10 @@ import {
   AppDistribution,
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
-import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
+import { PrismaSessionStorage } from "./session-storage.server";
 import prisma from "./db.server";
 
-const prismaSessionStorage = new PrismaSessionStorage(prisma, {
-  connectionRetries: 24,
-  connectionRetryIntervalMs: 5000,
-});
+const prismaSessionStorage = new PrismaSessionStorage(prisma);
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,

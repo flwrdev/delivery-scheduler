@@ -15,6 +15,7 @@ orders-500-debug.txt
 prisma/dev.sqlite
 *.sqlite
 *.sqlite-journal
+/app/generated/
 
 .env
 .env.*
