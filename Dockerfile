@@ -4,6 +4,7 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 COPY . .
+RUN npx prisma generate
 RUN npm run build
 
 FROM node:20-alpine
@@ -15,4 +16,5 @@ COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=builder /app/build ./build
 COPY prisma ./prisma
+COPY prisma.config.ts ./
 CMD ["npm", "run", "docker-start"]
