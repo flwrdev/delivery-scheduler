@@ -462,7 +462,7 @@ Both are called out in `extensions/support-chat/README.md` and repeated in [veri
 
 ## ADR-22 — Durable DeliverySyncTask rows + Cloud Tasks worker replace the inline orders/create sync (Phase A of the async-jobs design)
 
-**Date:** 2026-08-26 · **Status:** Implemented (Phase A), NOT yet deployed. 1043/1043 tests (+40), typecheck/lint/build clean. Full design (including the approved-but-unbuilt Phases B and C): [proposals/orders-async-jobs.md](./proposals/orders-async-jobs.md).
+**Date:** 2026-08-26 · **Status:** Implemented (Phase A), NOT yet deployed. 1043/1043 tests (+40), typecheck/lint/build clean.
 
 **Context:** The 2026-08-26 Orders Ops review left three deferred findings (M1: a transient failure anywhere in the orders/create handler — including a Neon cold start on the schedule-rules read — was a permanent, silent loss of the delivery sync, which then undercounts booked-slot capacity forever; S5: a partial sync — tags without metafields, or vice versa — left no marker anywhere; S4: 100-order bulk ops in one request). The merchant identified the shared root cause: one HTTP request holds too much work with no durable record of progress, and directed a design-first approach before any code.
 
