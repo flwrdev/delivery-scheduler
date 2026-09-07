@@ -9,8 +9,8 @@
 // Shopify lookup — except this is a plain Postgres read (no Shopify Admin
 // API call), so no lazy-import trick is needed.
 //
-// Null column (or a missing row entirely) = use the built-in default below —
-// same convention as ReminderConfig's email templates. This means an
+// Null column (or a missing row entirely) = use the built-in default below.
+// This means an
 // unconfigured shop, a missing row, or a DB hiccup all degrade to exactly
 // what the widget already hardcoded/read from the Theme Editor before this
 // existed — never a blank or broken widget.

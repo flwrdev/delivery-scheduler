@@ -30,11 +30,11 @@ import {
   executeAgentTool,
   LOOKUP_MY_ORDERS_TOOL,
   MESSENGER_AGENT_TOOLS,
-} from "./messenger-agent-tools.server";
+} from "./agent-tools.server";
 import type {
   AgentToolContext,
   GetAvailableDeliverySlotsResult,
-} from "./messenger-agent-tools.server";
+} from "./agent-tools.server";
 import {
   buildDynamicContext,
   buildStaticSystemPrompt,
@@ -45,11 +45,11 @@ import {
 import {
   MESSENGER_LLM_NOT_CONFIGURED_MESSAGE,
   runLlmTurn,
-} from "./messenger-llm.server";
-import type { LlmContentBlock, LlmMessage, LlmToolDefinition } from "./messenger-llm.server";
+} from "./agent-llm.server";
+import type { LlmContentBlock, LlmMessage, LlmToolDefinition } from "./agent-llm.server";
 import { buildOrderSummaryText } from "./messenger-orders.server";
 import type { UpdateOrderStateResult } from "./messenger-orders.server";
-import type { MessengerProduct, SearchShopProductsResult } from "./messenger-products.server";
+import type { MessengerProduct, SearchShopProductsResult } from "./agent-products.server";
 import type { AgentBlock, AgentChannel, AgentReply } from "./agent-channel";
 
 // Tool-loop ceiling per inbound message — same number the Messenger loop uses.
@@ -268,12 +268,16 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
   //
   // The assistant text is ALWAYS first: every transport leads with it, and the
   // affordance blocks decorate the message that follows.
+  //
+  // OWNERSHIP (2026-08-24): the text rides out VERBATIM. Sanitizing markdown
+  // and enforcing the per-transport character cap are TRANSPORT concerns —
+  // the Messenger adapter sanitizes + budgets in deliverReplyAndBookkeep
+  // (where it can protect the appended order summary from the cut), and the
+  // web adapter caps in runSupportChatTurn before persisting. Doing either
+  // here as well split the ownership across two layers and let a near-limit
+  // reply push the adapter-appended summary past Meta's 2000-char cap.
   const blocks: AgentBlock[] = [];
-  const text = (channel.supports.markdown ? finalText : sanitizeMessengerText(finalText)).slice(
-    0,
-    channel.supports.textLimit,
-  );
-  blocks.push({ type: "text", text });
+  blocks.push({ type: "text", text: finalText });
 
   // Defence in depth: a `summary` block is an ORDER-COMMITMENT affordance —
   // it only means something on a channel that ALSO intercepts the following
@@ -356,6 +360,6 @@ export type {
   LlmMessage,
   LlmToolDefinition,
   LlmTurnResult,
-} from "./messenger-llm.server";
-export type { MessengerProduct } from "./messenger-products.server";
-export type { GetAvailableDeliverySlotsResult } from "./messenger-agent-tools.server";
+} from "./agent-llm.server";
+export type { MessengerProduct } from "./agent-products.server";
+export type { GetAvailableDeliverySlotsResult } from "./agent-tools.server";

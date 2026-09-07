@@ -23,6 +23,7 @@ import {
   getCustomerName,
   getRescheduleTimelineEvents,
 } from "../../lib/order-utils";
+import { MAX_ORDER_TAG_LENGTH } from "../../lib/order-tags";
 import { polarisBadgeTone } from "./panel/badge-tone";
 import { DeliverySection } from "./panel/DeliverySection";
 import { DeliveryTimeline } from "./panel/DeliveryTimeline";
@@ -30,10 +31,16 @@ import { ItemsSection } from "./panel/ItemsSection";
 
 export interface OrderDetailsPanelProps {
   order: Order;
+  /** SHOP-local today (YYYY-MM-DD) from the loader — drives the Today/Overdue chips. */
+  todayISO: string;
   onClose: () => void;
   // §6: the order dropped out of the loaded result set after a background
   // revalidate — the panel is showing its last-known snapshot.
   notInView?: boolean;
+  // A modal is stacked over the panel — it owns Escape; the panel's own
+  // Esc-to-close must stand down or one Esc closes both (and the ?order=
+  // param with it, unmounting the modal mid-compose).
+  escDisabled?: boolean;
   // Phase 4: opens the merchant "Update delivery slot" modal for this order.
   onReschedule?: () => void;
   // Customer Email: opens the in-app compose modal for this order.
@@ -50,8 +57,10 @@ export interface OrderDetailsPanelProps {
  */
 export function OrderDetailsPanel({
   order,
+  todayISO,
   onClose,
   notInView = false,
+  escDisabled = false,
   onReschedule,
   onSendEmail,
   onEditDetails,
@@ -90,7 +99,7 @@ export function OrderDetailsPanel({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !escDisabled && !e.defaultPrevented) onClose();
     };
 
     // Lock body scroll while the panel is open; focus it for keyboard users
@@ -103,7 +112,7 @@ export function OrderDetailsPanel({
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = originalOverflow;
     };
-  }, [onClose]);
+  }, [onClose, escDisabled]);
 
   useEffect(() => {
     if (tagFetcher.state === "idle" && tagFetcher.data?.ok) {
@@ -250,7 +259,7 @@ export function OrderDetailsPanel({
               loaded details.
             </Text>
           )}
-          <DeliverySection order={order} />
+          <DeliverySection order={order} todayISO={todayISO} />
 
           <Divider />
           <ItemsSection order={order} />
@@ -326,7 +335,9 @@ export function OrderDetailsPanel({
                     value={tagInput}
                     onChange={setTagInput}
                     disabled={tagFetcher.state !== "idle"}
-                    maxLength={255}
+                    // Shopify's real per-tag cap (live-verified 40; the old
+                    // 255 let a long tag pass here and fail at the server).
+                    maxLength={MAX_ORDER_TAG_LENGTH}
                     autoComplete="off"
                   />
                 </div>

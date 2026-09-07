@@ -152,6 +152,7 @@ function getCurrentDeliveryTimeSlot(order: {
 function isCurrentDeliveryDateTooCloseOrPast(
   currentDeliveryDate: string | null | undefined,
   scheduleRules: DeliveryScheduleRules,
+  currentDeliveryTimeSlot: string | null = null,
   now = new Date(),
 ): boolean {
   if (
@@ -161,7 +162,12 @@ function isCurrentDeliveryDateTooCloseOrPast(
     return true;
   }
 
-  return !canRescheduleDelivery(currentDeliveryDate, now, scheduleRules);
+  return !canRescheduleDelivery(
+    currentDeliveryDate,
+    now,
+    scheduleRules,
+    currentDeliveryTimeSlot,
+  );
 }
 
 function createHmacKey(secret: string): Uint8Array {
@@ -463,7 +469,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     const currentDeliveryDate = getCurrentDeliveryDate(order);
-    if (isCurrentDeliveryDateTooCloseOrPast(currentDeliveryDate, scheduleRules)) {
+    const currentDeliveryTimeSlot = getCurrentDeliveryTimeSlot(order);
+    if (
+      isCurrentDeliveryDateTooCloseOrPast(
+        currentDeliveryDate,
+        scheduleRules,
+        currentDeliveryTimeSlot,
+      )
+    ) {
       return jsonResponse(
         request,
         {
@@ -550,7 +563,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       timeSlot,
       source: "customer",
       currentDeliveryDate: currentDeliveryDate,
-      currentDeliveryTimeSlot: getCurrentDeliveryTimeSlot(order),
+      currentDeliveryTimeSlot,
       currentTags: order.tags ?? [],
       currentCustomAttributes: order.customAttributes ?? [],
       existingRescheduleHistoryValue: order.rescheduleHistory?.value ?? null,

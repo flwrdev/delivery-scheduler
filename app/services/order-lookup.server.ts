@@ -21,8 +21,20 @@
 // verified Shopify customer session (customer account, logged-in storefront)
 // and therefore need NO additional verification.
 //
-// Redaction rule (same as lookupOrdersByEmail): share ONLY status + delivery
-// schedule + tracking — never address, phone, or payment details.
+// DISCLOSURE TIERS (2026-08-25 merchant decision — replaces the old flat
+// "status + tracking only" redaction, which made the bot feel like it didn't
+// know the customer's own order):
+//   - "full"  (verified customer session): the customer is provably looking at
+//     their OWN data — the same account page already shows their address and
+//     phone, so the bot may share everything in the result. Card/payment
+//     numbers are never in the result to begin with (Shopify never exposes
+//     them to apps).
+//   - "guest" (order# + zip verification): share the human details that make
+//     the answer feel personal — items, total, recipient FIRST name, city —
+//     but never the full street address or a phone number. Rationale: flowers
+//     are gifts; the shipping address is often the RECIPIENT's home, and
+//     order numbers are sequential + Metro Manila zips are guessable, so a
+//     correct combo is not strong enough proof to hand out a home address.
 //
 // Log hygiene: order names, counts, error strings — never zip/address/phone.
 
@@ -35,7 +47,11 @@ const DELIVERY_DATE_ATTRIBUTE_KEY = "Delivery Date";
 const DELIVERY_TIME_ATTRIBUTE_KEY = "Delivery Time";
 
 const GENERIC_LOOKUP_FAILURE =
-  "We could not find an order matching that order number and zip code. Please double-check both — they are both on your order confirmation email.";
+  "We could not find an order matching that order number and zip code. Both are on the order " +
+  "confirmation email from The Flowercart (the order number also appears on the receipt). Warmly " +
+  "ask the customer to double-check both for a typo (a missing or swapped digit is the usual " +
+  "culprit) and try again — and if it still fails, offer the human team: 0962 422 4085 or " +
+  "hello@flowercart.store, so no one is left stuck.";
 
 const LOOKUP_FAILURE_THRESHOLD = 5;
 const LOOKUP_LOCKOUT_MINUTES = 30;
@@ -350,7 +366,7 @@ export async function lookupOrdersByCustomerId(
 
 // ---------------------------------------------------------------------------
 // Anti-guessing attempt limit (LookupAttempt, keyed by the resolved agent
-// thread key — see messenger-agent-tools.server.ts's `context.threadId ??
+// thread key — see agent-tools.server.ts's `context.threadId ??
 // context.psid` resolution).
 // ---------------------------------------------------------------------------
 //

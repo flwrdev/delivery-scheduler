@@ -147,78 +147,6 @@ model EmailSendLog {
   @@index([shop, shopifyOrderId])
 }
 
-// Occasion reminder emails (auto-send retention feature): app-side reminder
-// rows — never Shopify delivery state, so none of these three models join the
-// order write-path contract in docs/api.md §2. Same side-table posture as
-// LalamoveTracking / EmailSendLog above. Rows recur yearly via roll-forward
-// (a SENT 7d row seeds next year's occasionYear rows), so the Shopify order
-// search only ever looks one year back.
-model OccasionReminder {
-  id                 String    @id @default(cuid())
-  shop               String
-  shopifyOrderId     String
-  occasionDate       DateTime  @db.Date // the UPCOMING occurrence being reminded about
-  occasionYear       Int
-  occasionType       String // "anniversary" | "birthday" | "other" | "generic"
-  touch              String // "7d" | "3d" — which reminder in the pair this is
-  detectSource       String // "card_message" | "order_note" | "none"
-  customerEmail      String?
-  customerFirstName  String?
-  recipientHint      String? // parsed greeting name ("Maria"); null when unclear
-  cardMessageExcerpt String? // <=140 chars; live reader = /app/reminders activity card
-  productTitles      String? // for the "same bouquet?" copy
-  status             String    @default("PENDING") // PENDING | SENT | SUPPRESSED | FAILED | SKIPPED_REORDERED
-  attemptCount       Int       @default(0)
-  // Consecutive prior years this occasion was reminded (0 = first year;
-  // +1 per roll-forward) — feeds the year-aware copy line.
-  priorYearsSent     Int       @default(0)
-  suggestedAt        DateTime  @default(now())
-  sentAt             DateTime?
-  // Conversion attribution (2026-08-21 addendum): stamped when the customer
-  // places a (non-cancelled) order after this reminder was sent — via the
-  // nightly sweep or the 3d re-order skip. Read-only orders search only.
-  convertedAt        DateTime?
-  convertedOrderId   String?
-  updatedAt          DateTime  @updatedAt
-
-  @@unique([shop, shopifyOrderId, occasionYear, touch])
-  @@index([shop, status, occasionDate])
-}
-
-// Unsubscribe / do-not-remind list. scope "all" silences every reminder for
-// the email; scope "order:<shopifyOrderId>" silences just that occasion chain.
-// Checked at scan AND at send time, and it cuts the yearly roll-forward.
-model ReminderSuppression {
-  id        String   @id @default(cuid())
-  shop      String
-  email     String // stored lowercased
-  scope     String   @default("all") // "all" | "order:<shopifyOrderId>"
-  source    String   @default("unsubscribe_link") // | "merchant"
-  createdAt DateTime @default(now())
-
-  @@unique([shop, email, scope])
-  @@index([shop, email])
-}
-
-// Kill switch for the nightly reminder scan — enabled=false (the default)
-// means the scan short-circuits and no email ever leaves, even with the
-// Cloud Scheduler job live. Touch offsets (7d/3d) are code constants, not
-// config, per merchant decision 2026-08-21.
-model ReminderConfig {
-  shop      String   @id
-  enabled   Boolean  @default(false)
-  // Merchant-editable email templates (2026-08-21 addendum). Null = use the
-  // built-in defaults in reminder-copy.server.ts. Token syntax: {name},
-  // {recipient}, {occasion}, {date}, {weekday}, {past_date}, {product},
-  // {cutoff}, {discount_code}, {discount_label}, {store_url}. The unsubscribe
-  // footer is ALWAYS server-appended after rendering — edits cannot strip it.
-  subject7d String?
-  body7d    String?
-  subject3d String?
-  body3d    String?
-  updatedAt DateTime @updatedAt
-}
-
 // Support chat (customer-account + storefront widget, agent-core phase 2/3):
 // enqueue-then-poll job records for a chat turn. Neon holds the CONVERSATION
 // + JOB STATUS only — same posture as MessengerThread/MessengerMessage
@@ -270,6 +198,95 @@ model SupportChatJob {
   @@index([threadId, createdAt])
 }
 
+// Durable work record for the orders/create delivery sync (ADR-22, Phase A of
+// docs/proposals/orders-async-jobs.md). Work BOOKKEEPING only — the Shopify
+// order stays the delivery-state ledger; nothing here is ever read as delivery
+// state. The row is the resume point: which idempotent sync step is already
+// done (review finding S5) and whether the work is still owed (M1) — the
+// webhook writes this row and acks fast, the Cloud Tasks worker does the
+// actual sync with retries, the hourly sweep rescues stranded rows.
+model DeliverySyncTask {
+  id             String    @id @default(cuid())
+  shop           String
+  shopifyOrderId String
+  orderName      String? // "#1046" — merchant-facing display in the ops banner
+  // Work input, extracted once from the webhook payload — retries never need
+  // the original payload again. Null deliveryDate/timeSlot = COD-fee-only task.
+  deliveryDate   String?
+  timeSlot       String?
+  // Validation clock (D4/DEF-7, merchant constraint 2026-08-26): every retry
+  // validates against the order's checkout time, never the retry time — a
+  // delayed sync can never turn a legal checkout into "past cutoff".
+  checkoutTime   DateTime
+  needsCodFee    Boolean   @default(false)
+  // Per-step ledger — steps with nothing to do are created already-true, so
+  // "done" is always simply "all three flags true".
+  metafieldsDone Boolean   @default(false)
+  tagsDone       Boolean   @default(false)
+  codFeeDone     Boolean   @default(false)
+  status         String    @default("pending") // pending | done | failed
+  // Double-processing guard (merchant constraint 2026-08-26): worker lease,
+  // claimed via one conditional updateMany (null or stale = claimable) — see
+  // claimDeliverySyncTask in delivery-sync-task.server.ts.
+  lockedAt       DateTime?
+  attempts       Int       @default(0)
+  // "Not before" marker for the SWEEP only — Cloud Tasks retries pace
+  // themselves via the queue's own backoff policy.
+  nextAttemptAt  DateTime  @default(now())
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  doneAt         DateTime?
+
+  @@unique([shop, shopifyOrderId]) // webhook redelivery → same row, never a duplicate
+  @@index([status, nextAttemptAt]) // the sweep query
+  @@index([shop, status]) // the merchant-banner count query
+}
+
+// Bulk-action jobs (ADR-22 Phase B, docs/proposals/orders-async-jobs.md §3b —
+// review finding S4): a /app/orders bulk op on MORE than BULK_INLINE_MAX
+// orders becomes one job + per-order items instead of one long HTTP request.
+// The Cloud Tasks worker processes items chunk-by-chunk (re-enqueueing itself
+// between chunks) so every request stays small; the client polls the job by
+// id. Work BOOKKEEPING only — the order writes land on Shopify exactly as the
+// inline path's do (same shared executor, so the two can't drift).
+model BulkActionJob {
+  id         String    @id @default(cuid()) // returned to the client for polling
+  shop       String
+  action     String // BulkActionName
+  paramsJson String // validated BulkOpParams snapshot (validation happens BEFORE job creation)
+  status     String    @default("queued") // queued | running | done | failed
+  // Double-processing guard (§2a): job-level lease, renewed every chunk;
+  // items additionally claim pending → processing before execution.
+  lockedAt   DateTime?
+  totalCount Int
+  okCount    Int       @default(0)
+  failCount  Int       @default(0)
+  lastError  String?
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+  updatedAt  DateTime  @updatedAt
+  items      BulkActionJobItem[]
+
+  @@index([shop, status, createdAt]) // status polling scope check
+  @@index([status, updatedAt]) // the sweep's stranded-job rescue query
+}
+
+model BulkActionJobItem {
+  id             String  @id @default(cuid())
+  jobId          String
+  shopifyOrderId String
+  orderName      String?
+  status         String  @default("pending") // pending | processing | ok | failed
+  message        String? // same per-item message the inline BulkActionItemResult carries
+  updatedAt      DateTime @updatedAt
+  job            BulkActionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, shopifyOrderId])
+  @@index([jobId, status])
+}
+
 model DeliveryScheduleConfig {
   id                String   @id @default(cuid())
   shop              String   @unique
@@ -291,8 +308,7 @@ model DeliveryScheduleConfig {
 // Merchant-editable storefront chat widget copy/colors, set from the app's
 // Messenger admin page (merchant chose to fold widget settings into that
 // page rather than a dedicated nav item, 2026-08-23). Null column = use the
-// built-in default in widget-config.server.ts — same convention as
-// ReminderConfig's email templates. Read by
+// built-in default in widget-config.server.ts. Read by
 // apps.schedule-rules.widget-config.ts (App Proxy) on every storefront page
 // load, so widget-config.server.ts caches this in-process; the Theme Editor
 // block settings in app-embed.liquid are NOT removed — they stay as the

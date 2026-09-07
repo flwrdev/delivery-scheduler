@@ -27,7 +27,14 @@ const APP_BASE_URL = 'https://delivery-scheduler-299861709433.us-central1.run.ap
 const SUPPORT_CHAT_START_URL = `${APP_BASE_URL}/api/support-chat`;
 const SUPPORT_CHAT_POLL_URL_PREFIX = `${APP_BASE_URL}/api/support-chat/`;
 
-const POLL_INTERVAL_MS = 1500;
+// Poll backoff (2026-08-24): a typical turn answers in 3-10s, so poll fast
+// only while a fast answer is still plausible, then back off — every poll is
+// a signature-checked request + a Prisma read on the backend, and with the
+// widget open on many storefront tabs at once the fixed 1.5s cadence was the
+// dominant per-conversation query load.
+const POLL_INTERVAL_FAST_MS = 1500;
+const POLL_INTERVAL_SLOW_MS = 4500;
+const POLL_FAST_WINDOW_MS = 10000;
 // 60s, not 30s: a worst-case agent turn (multiple tool calls) can run longer
 // than 30s, and the turn is written into server-side history regardless of
 // whether the client is still listening — a client that gives up too early
@@ -338,17 +345,20 @@ function BlockView({ block, onPayloadTap }) {
 const BACKGROUND_POLL_TIMEOUT_MS = 4 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
-// Poll the jobId endpoint every POLL_INTERVAL_MS until status is "done" or
+// Poll the jobId endpoint (fast, then backed-off) until status is "done" or
 // "failed", or POLL_TIMEOUT_MS elapses. Returns the block array on success,
 // null on a backend-reported failure, or the string 'timeout' on timeout —
 // in the timeout case, polling continues in the background (see above) and
 // onLateResult is called if/when the turn eventually resolves.
 // ---------------------------------------------------------------------------
 async function pollForBlocks(jobId, { onLateResult } = {}) {
-  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + POLL_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    await sleep(POLL_INTERVAL_MS);
+    await sleep(
+      Date.now() - startedAt < POLL_FAST_WINDOW_MS ? POLL_INTERVAL_FAST_MS : POLL_INTERVAL_SLOW_MS,
+    );
 
     const result = await pollOnce(jobId);
     if (result.state === 'pending') {
@@ -369,7 +379,9 @@ async function continuePollingInBackground(jobId, onLateResult) {
   const backgroundDeadline = Date.now() + BACKGROUND_POLL_TIMEOUT_MS;
 
   while (Date.now() < backgroundDeadline) {
-    await sleep(POLL_INTERVAL_MS);
+    // A turn already past the 60s foreground window is slow by definition —
+    // the fast cadence buys nothing here.
+    await sleep(POLL_INTERVAL_SLOW_MS);
 
     const result = await pollOnce(jobId);
     if (result.state === 'pending') {

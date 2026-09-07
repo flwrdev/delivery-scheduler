@@ -157,7 +157,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (eventType === "ORDER_STATUS_CHANGED") {
     if (parsed.status === "COMPLETED" || parsed.status === "COMPLETE") {
-      const result = await markLalamoveOrderDelivered(admin, parsed.orderId);
+      const result = await markLalamoveOrderDelivered(admin, shop, parsed.orderId);
       console.log(`[lalamove-tracking] ORDER_STATUS_CHANGED COMPLETE ${parsed.orderId}: ${result.status}`);
     } else {
       await mirrorLalamoveOrderStatus(parsed.orderId, parsed.status);

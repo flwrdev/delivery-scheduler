@@ -36,7 +36,7 @@ import prisma from "../db.server";
 import { isIsoDateString } from "../lib/delivery-availability";
 import { unauthenticated } from "../shopify.server";
 import type { CheckDeliveryCoverageInput, CheckDeliveryCoverageResult } from "./messenger-coverage.server";
-import type { GetVariantLiveResult } from "./messenger-products.server";
+import type { GetVariantLiveResult } from "./agent-products.server";
 
 // Frozen attribute keys — the same keys the checkout writes and the
 // orders/create sync reads (order-delivery-metafields.server.ts).
@@ -186,7 +186,7 @@ export interface UpdateOrderStateInput {
 
 /**
  * Validation dependencies are injected by the tool layer
- * (messenger-agent-tools.server.ts) so this module has no import cycle with
+ * (agent-tools.server.ts) so this module has no import cycle with
  * it and tests can stub each validator.
  */
 export interface OrderValidationDeps {

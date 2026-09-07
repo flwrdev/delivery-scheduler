@@ -51,7 +51,9 @@ shopify.app.toml.bak.*
 .mcp.json
 
 # Per-repo isolated browser profiles (chrome-devtools + playwright MCP)
-# Defined in .mcp.json via --userDataDir/--user-data-dir ${CLAUDE_PROJECT_DIR}/.browser/.
+# Defined in .mcp.json via --userDataDir/--user-data-dir sa ABSOLUTE path.
+# Huwag doon gumamit ng ${CLAUDE_PROJECT_DIR}: hindi ito ine-expand, literal na
+# folder ang nagagawa at bagong logged-out na profile ang resulta.
 .browser/
 # Playwright MCP session artifacts (console logs + page snapshots)
 .playwright-mcp/

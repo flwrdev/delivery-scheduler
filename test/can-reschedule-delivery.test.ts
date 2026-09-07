@@ -50,3 +50,60 @@ describe("canRescheduleDelivery (config-driven cutoff)", () => {
     ).toBe(true);
   });
 });
+
+// 2026-09-04: the day-level cutoff alone let a 9AM-12PM booking be moved at
+// 8:47 AM on delivery day (order #4292). With the current slot supplied, the
+// gate also closes at slot start minus prepHours — the storefront's own
+// "last order" instant for that slot.
+describe("canRescheduleDelivery (slot-level allowance)", () => {
+  const JUL31_0730_MANILA = new Date("2026-07-30T23:30:00Z");
+  const JUL31_0847_MANILA = new Date("2026-07-31T00:47:00Z");
+  const JUL31_1400_MANILA = new Date("2026-07-31T06:00:00Z");
+
+  it("still allows a same-day 9AM-12PM booking before its prep window starts", () => {
+    expect(
+      canRescheduleDelivery("2026-07-31", JUL31_0730_MANILA, rules, "9AM-12PM"),
+    ).toBe(true);
+  });
+
+  it("locks a same-day 9AM-12PM booking once slot start minus prepHours has passed", () => {
+    expect(
+      canRescheduleDelivery("2026-07-31", JUL31_0847_MANILA, rules, "9AM-12PM"),
+    ).toBe(false);
+  });
+
+  it("keeps a later same-day slot movable until ITS prep window", () => {
+    expect(
+      canRescheduleDelivery("2026-07-31", JUL31_0847_MANILA, rules, "3PM-6PM"),
+    ).toBe(true);
+    expect(
+      canRescheduleDelivery("2026-07-31", JUL31_1400_MANILA, rules, "3PM-6PM"),
+    ).toBe(false);
+  });
+
+  it("does not touch next-day bookings", () => {
+    expect(
+      canRescheduleDelivery("2026-08-01", JUL31_0847_MANILA, rules, "9AM-12PM"),
+    ).toBe(true);
+  });
+
+  it("falls back to the day-level answer for an unparseable slot", () => {
+    expect(
+      canRescheduleDelivery("2026-07-31", JUL31_0847_MANILA, rules, "Anytime"),
+    ).toBe(true);
+    expect(
+      canRescheduleDelivery("2026-07-31", MANILA_AFTER_CUTOFF, rules, "Anytime"),
+    ).toBe(false);
+  });
+
+  it("scales the allowance with the shop's prepHours", () => {
+    const longerPrep = { ...rules, prepHours: 2 };
+    expect(
+      canRescheduleDelivery("2026-07-31", JUL31_0730_MANILA, longerPrep, "9AM-12PM"),
+    ).toBe(false);
+  });
+
+  it("behaves exactly as before when no slot is supplied", () => {
+    expect(canRescheduleDelivery("2026-07-31", JUL31_0847_MANILA, rules)).toBe(true);
+  });
+});
