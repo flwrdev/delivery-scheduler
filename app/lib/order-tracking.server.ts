@@ -45,12 +45,27 @@ export function normalizePhone(raw: string): string {
   return digits.startsWith("63") ? "0" + digits.slice(2) : digits;
 }
 
-function contactMatches(order: any, contact: string): boolean {
+type OrderNode = {
+  name: string;
+  email: string | null;
+  phone: string | null;
+  cancelledAt: string | null;
+  displayFinancialStatus: string;
+  displayFulfillmentStatus: string;
+  customAttributes: { key: string; value: string }[];
+  shippingAddress: { phone: string | null } | null;
+  fulfillments: { status: string; displayStatus: string; trackingInfo: { url: string | null }[] }[];
+  lineItems: { nodes: { title: string; quantity: number }[] };
+};
+
+function contactMatches(order: OrderNode, contact: string): boolean {
   const c = contact.trim().toLowerCase();
   if (c.includes("@")) return (order.email ?? "").toLowerCase() === c;
   const want = normalizePhone(c);
   if (want.length < 10) return false;
-  const candidates = [order.phone, order.shippingAddress?.phone].filter(Boolean).map(normalizePhone);
+  const candidates = [order.phone, order.shippingAddress?.phone]
+    .filter((p): p is string => Boolean(p))
+    .map(normalizePhone);
   return candidates.some((p) => p.endsWith(want) || want.endsWith(p));
 }
 
@@ -61,18 +76,18 @@ export async function lookupOrder(
   today: string,
 ): Promise<TrackingResult> {
   const res = await graphql(ORDER_QUERY, { variables: { q: `name:${orderNumber}` } });
-  const json = await res.json();
+  const json = (await res.json()) as { data?: { orders?: { nodes?: OrderNode[] } } };
   const order = json?.data?.orders?.nodes?.[0];
   if (!order || !contactMatches(order, contact)) return { found: false };
 
-  const attr = (k: string) => order.customAttributes?.find((a: any) => a.key === k)?.value ?? null;
+  const attr = (k: string) => order.customAttributes?.find((a) => a.key === k)?.value ?? null;
   const deliveryDate = attr("Delivery Date");
   const deliveryTime = attr("Delivery Time");
-  const items = order.lineItems.nodes.map((li: any) => (li.quantity > 1 ? `${li.title} x${li.quantity}` : li.title));
+  const items = order.lineItems.nodes.map((li) => (li.quantity > 1 ? `${li.title} x${li.quantity}` : li.title));
 
-  const active = order.fulfillments.filter((f: any) => f.status !== "CANCELLED");
+  const active = order.fulfillments.filter((f) => f.status !== "CANCELLED");
   const latest = active[active.length - 1];
-  const trackingUrl = latest?.trackingInfo?.find((t: any) => t.url)?.url ?? null;
+  const trackingUrl = latest?.trackingInfo?.find((t) => t.url)?.url ?? null;
   const when = [deliveryDate, deliveryTime].filter(Boolean).join(", ");
 
   let stage: Extract<TrackingResult, { found: true }>["stage"];
