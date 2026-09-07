@@ -279,6 +279,20 @@ This deliberately does **not** touch dispatch: the merchant keeps booking every 
 
 The webhook route (`webhooks.lalamove-tracking.ts`) stays wired; it costs nothing to keep and might someday receive something. But the team deleted the `ORDER_CREATED` handling and the phone-matching machinery (`matchAndRecordLalamoveOrder`, `normalizePhoneForMatch`, `findUndeliveredFulfilledOrderByPhone`) from `lalamove-tracking.server.ts` entirely, along with their unit tests, rather than leaving them as dead code. The `internal.lalamove-poll.ts` fallback poller is unchanged in implementation but is now the **primary** mechanism, not a safety net for a working webhook. It is wired to a Google Cloud Scheduler job (`delivery-scheduler-lalamove-poll`, every 30 minutes, HTTP POST with the `x-lalamove-poll-secret` header) created the same day.
 
+---
+
+## ADR-17: Bouquet Photo upload (Mark Fulfilled) removed from scope
+
+**Source:** [orders-ops-v2-audit.md §F](./orders-ops-v2-audit.md) standalone audit (2026-07-12); verification-log.md 2026-07-12 entries.
+
+**Context:** A bouquet-photo upload pipeline (client-validated file → staged upload → Shopify Files → CDN URL written to the `custom.bouquet_photo` order metafield) shipped pre-V2 alongside Mark Fulfilled (`f154c2d`, 2026-06-02). A standalone audit found it incomplete: no success/failure feedback, a `fileCreate` async-processing race, metafield writes even on failed fulfillments plus one-photo-stamps-all bulk semantics, and zero consumers of the stored photo. A same-day completion attempt added a conditional "View bouquet photo" link to the Shipping confirmation email, but it failed its live test: Shopify notification-template Liquid resolves order metafields to raw values in that context, so the link's `.value` access was nil and the link never rendered — the app's write path itself was verified correct end-to-end.
+
+**Decision:** Rather than depend on Shopify notification-template Liquid semantics while that limitation is unresolved, the merchant descoped the feature entirely. The team deleted the whole pipeline: `uploadBouquetPhoto`, the `stagedUploadsCreate`/`fileCreate`/status GraphQL documents, the `custom.bouquet_photo` `orderUpdate` write, the modal's photo input/preview/helper text, the single-order restriction, the `photo` response field and its toasts, and the corresponding smoke-test item. Mark Fulfilled is tracking-fields-and-notify only.
+
+**Consequence:** Dev-store residue is harmless and was left as-is: test uploads remain under Admin → Content → Files, and some test orders keep a stale `custom.bouquet_photo` metafield that nothing reads. Any bouquet Liquid snippet pasted into the Shipping confirmation template should be removed by the merchant. The feature may return as a separate future enhancement once there are clear product requirements and a proven architecture for surfacing the photo to the customer; a revival should start from these findings.
+
+**Status:** Accepted; removed 2026-07-12.
+
 **Consequence of the pivot:** trades full automation for one extra manual step per delivery (pasting the Order ID). The merchant already visits both Shopify (to fulfill) and the Lalamove app (to get the tracking link for the customer), so this is one more field in an already-open modal, not a new surface to visit.
 
 **`recipientPhone` removed (2026-08-16, same-day follow-up).** The team originally kept it on `LalamoveTracking` "for audit/display purposes only" after deleting the phone-matching logic that used it, but nothing ever actually read it (no route/loader/UI), so it was write-only customer PII with no consumer. Dropped via migration `20260816010000_drop_lalamove_tracking_recipient_phone`; `recordLalamoveOrderId()` no longer reads the drop-off stop's phone from the Lalamove order at all.
