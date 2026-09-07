@@ -32,3 +32,8 @@ automatically_update_urls_on_dev = true
 
 [sidekick]
 extensions_summary = "Delivery Scheduler owns delivery dates, time slots, per-date capacity, blocked dates and reschedules. Data tools answer: an order's delivery date/slot/reschedule status, booked counts vs capacity per date, and the schedule config (cutoff, prep time, slots). Actions open the app where changes are made by hand: an order's delivery panel to reschedule it, or the scheduler on a date to edit capacity/blocked slots. All tools are read-only; actions only navigate."
+
+[app_proxy]
+url = "https://delivery-scheduler-tiqsag3epa-uc.a.run.app/proxy"
+subpath = "track"
+prefix = "apps"
