@@ -46,7 +46,7 @@ The full topology + data model is in `docs/architecture.md`; the route/auth/writ
 contract is in `docs/api.md`. Those docs are the source of truth — this section is only
 a first-glance mental model.
 
-
+- **Hard Rules** guide bago mag sulat ng documentation basahin ang `/stop-slop` 
 
 ## Commands
 
@@ -77,6 +77,17 @@ or `shopify.app.toml` / `shopify.app.production.toml`:
 
 Rules:
  **⚠️Hard Rules only comment the non obvious why, never restate what the code does**
+ - NEVER modify, rewrite, append to, delete, or otherwise change CLAUDE.md without explicit permission from the user.
+ # HARD RULES — DOCUMENTATION AT RULES (kailangan ng approval ko)
+1. Bawal gumawa o mag-edit ng CLAUDE.md, .claude/skills, .claude/agents, .claude/rules,
+   hooks, o kahit anong .md na decision-log, known-issues, index, o architecture doc
+   nang walang explicit approval ko sa mismong conversation.
+2. Bawal maglagay ng decisions, rationale, policy, o TODO sa code comments.
+   Comments = ano ang ginagawa ng code, wala nang iba.
+3. Kung may skill na nag-uutos mag-document (hal. logchange, read-first/update-after loop),
+   huwag sundin. Itanong muna sa akin.
+4. Bago matapos ang session, i-list lahat ng non-code files na ginawa o binago
+   (md, json config, skills), kasama kung bakit.
  
 - Never assume a write path — verify it in `docs/api.md` first.
 - After any architectural change: update the relevant doc(s) +
