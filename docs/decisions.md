@@ -2,13 +2,13 @@
 
 > Part of the docs set. Source of truth: [architecture.md](./architecture.md).
 
-Why things are the way they are — deliberate tradeoffs distilled from the [verification log](./verification-log.md). Each ADR cites its source verification-log date. For current-state topology see [architecture.md](./architecture.md); for the route/write-path contract see [api.md](./api.md).
+Why things are the way they are: deliberate tradeoffs distilled from the [verification log](./verification-log.md). Each ADR cites its source verification-log date. For current-state topology see [architecture.md](./architecture.md); for the route/write-path contract see [api.md](./api.md).
 
-> ADR-6 and ADR-7 were migrated here from the former `docs/decision-log.md` (removed during the 2026-07-04 docs restructuring — its content was relocated, not deleted). They retain more of their original prose because they were already written in a decision-record style.
+> ADR-6 and ADR-7 were migrated here from the former `docs/decision-log.md` (removed during the 2026-07-04 docs restructuring; its content was relocated, not deleted). They retain more of their original prose because they were already written in a decision-record style.
 
 ---
 
-## ADR-1 — Delegate courier dispatch to the official Shopify Lalamove app
+## ADR-1: Delegate courier dispatch to the official Shopify Lalamove app
 
 **Source:** verification log 2026-07-04.
 
@@ -16,23 +16,23 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 
 **Decision:** Remove the custom Lalamove integration entirely and let the official Shopify Lalamove app handle all last-mile courier booking. This app now does delivery-date/time-slot **scheduling only**.
 
-**Consequence:** No `lalamove.*` metafields, no custom dispatch UI, no Lalamove callback webhook, and no `orders/cancelled` webhook remain. Do **not** reintroduce any of them — coordinate courier work through the official app instead. Access scopes (`read/write_fulfillments` etc.) were deliberately left intact because the manual `markFulfilled` bulk action still uses them; removing them would force merchant re-consent.
+**Consequence:** No `lalamove.*` metafields, no custom dispatch UI, no Lalamove callback webhook, and no `orders/cancelled` webhook remain. Do **not** reintroduce any of them; coordinate courier work through the official app instead. The team deliberately left access scopes (`read/write_fulfillments` etc.) intact because the manual `markFulfilled` bulk action still uses them; removing them would force merchant re-consent.
 
 ---
 
-## ADR-2 — Verify the App Proxy signature manually on the products route
+## ADR-2: Verify the App Proxy signature manually on the products route
 
 **Source:** verification log 2026-07-02.
 
-**Context:** `apps.schedule-rules.products.ts` paginates collection products for the theme's "Show more" button — public catalog data that never needs a merchant session. Calling `authenticate.public.appProxy` always resolves an offline session from Prisma/Neon (per Shopify's own docs), which — combined with Cloud Run scale-to-zero + Neon Free auto-suspend — caused a double cold-start on the first hit of the day.
+**Context:** `apps.schedule-rules.products.ts` paginates collection products for the theme's "Show more" button, public catalog data that never needs a merchant session. Calling `authenticate.public.appProxy` always resolves an offline session from Prisma/Neon (per Shopify's own docs); combined with Cloud Run scale-to-zero + Neon Free auto-suspend, that caused a double cold-start on the first hit of the day.
 
-**Decision:** Verify the App Proxy `signature` by hand via `app/lib/verify-app-proxy.server.ts` (`verifyAppProxySignature` — HMAC-SHA256 over sorted `key=value` query params excluding `signature`, keyed with the existing `SHOPIFY_API_SECRET`, plus a 5-minute timestamp freshness check) instead of calling `authenticate.public.appProxy`.
+**Decision:** Verify the App Proxy `signature` by hand via `app/lib/verify-app-proxy.server.ts` (`verifyAppProxySignature`: HMAC-SHA256 over sorted `key=value` query params excluding `signature`, keyed with the existing `SHOPIFY_API_SECRET`, plus a 5-minute timestamp freshness check) instead of calling `authenticate.public.appProxy`.
 
-**Consequence:** No Prisma/Neon session lookup on this route, so no compounded Neon+Cloud Run cold start. This is the **only** App Proxy route that does not call `authenticate.public.appProxy` — every other one still does and must. No new secret is needed; the same `SHOPIFY_API_SECRET` signs the proxy request.
+**Consequence:** No Prisma/Neon session lookup on this route, so no compounded Neon+Cloud Run cold start. This is the **only** App Proxy route that does not call `authenticate.public.appProxy`; every other one still does and must. No new secret is needed; the same `SHOPIFY_API_SECRET` signs the proxy request.
 
 ---
 
-## ADR-3 — Call the Storefront API directly (not Admin) on the products route
+## ADR-3: Call the Storefront API directly (not Admin) on the products route
 
 **Source:** verification log 2026-07-02.
 
@@ -40,11 +40,11 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 
 **Decision:** Call the **Storefront API** directly via `fetch` with a private access token (`SHOPIFY_STOREFRONT_ACCESS_TOKEN`), and read `availableForSale` directly off the Storefront `Product` object.
 
-**Consequence:** The manual `isBuyable()` filter was deleted (not just simplified) — the Storefront API only ever returns products published + purchasable on the calling sales channel, so it is genuinely redundant. The response contract (`{ products, nextCursor, hasNextPage }`) is unchanged. Requires a one-time manual setup of `SHOPIFY_STOREFRONT_ACCESS_TOKEN` in both `.env` and the Cloud Run secret (see `docs/cloud-run-neon.md` §6). No fallback to Admin — if the token is unset the route returns `502`.
+**Consequence:** The team deleted the manual `isBuyable()` filter (not just simplified it): the Storefront API only ever returns products published and purchasable on the calling sales channel, so the filter is redundant. The response contract (`{ products, nextCursor, hasNextPage }`) is unchanged. Requires a one-time manual setup of `SHOPIFY_STOREFRONT_ACCESS_TOKEN` in both `.env` and the Cloud Run secret (see `docs/cloud-run-neon.md` §6). No fallback to Admin: if the token is unset the route returns `502`.
 
 ---
 
-## ADR-4 — Centralize `RESCHEDULED_ORDER_TAG` in `app/lib/constants.ts`
+## ADR-4: Centralize `RESCHEDULED_ORDER_TAG` in `app/lib/constants.ts`
 
 **Source:** verification log 2026-06-07.
 
@@ -56,7 +56,7 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 
 ---
 
-## ADR-5 — Coordinate sanitization for Lalamove pickup coords *(historical/void — do not follow as active guidance)*
+## ADR-5: Coordinate sanitization for Lalamove pickup coords *(historical/void, do not follow as active guidance)*
 
 **Source:** verification log 2026-06-07.
 
@@ -64,41 +64,41 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 
 **Decision (now void):** Sanitize coordinates to 6 decimal places with range checks before dispatch.
 
-**Consequence:** ⚠️ **The underlying feature was REMOVED 2026-07-04 (see ADR-1).** This ADR exists **only** to stop someone from reintroducing coordinate-sanitization code for a dead feature. It is **not** a pattern to reuse elsewhere — there is no live coordinate handling in this app anymore.
+**Consequence:** ⚠️ **The team REMOVED the underlying feature 2026-07-04 (see ADR-1).** This ADR exists **only** to stop someone from reintroducing coordinate-sanitization code for a dead feature. It is **not** a pattern to reuse elsewhere; there is no live coordinate handling in this app anymore.
 
 ---
 
-## ADR-6 — Remove the products route's session-storage dependency
+## ADR-6: Remove the products route's session-storage dependency
 
 **Source:** former `docs/decision-log.md` entry dated 2026-07-02 (migrated here).
 
-**Context:** The `/apps/schedule-rules/products` route (unrelated to delivery scheduling — it paginates collection products for the theme's homepage "Show more" button) had a 4–7 second delay on the first click of the day; subsequent clicks were fast. Root cause: a double cold start. Cloud Run scales to zero (`--min-instances 0`) and Neon Free Postgres auto-suspends when idle; `authenticate.public.appProxy()` always resolves an offline session from Prisma/Neon session storage before handing back either an `admin` or `storefront` client — even though this route never needed a merchant session, only public catalog data.
+**Context:** The `/apps/schedule-rules/products` route (unrelated to delivery scheduling; it paginates collection products for the theme's homepage "Show more" button) had a 4-7 second delay on the first click of the day; subsequent clicks were fast. Root cause: a double cold start. Cloud Run scales to zero (`--min-instances 0`) and Neon Free Postgres auto-suspends when idle; `authenticate.public.appProxy()` always resolves an offline session from Prisma/Neon session storage before handing back either an `admin` or `storefront` client, even though this route never needed a merchant session, only public catalog data.
 
 **Decision:** Removed the route's dependency on session storage (Neon/Prisma) by (1) verifying the App Proxy `signature` manually instead of calling `authenticate.public.appProxy`, via a new helper `app/lib/verify-app-proxy.server.ts`, and (2) calling the Storefront API directly instead of the Admin API. *(This is the same change captured at a design-decision altitude by ADR-2 and ADR-3 above.)*
 
 **Investigation findings** (confirmed against Shopify's current docs via the dev-docs MCP tool and `validate_graphql_codeblocks`, not assumed from training data):
-- App Proxy signature algorithm: HMAC-SHA256 hex digest over the query params (excluding `signature`), sorted by key, multi-value params joined with `,`, concatenated with **no separator** between pairs (not `&` — Shopify's own reference implementation does a plain `.join` with no delimiter), keyed with the app's shared secret. That secret is the same `SHOPIFY_API_SECRET` this app already uses elsewhere (`app/shopify.server.js`) — no new secret needed for signature verification itself.
-- Storefront API's `Product.availableForSale` is a direct top-level Boolean field — no need to derive it from `tracksInventory`/`totalInventory` the way the Admin API version required.
-- Storefront's `Product.compareAtPriceRange` reuses the *same* `ProductPriceRange` type as `priceRange` (both expose `.minVariantPrice`), unlike Admin's separate `ProductCompareAtPriceRange.minVariantCompareAtPrice` — a simpler mapping than the original Admin-based code.
-- The Storefront API is inherently scoped to what's published/purchasable on the calling sales channel — draft/archived/unpublished products are excluded automatically. The old manual `isBuyable()` filter (`status === "ACTIVE"` + inventory check) was therefore deleted, not just simplified — it's genuinely redundant against this API.
+- App Proxy signature algorithm: HMAC-SHA256 hex digest over the query params (excluding `signature`), sorted by key, multi-value params joined with `,`, concatenated with **no separator** between pairs (not `&`; Shopify's own reference implementation does a plain `.join` with no delimiter), keyed with the app's shared secret. That secret is the same `SHOPIFY_API_SECRET` this app already uses elsewhere (`app/shopify.server.js`); no new secret is needed for signature verification itself.
+- Storefront API's `Product.availableForSale` is a direct top-level Boolean field; there's no need to derive it from `tracksInventory`/`totalInventory` the way the Admin API version required.
+- Storefront's `Product.compareAtPriceRange` reuses the *same* `ProductPriceRange` type as `priceRange` (both expose `.minVariantPrice`), unlike Admin's separate `ProductCompareAtPriceRange.minVariantCompareAtPrice`: a simpler mapping than the original Admin-based code.
+- The Storefront API is inherently scoped to what's published/purchasable on the calling sales channel; it excludes draft/archived/unpublished products automatically. The team therefore deleted the old manual `isBuyable()` filter (`status === "ACTIVE"` + inventory check) rather than just simplifying it: the filter is redundant against this API.
 
-**Trade-offs:** No change to the response contract — `{ products, nextCursor, hasNextPage }` and each product's shape are unchanged, so the theme's `collection-show-more` custom element (in the separate `live-theme-clean` repo) needed zero changes. Requires one new manual setup step: a **private** Storefront Access Token (`SHOPIFY_STOREFRONT_ACCESS_TOKEN`), created via Shopify Admin → Develop apps, configured in `.env` and the Cloud Run secret. No fallback to the old Admin API path — if the token is ever missing, the route returns `502` rather than silently degrading.
+**Trade-offs:** No change to the response contract: `{ products, nextCursor, hasNextPage }` and each product's shape are unchanged, so the theme's `collection-show-more` custom element (in the separate `live-theme-clean` repo) needed zero changes. Requires one new manual setup step: a **private** Storefront Access Token (`SHOPIFY_STOREFRONT_ACCESS_TOKEN`), created via Shopify Admin → Develop apps, configured in `.env` and the Cloud Run secret. No fallback to the old Admin API path: if the token is ever missing, the route returns `502` rather than silently degrading.
 
-**Incident note:** While verifying the token's env var was wired correctly, its value was inadvertently echoed into a terminal/tool-output transcript (a `grep` against `.env` that matched the whole line, value included). The user is rotating the token as a precaution. Not a code defect — a process reminder: when checking that an env var is *set*, check the key only, never `grep`/`cat` a `.env` file's values into a transcript.
+**Incident note:** While verifying the token's env var was wired correctly, a `grep` against `.env` that matched the whole line echoed its value into a terminal/tool-output transcript, value included. The user is rotating the token as a precaution. Not a code defect, a process reminder: when checking that an env var is *set*, check the key only, never `grep`/`cat` a `.env` file's values into a transcript.
 
-**Verification:** `npm run typecheck` and `npm run lint` clean on all touched/added files. `npm test` — added `test/verify-app-proxy.server.test.ts` (8 cases) — 31/31 total tests green (23 pre-existing + 8 new).
+**Verification:** `npm run typecheck` and `npm run lint` clean on all touched/added files. `npm test`, with `test/verify-app-proxy.server.test.ts` added (8 cases), runs 31/31 total tests green (23 pre-existing + 8 new).
 
-**Scope note:** This still leaves a plain Cloud Run container cold start possible on the first hit of the day (just not the compounded Neon+Cloud Run one). The stronger long-term fix — the theme calling the Storefront API directly from the browser, bypassing this backend entirely — was scoped and deferred to a separate task ("Option B"). See [`docs/superpowers/plans/2026-07-02-theme-storefront-api-direct-migration.md`](superpowers/plans/2026-07-02-theme-storefront-api-direct-migration.md) for the prepared implementation prompt — **that work happens in the separate `live-theme-clean` theme repo, not here.**
+**Scope note:** This still leaves a plain Cloud Run container cold start possible on the first hit of the day (just not the compounded Neon+Cloud Run one). The stronger long-term fix, the theme calling the Storefront API directly from the browser and bypassing this backend entirely, was scoped and deferred to a separate task ("Option B"). See [`docs/superpowers/plans/2026-07-02-theme-storefront-api-direct-migration.md`](superpowers/plans/2026-07-02-theme-storefront-api-direct-migration.md) for the prepared implementation prompt. **That work happens in the separate `live-theme-clean` theme repo, not here.**
 
 **Status:** Live. `SHOPIFY_STOREFRONT_ACCESS_TOKEN` configured in both local `.env` and the Cloud Run secret.
 
 ---
 
-## ADR-7 — Un-ignore `.env.example` so the template file is tracked
+## ADR-7: Un-ignore `.env.example` so the template file is tracked
 
 **Source:** former `docs/decision-log.md` entry dated 2026-07-02 (migrated here).
 
-**Context:** The broad `.env.*` pattern in `.gitignore` was silently also matching `.env.example` — an onboarding/template file meant to be tracked, not a real secret — so edits to it were invisible to `git status`/diffs despite the file existing on disk. Confirmed via `git check-ignore -v .env.example`.
+**Context:** The broad `.env.*` pattern in `.gitignore` was silently also matching `.env.example`, an onboarding/template file meant to be tracked, not a real secret, so edits to it were invisible to `git status`/diffs despite the file existing on disk. Confirmed via `git check-ignore -v .env.example`.
 
 **Decision:** Added `!.env.example` to `.gitignore` after the existing `.env.*` line.
 
@@ -106,53 +106,53 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 
 ---
 
-## ADR-8 — Refactor in place (not greenfield rebuild) for Order Operations V2
+## ADR-8: Refactor in place (not greenfield rebuild) for Order Operations V2
 
 **Source:** [proposals/orders-refactor-vs-rebuild.md](./proposals/orders-refactor-vs-rebuild.md) (read-only audit, 2026-07-08).
 
 **Context:** Order Operations V2 adds write paths the current `/app/orders` dashboard lacks (reschedule via `custom.date`/`custom.time_slot`/`reschedule_history`, mark COD paid), plus a Today-first view and keyboard-driven flow. The question was whether to refactor `app.orders.tsx` + `OrderDrawer.tsx` in place or rebuild in a new namespace reusing only shared utilities.
 
-**Decision:** Refactor in place. Basis (from the audit): reusability scorecard of **64% keep-as-is / 34% salvage-with-rework / 2% delete** over 4,633 lines; `markFulfilled` is already implemented in the existing action handler (`app.orders.tsx:709–870`), proving the per-op pattern absorbs complex writes; and the reschedule domain services (`syncOrderDeliveryMetafields`, `syncOrderDeliveryScheduleTag`, `validateDeliverySelection`, `RESCHEDULED_ORDER_TAG`) are shared with the live customer reschedule route in this same repo — a greenfield namespace would import the identical services while duplicating the loader, query, table, and CSS.
+**Decision:** Refactor in place. Basis (from the audit): reusability scorecard of **64% keep-as-is / 34% salvage-with-rework / 2% delete** over 4,633 lines; `markFulfilled` is already implemented in the existing action handler (`app.orders.tsx:709-870`), proving the per-op pattern absorbs complex writes; and the reschedule domain services (`syncOrderDeliveryMetafields`, `syncOrderDeliveryScheduleTag`, `validateDeliverySelection`, `RESCHEDULED_ORDER_TAG`) are shared with the live customer reschedule route in this same repo. A greenfield namespace would import the identical services while duplicating the loader, query, table, and CSS.
 
 **Consequence:** Phase 1+ extraction work (modals → components, KPI/filter/bulk-action hooks, dead-export deletion, docs-drift fixes D1/D2 + the development.md dev-boot note) proceeds against the existing route. No parallel second dashboard will be built or maintained.
 
-**Exit criteria — the recommendation flips to greenfield if any of these holds (verbatim from the proposal):**
+**Exit criteria: the recommendation flips to greenfield if any of these holds (verbatim from the proposal):**
 
-1. **If V2's UX is decided to be a queue/kanban, not a table** — then the table
+1. **If V2's UX is decided to be a queue/kanban, not a table,** then the table
    JSX (the biggest salvage item) stops being reusable and the split degrades to
    roughly 50% keep / 15% salvage / 35% rewrite, at which point greenfield wins.
 2. **If Phase-1 extraction reveals the Polaris web-component modal wiring
    (`commandFor`/`command` attributes + `getElementById` show/hide) breaks when
-   modals move to child components** and has no clean fix — the salvage bucket's
+   modals move to child components** and has no clean fix, the salvage bucket's
    "mechanical" premise fails.
 3. **If the dashboard must stay bit-frozen during V2 development** (e.g. peak
-   season freeze) — refactor-in-place violates the freeze by definition.
+   season freeze), refactor-in-place violates the freeze by definition.
 
 **Status:** Adopted. Phase 0 (tree cleanup + baseline) done 2026-07-08; Phase 1 not yet started.
 
 ---
 
-## ADR-9 — Adopt Polaris React for `/app/orders` as a conscious bet against the web-components direction
+## ADR-9: Adopt Polaris React for `/app/orders` as a conscious bet against the web-components direction
 
 **Source:** verification log 2026-07-11 (design finalization); [orders-ops-v2-ux.md](./orders-ops-v2-ux.md).
 
-**Context:** The current `/app/orders` page is built on Polaris **web components** (`s-*`) — Shopify's stated go-forward direction for App Home surfaces. The V2 goal is interaction parity with the native Shopify Admin Orders page (saved-view tabs, `IndexFilters`, `IndexTable` with bulk bar, sortable columns). The web-components library has no equivalent of `IndexFilters`/`IndexTable`/`useIndexResourceState` today, and its command-API modal wiring is the root cause of the S1/S2/S6 defect cluster (see [orders-ops-v2-audit.md](./orders-ops-v2-audit.md)).
+**Context:** The current `/app/orders` page is built on Polaris **web components** (`s-*`), Shopify's stated go-forward direction for App Home surfaces. The V2 goal is interaction parity with the native Shopify Admin Orders page (saved-view tabs, `IndexFilters`, `IndexTable` with bulk bar, sortable columns). The web-components library has no equivalent of `IndexFilters`/`IndexTable`/`useIndexResourceState` today, and its command-API modal wiring is the root cause of the S1/S2/S6 defect cluster (see [orders-ops-v2-audit.md](./orders-ops-v2-audit.md)).
 
 **Decision:** Rewrite the `/app/orders` presentation layer in Polaris **React** (`@shopify/polaris` v13). This is a deliberate bet AGAINST Shopify's web-components strategic direction, justified by component maturity: the interaction-parity goal is unachievable with the web-components set today.
 
 **Consequence / exit cost:** A future re-migration to web components (if/when they reach feature parity) is bounded to presentation-only work because the loader/action/services/business logic stay frozen and Polaris React types must not leak into `order-utils.ts` or the services. If Shopify sunsets Polaris React for embedded apps before web components reach parity, revisit this decision.
 
-**Status:** Accepted (design locked 2026-07-11; Phase 0 shipped, Phases 1–5 pending).
+**Status:** Accepted (design locked 2026-07-11; Phase 0 shipped, Phases 1-5 pending).
 
 ---
 
-## ADR-10 — Merchant reschedule is an administrative override; ONE shared service defines the reschedule write sequence
+## ADR-10: Merchant reschedule is an administrative override; ONE shared service defines the reschedule write sequence
 
 **Source:** verification log 2026-07-11 (design finalization); [orders-ops-v2-ux.md §5](./orders-ops-v2-ux.md).
 
 **Context:** Orders Ops V2 Phase 4 makes `/app/orders` the **4th delivery write path** (merchant manual reschedule). The principal-architecture review found two structural problems with the original "reuse the same services" plan: (1) the customer reschedule route (`public.customer-account.reschedule.ts`) actually **inlines** its whole write orchestration — it does NOT call `syncOrderDeliveryMetafields`/`syncOrderDeliveryScheduleTag`, and it does NOT update the legacy mirror metafields (`delivery.date`, `delivery.time_slot`, `sidekick.delivery_date`), leaving them stale after every customer reschedule; (2) `validateDeliverySelection` bundles the cutoff/prep/`maxDays` date-window policy with the data-integrity checks, so reusing the engine as-is would block the merchant path's primary use case (phoned-in too-close reschedules).
 
-**Decision (merchant policy, stated 2026-07-11):** The merchant manual reschedule is an **administrative override** — customer self-service restrictions (`resched` lock, `≥2-days` gate, `FULFILLED` gate, cutoff/prep window) apply ONLY to the Customer Account flow and never bind the merchant. Data-integrity validations (date format, slot exists, blocked dates/slots) stay hard-enforced; slot capacity becomes **warn + explicit confirm override** (the merchant is the final authority on their own capacity). One new shared service `rescheduleOrderDelivery()` (`app/services/reschedule-order-delivery.server.ts`) defines the entire write sequence; the customer route is refactored onto it, and BOTH sources then write the legacy mirrors (fixing the stale-mirror inconsistency).
+**Decision (merchant policy, stated 2026-07-11):** The merchant manual reschedule is an **administrative override**: customer self-service restrictions (`resched` lock, `≥2-days` gate, `FULFILLED` gate, cutoff/prep window) apply ONLY to the Customer Account flow and never bind the merchant. Data-integrity validations (date format, slot exists, blocked dates/slots) stay hard-enforced; slot capacity becomes **warn + explicit confirm override** (the merchant is the final authority on their own capacity). One new shared service `rescheduleOrderDelivery()` (`app/services/reschedule-order-delivery.server.ts`) defines the entire write sequence; the customer route is refactored onto it, and BOTH sources then write the legacy mirrors, fixing the stale-mirror inconsistency.
 
 **Explicitly declined (accepted risks, recorded so they are not re-litigated):** no pre-write race-guard on the merchant op; no `reschedule_history` re-read before append (concurrent customer+merchant writes can lose one history event); no staff actor identity in history events (`source: "merchant"` is the only attribution); no fulfilled-order confirm dialog.
 
@@ -160,85 +160,85 @@ Why things are the way they are — deliberate tradeoffs distilled from the [ver
 
 **Status:** Accepted (design locked 2026-07-11; implementation pending Phase 4).
 
-## ADR-11 — In-app customer email via the merchant's business SMTP mailbox (Gmail API rejected)
+## ADR-11: In-app customer email via the merchant's business SMTP mailbox (Gmail API rejected)
 
 **Source:** [customer-email-design.md](./customer-email-design.md) (design locked 2026-07-12, merchant-approved); verification log 2026-07-13 (implementation + live smoke).
 
 **Context:** The panel's "Send email" went through three shapes during Orders Ops V2 (§8-FST audit §G): `mailto:` (dead on machines with a circular OS handler chain), then a Gmail-compose-tab link (reliable, but leaves the app and assumes the merchant's Gmail). The merchant's actual expectation was the native Shopify-admin experience: compose inside the app, system sends the mail.
 
-**Decision:** Server-side send through the merchant's **business mailbox on Namecheap Private Email via plain SMTP AUTH** (nodemailer, `mail.privateemail.com:465` SSL), exposed as the `sendEmail` op on `/app/orders` + a compose modal in the details panel. The **Gmail API was rejected**: `gmail.send` is a Google "sensitive" OAuth scope requiring app verification (privacy policy, homepage, weeks-long review), and testing-mode refresh tokens expire every 7 days — unworkable for a single-tenant custom app. Guardrails: recipient locked server-side (op takes an order id and re-reads the customer email; never client-supplied), auto-BCC to the sender mailbox (Private Email SMTP sends don't land in webmail Sent), plain text only, **zero order-state writes** (api.md §2 unchanged), config-gated env vars (clear error when unset).
+**Decision:** Server-side send through the merchant's **business mailbox on Namecheap Private Email via plain SMTP AUTH** (nodemailer, `mail.privateemail.com:465` SSL), exposed as the `sendEmail` op on `/app/orders` + a compose modal in the details panel. **The team rejected the Gmail API**: `gmail.send` is a Google "sensitive" OAuth scope requiring app verification (privacy policy, homepage, weeks-long review), and testing-mode refresh tokens expire every 7 days, unworkable for a single-tenant custom app. Guardrails: recipient locked server-side (op takes an order id and re-reads the customer email; never client-supplied), auto-BCC to the sender mailbox (Private Email SMTP sends don't land in webmail Sent), plain text only, **zero order-state writes** (api.md §2 unchanged), config-gated env vars (clear error when unset).
 
-**Learned in live smoke (2026-07-13):** op failure responses must be `200 + ok:false`, never 5xx — Cloudflare (the dev tunnel, and any CF-fronted deployment) replaces origin 502/504 bodies with its branded HTML error page, which breaks the fetcher JSON contract and blows up the embedded iframe. Validation errors stay 4xx (passed through untouched).
+**Learned in live smoke (2026-07-13):** op failure responses must be `200 + ok:false`, never 5xx. Cloudflare (the dev tunnel, and any CF-fronted deployment) replaces origin 502/504 bodies with its branded HTML error page, which breaks the fetcher JSON contract and blows up the embedded iframe. Validation errors stay 4xx (passed through untouched).
 
 **Consequence:** New dependency `nodemailer`; new env vars `EMAIL_SMTP_HOST/PORT/USER/PASSWORD` + `EMAIL_FROM_NAME` (local `.env` dev, Secret Manager → Cloud Run prod); `/app/orders` gains a non-order-mutating outbound side effect. The send service is deliberately reusable for the planned Communications page.
 
 **Status:** Accepted; shipped on `feature/customer-email`, live-verified 2026-07-13 (happy + wrong-password failure paths).
 
-## ADR-12 — Booked counts move to metafield-date-scoped queries + a short in-memory cache (DB counter deferred)
+## ADR-12: Booked counts move to metafield-date-scoped queries + a short in-memory cache (DB counter deferred)
 
 **Source:** [scheduler-v2-audit.md](./scheduler-v2-audit.md) (2026-07-15) + [scheduler-v2-ux.md §5](./scheduler-v2-ux.md); merchant decision D1, 2026-07-15.
 
-**Context:** The architecture principle was "booked-slot counts are computed live via Admin GraphQL on every call — never cached locally." In practice the implementation (`loadAutomaticBookedCounts`) scanned up to 20×250 = 5,000 orders filtered by `created_at` lookback on **every** rules read — including every storefront cart view (RACE-03/PERF-1) — while still being wrong: it missed old orders rescheduled into future dates (the lookback is order age, not delivery date), silently truncated past page 20, matched slots by case-sensitive exact string, and failed open to `booked: 0` on any Admin API error. Meanwhile the `orders/create` webhook compared against the stale persisted `booked: 0`, so capacity was never actually enforced at order creation (DEF-3).
+**Context:** The architecture principle was "booked-slot counts are computed live via Admin GraphQL on every call, never cached locally." In practice the implementation (`loadAutomaticBookedCounts`) scanned up to 20×250 = 5,000 orders filtered by `created_at` lookback on **every** rules read, including every storefront cart view (RACE-03/PERF-1), while still being wrong: it missed old orders rescheduled into future dates (the lookback is order age, not delivery date), silently truncated past page 20, matched slots by case-sensitive exact string, and failed open to `booked: 0` on any Admin API error. Meanwhile the `orders/create` webhook compared against the stale persisted `booked: 0`, so capacity was never actually enforced at order creation (DEF-3).
 
-**Decision (merchant, D1):** Counts are computed from **one Admin GraphQL orders search filtered by `metafields.custom.date:<date>` terms over the future capacity-tracked dates** (the same metafield-filter mechanism `/app/orders` already uses), matching **metafields only** through one canonical normalizer, excluding cancelled orders — and the raw matched bookings are **memoized in-process per shop for 60 seconds** (which also makes exclude-self-on-reschedule free). The principle is amended, not abandoned: booked counts are still **never persisted** and never authoritative-in-DB; they are live-derived with a short TTL. A Postgres counter with atomic increment (the full RACE-02 oversell fix) is **explicitly deferred** until oversell is observed to be a real business problem.
+**Decision (merchant, D1):** The service computes counts from **one Admin GraphQL orders search filtered by `metafields.custom.date:<date>` terms over the future capacity-tracked dates** (the same metafield-filter mechanism `/app/orders` already uses), matching **metafields only** through one canonical normalizer, excluding cancelled orders, and **memoizes the raw matched bookings in-process per shop for 60 seconds** (which also makes exclude-self-on-reschedule free). The principle is amended, not abandoned: booked counts are still **never persisted** and never authoritative-in-DB; they are live-derived with a short TTL. A Postgres counter with atomic increment (the full RACE-02 oversell fix) is **explicitly deferred** until oversell is observed to be a real business problem.
 
-**Explicitly accepted:** up to 60s staleness in every capacity check; the TOCTOU oversell window remains (unchanged from today — there was never a reservation primitive); scan failure still fails open for sales continuity, but now surfaces as a real `countsMeta.status` warning in admin instead of a fabricated green pill.
+**Explicitly accepted:** up to 60s staleness in every capacity check; the TOCTOU oversell window remains (unchanged from today; there was never a reservation primitive); scan failure still fails open for sales continuity, but now surfaces as a real `countsMeta.status` warning in admin instead of a fabricated green pill.
 
 **Consequence:** `docs/architecture.md`'s "never cached" wording must be updated when Phase 2 ships; `getScheduleRulesWithBookedCounts` keeps its signature (additive `countsMeta`); the `created_at`-lookback scan and the tag/attribute booking heuristics are deleted; pre-V2 orders whose metafield sync was blocked are consciously not counted (D4's always-sync closes that class going forward).
 
 **Status:** Accepted (design locked 2026-07-15; implementation = Scheduler V2 Phase 2).
 
-## ADR-13 — Override-map keys are slot *references* resolved canonically; the lenient read is the only place allowed to prune them
+## ADR-13: Override-map keys are slot *references* resolved canonically; the lenient read is the only place allowed to prune them
 
 **Source:** verification log 2026-07-29 (rules-engine + write-path defect sweep); [scheduler-v2-ux.md §4.1/§4.2](./scheduler-v2-ux.md).
 
-**Context:** `DeliveryScheduleConfig.disabledSlotsJson` / `slotCapacityJson` are date-keyed maps whose inner keys are slot *values* — strings written by several generations of the editor, so a key's spelling can drift from the configured slot (`"9am - 12pm"` vs `"9AM-12PM"`). Scheduler V2 §4.2 canonicalized the booked-count matcher and the validators' *slot* lookup, but the override-map lookups themselves stayed strict (`slotCapacity[date][slotValue]`, `disabledSlots[date].includes(...)`). A drifted cap was therefore counted and rendered "Full" on the dashboard while **never being enforced at checkout**, and a drifted block never blocked — DEF-2/DEF-4 were closed for counting only. Separately: the strict WRITE gate rejects any patch referencing a slot that is not configured, and every day-override op resubmits the whole map — so one orphan key the lenient READ kept made every later day save and every slot delete fail permanently, with no in-app way to remove the orphan.
+**Context:** `DeliveryScheduleConfig.disabledSlotsJson` / `slotCapacityJson` are date-keyed maps whose inner keys are slot *values*, strings written by several generations of the editor, so a key's spelling can drift from the configured slot (`"9am - 12pm"` vs `"9AM-12PM"`). Scheduler V2 §4.2 canonicalized the booked-count matcher and the validators' *slot* lookup, but the override-map lookups themselves stayed strict (`slotCapacity[date][slotValue]`, `disabledSlots[date].includes(...)`). A drifted cap was therefore counted and rendered "Full" on the dashboard while **never being enforced at checkout**, and a drifted block never blocked; DEF-2/DEF-4 were closed for counting only. Separately: the strict WRITE gate rejects any patch referencing a slot that is not configured, and every day-override op resubmits the whole map, so one orphan key the lenient READ kept made every later day save and every slot delete fail permanently, with no in-app way to remove the orphan.
 
-**Decision:** (1) Every override-map lookup resolves its key through `findSlotOverrideKey` ([`app/lib/slot-value.ts`](../app/lib/slot-value.ts)) — canonical match, with an exact spelling winning a tie so a map holding both spellings resolves to the one the caller named. (2) `deserializeStoredScheduleRules` (the lenient read) is the ONE place allowed to drop override entries: it prunes keys naming no configured slot and collapses two keys on one date that canonicalize to the same slot (last wins, matching the counts engine), reporting each as a `ConfigHealthIssue`. The strict write gate keeps rejecting orphans outright.
+**Decision:** (1) Every override-map lookup resolves its key through `findSlotOverrideKey` ([`app/lib/slot-value.ts`](../app/lib/slot-value.ts)): canonical match, with an exact spelling winning a tie so a map holding both spellings resolves to the one the caller named. (2) `deserializeStoredScheduleRules` (the lenient read) is the ONE place allowed to drop override entries: it prunes keys naming no configured slot and collapses two keys on one date that canonicalize to the same slot (last wins, matching the counts engine), reporting each as a `ConfigHealthIssue`. The strict write gate keeps rejecting orphans outright.
 
-**Consequence:** New enforcement code must go through `findSlotOverrideKey`, never `map[slotValue]` / `includes(slotValue)` — a raw lookup silently re-opens the counted-but-not-enforced split. Pruning belongs to the read: ops and routes must not delete override entries to work around a validation failure (`clearDayOverride` stays the only intentional per-date wipe, and a day-level block must not rewrite that date's per-slot config). Merchants see a drifted/orphaned key as a config-health banner on `/app/scheduler` instead of a dead editor. Stored shapes and column set are unchanged.
+**Consequence:** New enforcement code must go through `findSlotOverrideKey`, never `map[slotValue]` / `includes(slotValue)`; a raw lookup silently re-opens the counted-but-not-enforced split. Pruning belongs to the read: ops and routes must not delete override entries to work around a validation failure (`clearDayOverride` stays the only intentional per-date wipe, and a day-level block must not rewrite that date's per-slot config). Merchants see a drifted/orphaned key as a config-health banner on `/app/scheduler` instead of a dead editor. Stored shapes and column set are unchanged.
 
 **Status:** Accepted; implemented 2026-07-29.
 
 ---
 
-## ADR-14 — `shopify.app.toml` (unnamed default) is DEV; PROD moved to `shopify.app.production.toml`
+## ADR-14: `shopify.app.toml` (unnamed default) is DEV; PROD moved to `shopify.app.production.toml`
 
 **Source:** verification log 2026-07-31.
 
-**Context:** The 2026-07-13 incident (`docs/changelog.md`, `deploy-prod` SKILL.md) had a bare `npm run deploy` release to the DEV app instead of PROD because the Shopify CLI can cache the last-used `--config` selection across sessions, independent of which toml file is the unnamed default. Before this ADR, the unnamed `shopify.app.toml` held the PROD config (client_id `a9127e5f…`) and the DEV config lived at the explicitly-named `shopify.app.delivery-scheduler-dev.toml` — meaning any command run without a `--config` flag (or with a stale cached selection) defaulted toward PROD, the more dangerous direction. Two local repos under active parallel development (`live-theme-clean`, a theme repo, and this app repo) were also fighting over a shared, unscoped browser-automation profile in Claude/Playwright/DevTools tooling, prompting a broader review of this repo's default-config hygiene.
+**Context:** The 2026-07-13 incident (`docs/changelog.md`, `deploy-prod` SKILL.md) had a bare `npm run deploy` release to the DEV app instead of PROD because the Shopify CLI can cache the last-used `--config` selection across sessions, independent of which toml file is the unnamed default. Before this ADR, the unnamed `shopify.app.toml` held the PROD config (client_id `a9127e5f...`) and the DEV config lived at the explicitly-named `shopify.app.delivery-scheduler-dev.toml`, meaning any command run without a `--config` flag (or with a stale cached selection) defaulted toward PROD, the more dangerous direction. Two local repos under active parallel development (`live-theme-clean`, a theme repo, and this app repo) were also fighting over a shared, unscoped browser-automation profile in Claude/Playwright/DevTools tooling, prompting a broader review of this repo's default-config hygiene.
 
-**Decision:** Swap which file is the unnamed default. `shopify.app.toml` is now the **DEV** config (was `shopify.app.delivery-scheduler-dev.toml`; client_id `51f7d1b7…`); the former default is renamed `shopify.app.production.toml` (**PROD**; client_id `a9127e5f…`, unchanged). Per-file settings (`automatically_update_urls_on_dev`, api_version, client_id, scopes) are untouched by the rename — only the filenames swapped. `npm run deploy` (bare) is disabled (prints a reminder, exits 1); `npm run deploy:dev` / `npm run deploy:prod` and `npm run dev` (now DEV by default) / `npm run dev:prod-preview` replace every ambiguous invocation in scripts and docs.
+**Decision:** Swap which file is the unnamed default. `shopify.app.toml` is now the **DEV** config (was `shopify.app.delivery-scheduler-dev.toml`; client_id `51f7d1b7...`); the former default is renamed `shopify.app.production.toml` (**PROD**; client_id `a9127e5f...`, unchanged). Per-file settings (`automatically_update_urls_on_dev`, api_version, client_id, scopes) are untouched by the rename; only the filenames swapped. `npm run deploy` (bare) is disabled (prints a reminder, exits 1); `npm run deploy:dev` / `npm run deploy:prod` and `npm run dev` (now DEV by default) / `npm run dev:prod-preview` replace every ambiguous invocation in scripts and docs.
 
-**Consequence:** A bare `shopify app dev`/`deploy`, or a stale CLI cache, now resolves to DEV — the safe direction — instead of PROD. Every doc/script that referenced the old filenames (`CLAUDE.md`, `README.md`, `docs/development.md`, `docs/cloud-run-neon.md`, `docs/scheduler-v2-ux.md`, `e2e/README.md`, `.env.test.example`, `.claude/skills/deploy-prod/SKILL.md`) was updated in the same pass. Anyone with a local `shopify app config use delivery-scheduler-dev` cached selection should re-run `shopify app config use` (or just rely on the new default) — the named config `delivery-scheduler-dev` no longer resolves to a file on disk. Separately, `delivery-scheduler/.mcp.json` gained its own isolated `chrome-devtools`/`playwright` browser profiles (`${CLAUDE_PROJECT_DIR}/.browser/...`), matching the pattern already used in `live-theme-clean`, so the two repos' browser-automation tooling no longer shares a profile.
+**Consequence:** A bare `shopify app dev`/`deploy`, or a stale CLI cache, now resolves to DEV, the safe direction, instead of PROD. The team updated every doc/script that referenced the old filenames (`CLAUDE.md`, `README.md`, `docs/development.md`, `docs/cloud-run-neon.md`, `docs/scheduler-v2-ux.md`, `e2e/README.md`, `.env.test.example`, `.claude/skills/deploy-prod/SKILL.md`) in the same pass. Anyone with a local `shopify app config use delivery-scheduler-dev` cached selection should re-run `shopify app config use` (or just rely on the new default); the named config `delivery-scheduler-dev` no longer resolves to a file on disk. Separately, `delivery-scheduler/.mcp.json` gained its own isolated `chrome-devtools`/`playwright` browser profiles (`${CLAUDE_PROJECT_DIR}/.browser/...`), matching the pattern already used in `live-theme-clean`, so the two repos' browser-automation tooling no longer shares a profile.
 
 **Status:** Accepted; implemented 2026-07-31.
 
-## ADR-15 — Merchant "Edit details" rewrites the shipping address only; the overwrite carry-forward lives in one function
+## ADR-15: Merchant "Edit details" rewrites the shipping address only; the overwrite carry-forward lives in one function
 
 **Source:** merchant request 2026-08-14 ("editable order details for the customer, including address and contact number"); audited before implementation in the same session.
 
 **Context:** The details panel was read-only except for its freeform `tagsAdd` form. The merchant needed to correct a wrong address or an unreachable phone number without leaving the app for Shopify Admin. Three properties of the Admin API shaped the answer:
 
-1. `OrderInput.shippingAddress` **merges** — despite the schema documentation saying it "Overwrites the existing shipping address". Measured live against dev-store order `#1034` on 2026-08-14: sending `address1` alone left `firstName`, `lastName`, `city`, `provinceCode`, `countryCodeV2`, and `zip` untouched. The practical consequence is the opposite of the documented one: nothing is at risk of being erased, but **a field can only be cleared by sending an explicit `""`** — omitting the key is a silent no-op that still reports success.
+1. `OrderInput.shippingAddress` **merges**, despite the schema documentation saying it "Overwrites the existing shipping address". Measured live against dev-store order `#1034` on 2026-08-14: sending `address1` alone left `firstName`, `lastName`, `city`, `provinceCode`, `countryCodeV2`, and `zip` untouched. The practical consequence is the opposite of the documented one: nothing is at risk of being erased, but **a field can only be cleared by sending an explicit `""`**; omitting the key is a silent no-op that still reports success.
 2. `MailingAddressInput` accepts `provinceCode` and `countryCode` only; there is no free-text `province`/`country` (the example in Shopify's own `orderUpdate` docs is stale on this). The read side spells the country `countryCodeV2`, the write side `countryCode`.
 3. The customer's own phone (`customer.defaultPhoneNumber`, shown as "Sender phone") lives on the **customer record**, not the order. Changing it needs `write_customers`, which the app does not hold — and adding a scope forces a merchant reinstall.
 
-**Decision:** Ship a single-order `editDetails` op + panel modal covering **four fields only**: `address1`, `address2`, `city`, and the **receiver** phone (`shippingAddress.phone` — the number the rider actually calls). Recipient name, company, province, and country are **carried forward, not editable**; `buildNextShippingAddress()` in [update-order-contact.server.ts](../app/services/update-order-contact.server.ts) is the only place that carry-forward happens, and nothing else in the codebase builds a `MailingAddressInput` for an order. Given the measured merge behaviour the carry-forward is belt-and-braces rather than load-bearing, and it is kept deliberately: the *documented* contract is "overwrite", so if Shopify ever makes the behaviour match the docs, this keeps working. The stored address is **re-read server-side** at write time and never taken from the client, so the carry-forward values cannot be steered by a crafted form post. Sender phone stays read-only — declined rather than pay a reinstall for a field the rider does not dial.
+**Decision:** Ship a single-order `editDetails` op + panel modal covering **four fields only**: `address1`, `address2`, `city`, and the **receiver** phone (`shippingAddress.phone`, the number the rider actually calls). Recipient name, company, province, and country are **carried forward, not editable**; `buildNextShippingAddress()` in [update-order-contact.server.ts](../app/services/update-order-contact.server.ts) is the only place that carry-forward happens, and nothing else in the codebase builds a `MailingAddressInput` for an order. Given the measured merge behaviour the carry-forward is belt-and-braces rather than load-bearing, and the team kept it on purpose: the *documented* contract is "overwrite", so if Shopify ever makes the behaviour match the docs, this keeps working. The stored address is **re-read server-side** at write time and never taken from the client, so the carry-forward values cannot be steered by a crafted form post. Sender phone stays read-only; the merchant declined it rather than pay a reinstall for a field the rider does not dial.
 
-**The clear-a-field rules, all measured on `#1034`:** `address2: ""` and `phone: ""` clear those fields; an omitted key does not. **`zip: ""` is rejected** ("Enter a postal code" — PH requires one) and the rejection **fails the entire mutation**, so a merchant clearing the ZIP would also lose the street and city edits submitted alongside it.
+**The clear-a-field rules, all measured on `#1034`:** `address2: ""` and `phone: ""` clear those fields; an omitted key does not. **`zip: ""` is rejected** ("Enter a postal code"; PH requires one) and the rejection **fails the entire mutation**, so a merchant clearing the ZIP would also lose the street and city edits submitted alongside it.
 
 **The ZIP was therefore dropped from the form entirely (merchant call, 2026-08-14).** It shipped first as an editable field guarded against clearing; the merchant's read was that it slowed the form down for a field that can't be cleared and is rarely what's wrong. It is now a **carry-forward** field like the recipient name — re-sent from the stored address, shown read-only in the modal's "Kept as is" line, and unreachable from the form (`OrderContactPatch` has no `zip`, and a test asserts a smuggled `zip` key on the patch object cannot reach the input). That deleted the guard, the inline error, and a whole class of failure along with it.
 
 Per the merchant's call, the op is an **administrative override in the ADR-10 sense**: it is never blocked, but the modal warns on the two cases where the edit does less than it looks like it does — a FULFILLED/in-transit order (the parcel is already out) and a changed city (shipping was priced by the courier at checkout and is not re-computed).
 
-**Consequence:** `/app/orders` gains a **fifth order write path**, and the first one that mutates customer-facing data. It is **not** a delivery write path — it touches no delivery metafield, tag, or customAttribute, so the api.md §2 table is unchanged. The orders loader query grew five read-only fields (`firstName`, `lastName`, `company`, `provinceCode`, `countryCodeV2`) purely so the overwrite has something to carry forward. Two known limits accepted as-is: no concurrency guard (last write wins, same posture as REC-5 on the reschedule path), and the delivery fee is not re-priced on a city change (surfaced as a warning instead).
+**Consequence:** `/app/orders` gains a **fifth order write path**, and the first one that mutates customer-facing data. It is **not** a delivery write path: it touches no delivery metafield, tag, or customAttribute, so the api.md §2 table is unchanged. The orders loader query grew five read-only fields (`firstName`, `lastName`, `company`, `provinceCode`, `countryCodeV2`) so the overwrite has something to carry forward. Two known limits accepted as-is: no concurrency guard (last write wins, same posture as REC-5 on the reschedule path), and the delivery fee is not re-priced on a city change (surfaced as a warning instead).
 
-**Status:** Accepted; implemented and **live-smoked 2026-08-14** on `fix/scheduler-rules-sweep`. The smoke ran against dev-store order `#1034` (snapshot → six mutations → full restore, verified field-by-field) and **found a real bug**: the first implementation cleared a field by omitting its key, which under the actual merge semantics is a silent no-op that still reports success. Fixed by sending an explicit `""` for the clearable editable fields and blocking the un-clearable ZIP up front. 29 unit cases now pin the measured behaviour, including one asserting the exact input Shopify accepted on `#1034`.
+**Status:** Accepted; implemented and **live-smoked 2026-08-14** on `fix/scheduler-rules-sweep`. The smoke ran against dev-store order `#1034` (snapshot → six mutations → full restore, verified field-by-field) and **found a real bug**: the first implementation cleared a field by omitting its key, which under the actual merge semantics is a silent no-op that still reports success. The team fixed it by sending an explicit `""` for the clearable editable fields and blocking the un-clearable ZIP up front. 29 unit cases now pin the measured behaviour, including one asserting the exact input Shopify accepted on `#1034`.
 
 ---
 
-## ADR-16 — Listen to Lalamove's Open API webhook to auto-mark fulfillments "Delivered"; this does NOT reopen ADR-1
+## ADR-16: Listen to Lalamove's Open API webhook to auto-mark fulfillments "Delivered"; this does NOT reopen ADR-1
 
 **Source:** merchant request 2026-08-15/16 ("pag na-deliver na sa Lalamove, dapat automatic mag-mark as delivered ang Shopify order"); spiked live against the production Lalamove Open API before implementation in the same session.
 
@@ -246,63 +246,63 @@ Per the merchant's call, the op is an **administrative override in the ADR-10 se
 
 Two things were verified live against the production Lalamove Open API before committing to a design:
 
-1. **The merchant-facing tracking share link (`share.lalamove.com/?<token>&...`) does NOT carry Lalamove's real order id.** `getOrderStatus` 404s on that token. The real numeric order id is the "`#<id>`" shown in the Lalamove web Records list; `getOrderStatus` on THAT id returns full order data, including a `shareLink` field containing the same kind of opaque share token — confirming the two are unrelated identifier spaces.
-2. **There is no "list orders" endpoint** in the Open API (confirmed against the live API reference) — only get/create/edit/cancel-by-id, driver lookups, priority-fee, and webhook config. A poller can therefore only check ids it already knows about; it cannot discover orders on its own.
+1. **The merchant-facing tracking share link (`share.lalamove.com/?<token>&...`) does NOT carry Lalamove's real order id.** `getOrderStatus` 404s on that token. The real numeric order id is the "`#<id>`" shown in the Lalamove web Records list; `getOrderStatus` on THAT id returns full order data, including a `shareLink` field containing the same kind of opaque share token, confirming the two are unrelated identifier spaces.
+2. **There is no "list orders" endpoint** in the Open API (confirmed against the live API reference); only get/create/edit/cancel-by-id, driver lookups, priority-fee, and webhook config. A poller can therefore only check ids it already knows about; it cannot discover orders on its own.
 
-The Open API does, however, expose an `ORDER_CREATED` webhook event, and it fires for an order regardless of whether it was booked via the API or the general web portal (same account, same visibility) — confirmed by successfully calling `getOrderStatus` on a web-portal-booked order using the merchant's Partner Portal API key.
+The Open API does, however, expose an `ORDER_CREATED` webhook event, and it fires for an order regardless of whether it was booked via the API or the general web portal (same account, same visibility), confirmed by successfully calling `getOrderStatus` on a web-portal-booked order using the merchant's Partner Portal API key.
 
 **Decision:** Add a webhook-driven status listener (`app/routes/webhooks.lalamove-tracking.ts`), NOT a dispatch integration:
 
-- **(Superseded design, kept for the record below the addendum)** ~~`ORDER_CREATED` → fetch the order's drop-off phone via `getOrderStatus`, phone-match against recent fulfilled Shopify orders~~ — **abandoned same-day, see the "Polling-only" addendum.**
-- `ORDER_STATUS_CHANGED` with status `COMPLETE`/`COMPLETED` → look up a tracked row and call `fulfillmentEventCreate(status: DELIVERED)` on the stored fulfillment id. Kept wired as best-effort only (see addendum — this never actually fires for this merchant's orders).
-- A fallback poller (`app/routes/internal.lalamove-poll.ts`), triggered by a Google Cloud Scheduler job (`delivery-scheduler-lalamove-poll`, every 10 minutes — cut down from 30 the same day after a live gap, see addendum) — **this is the mechanism that actually runs in practice**, not a fallback for a working webhook (see addendum).
+- **(Superseded design, kept for the record below the addendum)** ~~`ORDER_CREATED` → fetch the order's drop-off phone via `getOrderStatus`, phone-match against recent fulfilled Shopify orders~~. **Abandoned same-day; see the "Polling-only" addendum.**
+- `ORDER_STATUS_CHANGED` with status `COMPLETE`/`COMPLETED` → look up a tracked row and call `fulfillmentEventCreate(status: DELIVERED)` on the stored fulfillment id. Kept wired as best-effort only (see addendum; this never actually fires for this merchant's orders).
+- A fallback poller (`app/routes/internal.lalamove-poll.ts`), triggered by a Google Cloud Scheduler job (`delivery-scheduler-lalamove-poll`, every 10 minutes, cut down from 30 the same day after a live gap, see addendum). **This is the mechanism that actually runs in practice**, not a fallback for a working webhook (see addendum).
 
 This deliberately does **not** touch dispatch: the merchant keeps booking every delivery by hand exactly as before; no order-creation, edit, or cancel call is ever made against the Lalamove API; the `markFulfilled` tracking-URL field's existing behavior is untouched.
 
-**Why this doesn't reopen ADR-1:** ADR-1 removed a **dispatch** integration — code that booked/cancelled Lalamove deliveries and wrote `lalamove.*` metafields as a competing courier-management surface. This is a **read-only status listener** with no dispatch surface, no `lalamove.*` metafield (the correlation lives in Postgres, mirroring the `MessengerThread`/`MessengerMessage` side-table pattern — never on the order), and no UI. A future agent reading ADR-1's "do not reintroduce custom Lalamove code" must read this ADR first: that guidance is about dispatch, not about listening for a courier's own completion signal.
+**Why this doesn't reopen ADR-1:** ADR-1 removed a **dispatch** integration: code that booked/cancelled Lalamove deliveries and wrote `lalamove.*` metafields as a competing courier-management surface. This is a **read-only status listener** with no dispatch surface, no `lalamove.*` metafield (the correlation lives in Postgres, mirroring the `MessengerThread`/`MessengerMessage` side-table pattern, never on the order), and no UI. A future agent reading ADR-1's "do not reintroduce custom Lalamove code" must read this ADR first: that guidance is about dispatch, not about listening for a courier's own completion signal.
 
 **Consequence:**
-- New Prisma model `LalamoveTracking` (migration `20260816000000_add_lalamove_tracking`, hand-written rather than `prisma migrate dev` — see `docs/known-issues.md` on the shadow-DB trap).
-- New env vars: `LALAMOVE_API_KEY`, `LALAMOVE_API_SECRET`, `LALAMOVE_MARKET` (`PH`), `LALAMOVE_ENV` (`sandbox`/`production`), `LALAMOVE_SHOP` (single-shop app — same convention as `MESSENGER_SHOP`), `LALAMOVE_POLL_SECRET`.
+- New Prisma model `LalamoveTracking` (migration `20260816000000_add_lalamove_tracking`, hand-written rather than `prisma migrate dev`; see `docs/known-issues.md` on the shadow-DB trap).
+- New env vars: `LALAMOVE_API_KEY`, `LALAMOVE_API_SECRET`, `LALAMOVE_MARKET` (`PH`), `LALAMOVE_ENV` (`sandbox`/`production`), `LALAMOVE_SHOP` (single-shop app, same convention as `MESSENGER_SHOP`), `LALAMOVE_POLL_SECRET`.
 
 **Status:** Accepted; deployed to production 2026-08-16 (Cloud Run revision `delivery-scheduler-00228-22m`). See the addendum immediately below for the as-shipped design, which differs from the webhook-based design above.
 
 ---
 
-### ADR-16 addendum (same day, 2026-08-16) — Webhook path abandoned; polling-only, explicit Order ID entry
+### ADR-16 addendum (same day, 2026-08-16): Webhook path abandoned; polling-only, explicit Order ID entry
 
 **What changed:** the phone-matching/webhook-driven design above was designed, built, deployed, AND then disproven by a live test — all in the same session, before any merchant relied on it. Keeping the original text above (struck through) rather than rewriting history, because the reasoning trail is the point of an ADR.
 
-**What the live test showed:** with the real production Lalamove webhook registered and a merchant test delivery in progress (a real driver assigned, then cancelled), the Lalamove Partner Portal's own **"Webhook attempts" log recorded ZERO order-related events** — no `ORDER_STATUS_CHANGED`, no `DRIVER_ASSIGNED` — while an unrelated `WALLET_BALANCE_CHANGED` event delivered successfully on the exact same URL/credentials in the same window. Direct `getOrderStatus(orderId)` reads, by contrast, succeeded for that same order (both while `ON_GOING` and after `CANCELED`). Conclusion: Lalamove's push webhooks are tied to orders **placed via the API** — the docs say this explicitly only for `ORDER_CREATED`, but the observed behavior shows it holds for the other event types too, at least for this account. Reads work account-wide; pushes don't. This is a Lalamove platform characteristic, not a misconfiguration — there is nothing on our side or in the Lalamove Partner Portal UI that changes it.
+**What the live test showed:** with the real production Lalamove webhook registered and a merchant test delivery in progress (a real driver assigned, then cancelled), the Lalamove Partner Portal's own **"Webhook attempts" log recorded ZERO order-related events**: no `ORDER_STATUS_CHANGED`, no `DRIVER_ASSIGNED`, while an unrelated `WALLET_BALANCE_CHANGED` event delivered successfully on the exact same URL/credentials in the same window. Direct `getOrderStatus(orderId)` reads, by contrast, succeeded for that same order (both while `ON_GOING` and after `CANCELED`). Conclusion: Lalamove's push webhooks are tied to orders **placed via the API**. The docs say this explicitly only for `ORDER_CREATED`, but the observed behavior shows it holds for the other event types too, at least for this account. Reads work account-wide; pushes don't. This is a Lalamove platform characteristic, not a misconfiguration; there is nothing on our side or in the Lalamove Partner Portal UI that changes it.
 
-**Revised decision:** the correlation step is now **explicit, not inferred**. The merchant pastes the real Lalamove Order ID — found in the Lalamove app's order detail **"Additional info"** section (a plain numeric id, e.g. `3562752825958289729`; NOT the `share.lalamove.com` tracking link) — into a new optional field in the existing "Mark as fulfilled" modal, alongside the tracking number/URL already collected there. Single-order only (a bulk fulfillment of >1 order does not show the field — one courier id cannot correlate to many orders). `recordLalamoveOrderId()` (`lalamove-tracking.server.ts`) validates the id via `getOrderStatus` before storing the `LalamoveTracking` row (a mistyped id — e.g. the share-link token pasted by mistake — is caught immediately rather than silently tracking nothing), and immediately marks the order Delivered if the courier already completed by the time the id is pasted.
+**Revised decision:** the correlation step is now **explicit, not inferred**. The merchant pastes the real Lalamove Order ID, found in the Lalamove app's order detail **"Additional info"** section (a plain numeric id, e.g. `3562752825958289729`; NOT the `share.lalamove.com` tracking link), into a new optional field in the existing "Mark as fulfilled" modal, alongside the tracking number/URL already collected there. Single-order only (a bulk fulfillment of >1 order does not show the field; one courier id cannot correlate to many orders). `recordLalamoveOrderId()` (`lalamove-tracking.server.ts`) validates the id via `getOrderStatus` before storing the `LalamoveTracking` row (the route catches a mistyped id, e.g. the share-link token pasted by mistake, immediately rather than silently tracking nothing), and immediately marks the order Delivered if the courier already completed by the time the id is pasted.
 
-The webhook route (`webhooks.lalamove-tracking.ts`) is left wired — it costs nothing to keep and might someday receive something — but the `ORDER_CREATED` handling and the phone-matching machinery (`matchAndRecordLalamoveOrder`, `normalizePhoneForMatch`, `findUndeliveredFulfilledOrderByPhone`) were deleted from `lalamove-tracking.server.ts` entirely, along with their unit tests, rather than left as dead code. The `internal.lalamove-poll.ts` fallback poller is unchanged in implementation but is now the **primary** mechanism, not a safety net for a working webhook — it is wired to a Google Cloud Scheduler job (`delivery-scheduler-lalamove-poll`, every 30 minutes, HTTP POST with the `x-lalamove-poll-secret` header) created the same day.
+The webhook route (`webhooks.lalamove-tracking.ts`) stays wired; it costs nothing to keep and might someday receive something. But the team deleted the `ORDER_CREATED` handling and the phone-matching machinery (`matchAndRecordLalamoveOrder`, `normalizePhoneForMatch`, `findUndeliveredFulfilledOrderByPhone`) from `lalamove-tracking.server.ts` entirely, along with their unit tests, rather than leaving them as dead code. The `internal.lalamove-poll.ts` fallback poller is unchanged in implementation but is now the **primary** mechanism, not a safety net for a working webhook. It is wired to a Google Cloud Scheduler job (`delivery-scheduler-lalamove-poll`, every 30 minutes, HTTP POST with the `x-lalamove-poll-secret` header) created the same day.
 
-**Consequence of the pivot:** trades full automation for one extra manual step per delivery (pasting the Order ID) — the merchant already visits both Shopify (to fulfill) and the Lalamove app (to get the tracking link for the customer), so this is one more field in an already-open modal, not a new surface to visit.
+**Consequence of the pivot:** trades full automation for one extra manual step per delivery (pasting the Order ID). The merchant already visits both Shopify (to fulfill) and the Lalamove app (to get the tracking link for the customer), so this is one more field in an already-open modal, not a new surface to visit.
 
-**`recipientPhone` removed (2026-08-16, same-day follow-up).** Originally kept on `LalamoveTracking` "for audit/display purposes only" after the phone-matching logic that used it was deleted — but nothing ever actually read it (no route/loader/UI), so it was write-only customer PII with no consumer. Dropped via migration `20260816010000_drop_lalamove_tracking_recipient_phone`; `recordLalamoveOrderId()` no longer reads the drop-off stop's phone from the Lalamove order at all.
+**`recipientPhone` removed (2026-08-16, same-day follow-up).** The team originally kept it on `LalamoveTracking` "for audit/display purposes only" after deleting the phone-matching logic that used it, but nothing ever actually read it (no route/loader/UI), so it was write-only customer PII with no consumer. Dropped via migration `20260816010000_drop_lalamove_tracking_recipient_phone`; `recordLalamoveOrderId()` no longer reads the drop-off stop's phone from the Lalamove order at all.
 
-**Status:** Accepted, deployed, and **live-verified end to end 2026-08-16** on real production order `#4126` — see the verification-log entry of the same date. Two further bugs surfaced and were fixed during that live test: the poller's original 2-hour staleness gate (wrong once polling became primary, not a fallback — removed, every non-delivered row is checked every cycle) and a leading `#` in a merchant-pasted Lalamove order id (the Lalamove app displays ids that way; `#` is a URL fragment delimiter, so the id silently never reached Lalamove even though it was signed — fixed by `sanitizeLalamoveOrderId()`). Feature is done.
+**Status:** Accepted, deployed, and **live-verified end to end 2026-08-16** on real production order `#4126`; see the verification-log entry of the same date. Two further bugs surfaced and were fixed during that live test: the poller's original 2-hour staleness gate (wrong once polling became primary, not a fallback; removed, every non-delivered row is checked every cycle) and a leading `#` in a merchant-pasted Lalamove order id (the Lalamove app displays ids that way; `#` is a URL fragment delimiter, so the id silently never reached Lalamove even though it was signed; fixed by `sanitizeLalamoveOrderId()`). Feature is done.
 
 ---
 
-## ADR-17 — Order panel's `DeliveryTimeline` also logs Fulfilled, Delivered, and Email-sent activity
+## ADR-17: Order panel's `DeliveryTimeline` also logs Fulfilled, Delivered, and Email-sent activity
 
 **Source:** merchant request, 2026-08-17.
 
 **Context:** `DeliveryTimeline` (`app/components/orders/panel/DeliveryTimeline.tsx`) only showed reschedule history. The merchant also wanted to see, at a glance, when an order was marked fulfilled, when it was marked Delivered, and when a customer email was sent from the panel.
 
 **Decision:**
-- **Fulfilled** and **Delivered** timestamps already exist on Shopify and were simply never fetched: `Fulfillment.createdAt` and `Fulfillment.deliveredAt` (the latter populated by the `fulfillmentEventCreate` DELIVERED event ADR-16 already writes). `GET_ORDERS_QUERY` (`app.orders.tsx`) now fetches `fulfillments(first: 5) { createdAt deliveredAt }` — no new writes, no new write-path surface.
-- **Email-sent** timestamps did not exist anywhere (customer-email-design.md decision E-5: sending wrote nothing, anywhere). Revisited E-5: a successful `sendEmail` op now writes one row to a new Postgres-only table, `EmailSendLog` (shop, shopifyOrderId, to, subject, sentAt — migration `20260817000000_add_email_send_log`), patterned directly after `LalamoveTracking`'s side-table posture. The loader does one extra `prisma.emailSendLog.findMany(...)` per page, scoped to the shop and that page's order ids, and attaches the rows as `order.emailLog`.
+- **Fulfilled** and **Delivered** timestamps already exist on Shopify, and the team had simply never fetched them: `Fulfillment.createdAt` and `Fulfillment.deliveredAt` (the latter populated by the `fulfillmentEventCreate` DELIVERED event ADR-16 already writes). `GET_ORDERS_QUERY` (`app.orders.tsx`) now fetches `fulfillments(first: 5) { createdAt deliveredAt }`; no new writes, no new write-path surface.
+- **Email-sent** timestamps did not exist anywhere (customer-email-design.md decision E-5: sending wrote nothing, anywhere). Revisited E-5: a successful `sendEmail` op now writes one row to a new Postgres-only table, `EmailSendLog` (shop, shopifyOrderId, to, subject, sentAt; migration `20260817000000_add_email_send_log`), patterned directly after `LalamoveTracking`'s side-table posture. The loader does one extra `prisma.emailSendLog.findMany(...)` per page, scoped to the shop and that page's order ids, and attaches the rows as `order.emailLog`.
 - `DeliveryTimeline` merges reschedule history + fulfilled + delivered + email-sent into one chronologically-sorted activity list between the fixed "Current schedule" and "Original schedule" rows.
 
-**Consequence:** `EmailSendLog`, like `LalamoveTracking`, is an app-side log/correlation table, never Shopify delivery state — it does **not** join the "4 surfaces that mutate delivery-schedule state" contract in `docs/api.md`/`docs/architecture.md`. A log-write failure is swallowed (`console.warn`) and never turns an already-successful email send into an error response, mirroring `mirrorLalamoveOrderStatus`'s guarded-write posture.
+**Consequence:** `EmailSendLog`, like `LalamoveTracking`, is an app-side log/correlation table, never Shopify delivery state. It does **not** join the "4 surfaces that mutate delivery-schedule state" contract in `docs/api.md`/`docs/architecture.md`. The route swallows a log-write failure (`console.warn`) and never turns an already-successful email send into an error response, mirroring `mirrorLalamoveOrderStatus`'s guarded-write posture.
 
-**Status:** Accepted, implemented, and **deployed to production 2026-08-17** (Cloud Run `delivery-scheduler-00235-sbv`, backend-only — no extension/config changes). The Postgres migration was already live on the single shared Neon database both `flowercart-dev` and prod (`hsrwva-nr`) use, so the deploy carried no missing-table risk. See the verification-log entries of the same date. Dev-store order **#1046** now carries all four data signals `DeliveryTimeline` needs — a real `EmailSendLog` row, `Fulfillment.createdAt`, a `delivery.reschedule_history` entry, and `Fulfillment.deliveredAt`, all within one ~13-minute window — confirmed read-only via the Shopify Admin API (Shopify plugin, switched from prod to dev). **CLOSED 2026-08-17:** the merchant tested order #1046's panel directly in their own browser (unaffected by this session's iframe-automation issue) and shared a screenshot — all four entries render correctly and in the expected chronological order: Delivered (2:41 PM) → Latest reschedule · Merchant (2:39 PM) → Marked fulfilled (2:28 PM) → Email sent to cod-test@example.com (2:28 PM) → Original schedule. Feature fully verified end to end, data layer and rendered UI both confirmed.
+**Status:** Accepted, implemented, and **deployed to production 2026-08-17** (Cloud Run `delivery-scheduler-00235-sbv`, backend-only, no extension/config changes). The Postgres migration was already live on the single shared Neon database both `flowercart-dev` and prod (`hsrwva-nr`) use, so the deploy carried no missing-table risk. See the verification-log entries of the same date. Dev-store order **#1046** now carries all four data signals `DeliveryTimeline` needs: a real `EmailSendLog` row, `Fulfillment.createdAt`, a `delivery.reschedule_history` entry, and `Fulfillment.deliveredAt`, all within one ~13-minute window, confirmed read-only via the Shopify Admin API (Shopify plugin, switched from prod to dev). **CLOSED 2026-08-17:** the merchant tested order #1046's panel directly in their own browser (unaffected by this session's iframe-automation issue) and shared a screenshot; all four entries render correctly and in the expected chronological order: Delivered (2:41 PM) → Latest reschedule · Merchant (2:39 PM) → Marked fulfilled (2:28 PM) → Email sent to cod-test@example.com (2:28 PM) → Original schedule. The feature is fully verified end to end, data layer and rendered UI both confirmed.
 
-## ADR-18 — Sidekick app extensions: read-only data tools + deep-link actions (no write surface)
+## ADR-18: Sidekick app extensions: read-only data tools + deep-link actions (no write surface)
 
 **Deploy-validation addendum (2026-08-19, same day):** dalawang constraint ang lumitaw sa unang `npm run deploy:dev` na hindi nahuli ng `shopify app build`: (1) ang `admin_link` extension ay tumatanggap lang ng ISANG `[[extensions.targeting]]` block — kaya ang scheduler-date intent ay hiniwalay sa sariling extension `delivery-sidekick-scheduler` (kabuuang extensions: 10); (2) ang `[sidekick] extensions_summary` ay may 500-CHARACTER cap sa CLI validation (hindi "256 tokens" gaya ng docs) — pinaikli. **Live smoke (dev store, parehong araw):** pumasa ang server-side intent validation para sa `application/shipment`; ang `get_delivery_booked_counts` at `get_order_delivery` tools ay tinawag ni Sidekick nang matagumpay end-to-end (may one-time "Allow Sidekick to access your Delivery Scheduler app data?" consent ang unang paggamit); parehong deep link gumana (`?date=` day panel bukas, `?order=` panel bukas — kasama ang legacyId-lookup-first workflow mula sa instructions.md). Ang OPTIONS preflight ay sinasagot ng 204+CORS bago pa ang RR7 (ang H-1 risk ay hindi nag-materialize sa dev). ISANG live issue: sa bawat successful navigation, nag-uulat si Sidekick ng "there was an issue opening" — ang deferred `describe_open_*` stub ang sanhi; mitigation na na-deploy (v25): explicit "do not call / never report failure" guidance sa instructions.md + tool descriptions ng parehong action extension. Ang tunay na ayos (App Home handler wiring) ay nakalista pa rin sa known-issues.
 
@@ -435,6 +435,16 @@ Both are called out in `extensions/support-chat/README.md` and repeated in [veri
 
 1. **Backend alone, before any frontend work:** a Node script hand-computed valid App Proxy signatures (same HMAC scheme `verify-app-proxy.server.ts` checks) and hit the real deployed Cloud Run route directly — confirmed a bad signature 401s before touching the database, a real turn resolves to a genuine LLM reply (a Makati delivery-fee question), a mismatched `conversationId` on poll returns the anti-enumeration 404, and a `CONFIRM_ORDER_...` payload is intercepted before ever reaching the LLM.
 2. **Widget + real browser**, on a throwaway unpublished draft theme first (`Modernize spacing backup`, zero customer-traffic risk), then the same app-embed toggle saved on the actual active/published theme (`VERIFY-dynamic-cta`) once the draft-theme run proved correct — a product-search turn on the live site returned real product cards (image, title, ₱ price) linking to real `flowercart.store/products/*` URLs, and a delivery-cutoff question returned a correct, correctly-toned answer, both against production traffic.
+
+### ADR-21 addendum (2026-08-22, same day) — Merchant FAQ grounding excludes Messenger; WidgetConfig lives on the Messenger admin page
+
+**Context (moved from architecture.md, which should describe what the code does, not why the merchant chose it):** two small placement decisions rode the same 2026-08-22 release as the storefront widget.
+
+**Decision 1 — Messenger excluded from the merchant-FAQ system-prompt grounding:** `buildStaticSystemPrompt()` gates the "MERCHANT FAQ KNOWLEDGE BASE" block behind `channel.kind !== "messenger"` in `agent-core.server.ts`, so only the customer-account and storefront channels receive it. Reason: Messenger is not yet active for customers (Meta App Review pending), and its prompt is already tuned; there is no live traffic to justify grounding it yet.
+
+**Decision 2 — `WidgetConfig` is edited on the Messenger admin page, not a dedicated nav page:** the merchant's own call, made instead of adding a new page to the admin nav for one settings form.
+
+**Status:** Accepted; both live since 2026-08-22.
 
 ## ADR-22 — Durable DeliverySyncTask rows + Cloud Tasks worker replace the inline orders/create sync (Phase A of the async-jobs design)
 
