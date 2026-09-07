@@ -52,8 +52,7 @@ const WIDGET_PANEL_SIZES = ["compact", "standard", "large"] as const;
 const WIDGET_POSITIONS = ["left", "right"] as const;
 
 // Mirrors WIDGET_CONFIG_DEFAULTS in services/widget-config.server.ts, for
-// placeholder text only — the client bundle cannot import a .server module
-// (same constraint app.reminders.tsx documents for its template defaults).
+// placeholder text only — the client bundle cannot import a .server module.
 const WIDGET_DEFAULTS_FOR_DISPLAY = {
   greeting: "Hi! Ask us about bouquets, delivery dates, or your order status. 🌸",
   bubbleColor: "#9a6a60",
@@ -283,8 +282,7 @@ export const action = async ({ request }: { request: Request }) => {
 
   // Storefront chat widget settings (2026-08-23) — merchant-editable copy
   // fed to the widget via apps.schedule-rules.widget-config.ts. Blank field
-  // = null = built-in default (widget-config.server.ts), same convention as
-  // ReminderConfig's email templates.
+  // = null = built-in default (widget-config.server.ts).
   if (intent === "saveWidgetConfig") {
     const clean = (key: string, max: number): string | null | { error: string } => {
       const raw = String(form.get(key) ?? "").trim();

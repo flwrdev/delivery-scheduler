@@ -46,7 +46,6 @@ export default function App() {
   const schedulerHref = buildEmbeddedAppPath("/app/scheduler", searchParams);
   const codSettingsHref = buildEmbeddedAppPath("/app/cod-settings", searchParams);
   const messengerHref = buildEmbeddedAppPath("/app/messenger-orders", searchParams);
-  const remindersHref = buildEmbeddedAppPath("/app/reminders", searchParams);
 
   return (
     <AppProvider embedded apiKey={apiKey}>
@@ -55,7 +54,6 @@ export default function App() {
         <Link to={schedulerHref}>Delivery Scheduler</Link>
         <Link to={codSettingsHref}>COD Settings</Link>
         <Link to={messengerHref}>Messenger</Link>
-        <Link to={remindersHref}>Reminders</Link>
       </ui-nav-menu>
       <PolarisAppProvider i18n={polarisEnTranslations}>
         <Outlet />

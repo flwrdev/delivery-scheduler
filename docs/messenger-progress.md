@@ -1,36 +1,27 @@
-# FlowerCart Messenger Agent — Progress Handoff
+# FlowerCart Messenger Agent: Progress Handoff
 
 > Pansamantalang nasa repo ito (hindi pa naka-sync ang `flowercart-messenger-build`
 > Drive folder sa machine na ito); ang human ang mag-a-upload sa Drive.
-> Template fields per the master doc: phase, gate result, evidence, files touched,
-> deviations, open questions. **Walang secrets dito, kailanman.**
+> Trimmed sa: phase, files touched, at kung ano ang binago sa code. Ang mga
+> desisyon/rationale ay nasa [decisions.md](./decisions.md). **Walang secrets dito, kailanman.**
 
 ---
 
-## Phase 4 — LLM + slot tool
+## Phase 4: LLM + slot tool
 
 **Date:** 2026-08-01
-**Gate:** "correct resolved date, correct available slots"
-**Gate result:** ✅ PASSED (2026-08-01, rev 00181-wlq) — apat na live test messages,
-lahat ng sagot na-verify laban sa aktwal na `DeliveryScheduleConfig`:
 
-| Test | Sagot ng bot | Verified |
-|---|---|---|
-| "pwede ba bukas?" (5:58 PM, lampas 5PM cutoff) | "Linggo, August 2" + 4 slots | ✓ Aug 2 2026 = Sunday; cutoff pushed min date sa bukas; slots = exact config |
-| "sa Sabado sana" | "Sabado po ay August 8" + slots | ✓ next-occurrence (Aug 1 ay Sabado → Aug 8) |
-| "available ba Dec 24?" | "Huwebes, Dec 24… hanggang Aug 26 lang" + nearest dates | ✓ Dec 24 2026 = Thursday; Aug 2 + maxDays 25 − 1 = Aug 26 EXACT; walang inimbentong availability |
-| "magkano ang roses?" (trick) | Walang presyo; ni-refer sa ordering assistant | ✓ truthfulness rule humawak — walang tool, walang presyo |
-
-**Provider (merchant-approved):** Claude Sonnet 5 via `@anthropic-ai/sdk`,
-nakapako sa `messenger-llm.server.ts` — ang nag-iisang provider-swap file.
-Secret `anthropic-api-key` sa Secret Manager (key validated 200 bago in-store;
-value hindi kailanman na-print). Env: `MESSENGER_SHOP` (plain).
+**Provider:** Claude Sonnet 5 via `@anthropic-ai/sdk`, nakapako sa
+`messenger-llm.server.ts` (ang nag-iisang provider-swap file). Secret
+`anthropic-api-key` sa Secret Manager (key validated 200 bago in-store;
+value hindi kailanman na-print). Env: `MESSENGER_SHOP` (plain). Provider
+choice + rationale: [decisions.md § Messenger Agent Phase Deviations Log](./decisions.md).
 
 ### Files (lahat sa commit 383966b)
 
 `messenger-llm.server.ts` (thin interface), `messenger-agent-tools.server.ts`
-(resolve_date — structured phrase input, arithmetic sa code, Asia/Manila,
-weekday echo EN+Fil; get_available_slots — direktang tawag sa scheduler
+(resolve_date: structured phrase input, arithmetic sa code, Asia/Manila,
+weekday echo EN+Fil; get_available_slots: direktang tawag sa scheduler
 engine, nearest-dates fallback), `messenger-agent.server.ts` (orchestrator:
 Neon history, Manila-datetime system prompt na may verbatim truthfulness
 rule, tool loop max 5, bot disclosure once, slot quick replies, repliedAt
@@ -39,37 +30,13 @@ Tests 327/327.
 
 ### Deviations
 
-1. **Official Anthropic SDK** (hindi plain fetch tulad ng Messenger side) —
-   ang "no SDK wrapper" ng master doc ay para sa Messenger/Graph; ang LLM
-   ay nasa likod ng thin interface kaya nananatiling one-file swap.
-2. **Slot quick replies auto-attached ng code** (hindi ng LLM) mula sa
-   huling successful get_available_slots ng turn — "the LLM handles
-   language; the code advances state."
-3. **INCIDENT sa parehong araw (resolved):** habang ina-author ang phase-3
-   migration, ang `prisma migrate diff --shadow-database-url <live URL>` ay
-   nag-wipe ng Neon rows; narecover ang buong config via Neon time-travel
-   minuto bago magsara ang 6h window. Buong detalye + standing rule sa
-   `docs/known-issues.md` at verification-log.
-
-### Open questions
-
-1. Phase 5 next: product carousel (Generic Template, postback → variant,
-   live Shopify prices). Kakailanganin ng Storefront/Admin product reads.
-2. Token rotation (page token + siguraduhing hindi na kailangan i-rotate
-   ang Anthropic key na hindi dumaan sa chat) — nakatakdang LAST STEP bago
-   production-ready, per merchant.
+Design-choice deviations moved to [decisions.md § Messenger Agent Phase Deviations Log](./decisions.md) (Phase 4 entries). Ang shadow-database migration incident ng phase na ito ay nasa `docs/known-issues.md` at verification-log.
 
 ---
 
-## Phase 3 — Queue + Neon
+## Phase 3: Queue + Neon
 
 **Date:** 2026-08-01
-**Gate:** "5 rapid messages + 1 forced timeout → zero duplicate replies"
-**Gate result:** ✅ PASSED (2026-08-01) — 8 messages sent live (5+ rapid, isa
-may `[force-timeout]` marker), 8 na tig-iisang echo, ZERO duplicates
-(screenshot + logs). Log proof (rev 00177-9xt): `force-timeout hook engaged …
-stalling 45s` 06:12:40Z → Cloud Tasks retry 06:13:14Z → `skipped mid=…
-(already replied)` — ang retry ay hindi nag-send ulit.
 
 **Ingress shape ngayon:** webhook = verify → record sa Neon
 (`MessengerMessage.mid` unique = Meta-redelivery dedupe) → enqueue sa Cloud
@@ -80,25 +47,14 @@ ang nag-se-send; retry-idempotent via `repliedAt`. Queue not configured
 (local dev) → inline fallback; enqueue infra failure → burahin ang recorded
 row para maproseso ang Meta redelivery.
 
-### Evidence
-
-- `npm test` — **299/299** (34 bago: 6 queue service, 13 events service,
-  12 worker route, route tests reworked sa record→enqueue flow). Typecheck,
-  lint, build clean. TDD: lahat ng bagong test files pinanood munang pumalya
-  (missing module) bago ang implementation.
-- Live gate: tingnan sa itaas. Deploys: `00176-jfj` (phase 3 code) →
-  `00177-9xt` (TEMP gate hook) → **`00178-trn`** (final, hook removed),
-  root probe 200.
-- Worker route unsigned POST → 401 (live-probed).
-
 ### Files touched
 
 | File | Ano |
 |---|---|
 | `prisma/schema.prisma` + migration `20260801000000_add_messenger_thread_message` | NEW models `MessengerThread`, `MessengerMessage` (mid unique, repliedAt/replyMid) |
-| `app/services/messenger-queue.server.ts` | NEW — Cloud Tasks createTask via plain fetch (metadata-server OAuth, HMAC-signed `{ mid }` payload) |
-| `app/services/messenger-events.server.ts` | NEW — `recordInboundTextMessage` (upsert + P2002 dedupe), `processEchoByMid` (repliedAt skip), `deleteRecordedMessage` |
-| `app/routes/webhooks.messenger_.worker.ts` | NEW — Cloud Tasks worker (200 = done/unfixable, 503 = retry) |
+| `app/services/messenger-queue.server.ts` | NEW: Cloud Tasks createTask via plain fetch (metadata-server OAuth, HMAC-signed `{ mid }` payload) |
+| `app/services/messenger-events.server.ts` | NEW: `recordInboundTextMessage` (upsert + P2002 dedupe), `processEchoByMid` (repliedAt skip), `deleteRecordedMessage` |
+| `app/routes/webhooks.messenger_.worker.ts` | NEW: Cloud Tasks worker (200 = done/unfixable, 503 = retry) |
 | `app/routes/webhooks.messenger.ts` | echo send → record + enqueue (+ inline dev fallback) |
 | `test/messenger-{queue,events}.server.test.ts`, `test/webhooks-messenger-worker.test.ts` | NEW test files |
 
@@ -106,176 +62,87 @@ row para maproseso ang Meta redelivery.
 
 Cloud Tasks API enabled; queue `messenger-events` (us-central1, max-attempts 5,
 backoff 5s–120s); secret `messenger-worker-secret` (random 32-byte hex, piped
-diretso sa Secret Manager — hindi na-print); IAM: `cloudtasks.enqueuer` sa
+diretso sa Secret Manager: hindi na-print); IAM: `cloudtasks.enqueuer` sa
 queue + `secretAccessor` sa secret para sa Cloud Run SA; Cloud Run env:
 `MESSENGER_TASKS_QUEUE_PATH`, `MESSENGER_WORKER_URL`, secret
 `MESSENGER_WORKER_SECRET`.
 
 ### Deviations
 
-1. **HMAC task auth sa halip na Cloud Tasks OIDC.** Ang GCP-idiomatic na
-   OIDC token verification ay mangangailangan ng `google-auth-library` +
-   JWKS fetch; ang HMAC sa task payload (parehong `sha256=<hex>` format ni
-   Meta, parehong tested verifier lib) ay zero bagong dependency. Ang worker
-   URL ay public pero bawat task ay signed.
-2. **Prod Neon repair na hindi bahagi ng plano:** nawala ang
-   `_prisma_migrations` table sa prod DB (P3005 sa kahit anong bagong
-   revision boot; rev 00173 nag-boot pa noong 07-31 — cause unknown, hindi
-   galing sa repo). Merchant-approved fix: baseline ×3 via `prisma migrate
-   resolve --applied` + `migrate deploy`. Nakatala sa
-   `docs/known-issues.md` — kung umulit ang P3005, ulitin ang baseline at
-   imbestigahan ang Neon restore/branch history.
-3. **TEMP `[force-timeout]` gate hook** (45s stall pagkatapos ng send) —
-   deployed sa 00177-9xt para sa gate, tinanggal agad sa 00178-trn.
-4. **Inline fallback kapag walang queue config** — hindi nasa master doc;
-   dinagdag para gumana ang local dev nang walang Cloud Tasks emulator.
-   Sa prod laging naka-configure ang queue.
-
-### Open questions
-
-1. Phase 4 ang susunod: LLM + slot tool. **Bawal pumili ng LLM provider nang
-   walang go ng merchant** (master doc) — thin interface muna, tapos
-   itatanong bago pumili.
+Moved to [decisions.md § Messenger Agent Phase Deviations Log](./decisions.md) (Phase 3 entries). The prod Neon `_prisma_migrations` repair itself is also tracked in `docs/known-issues.md`: if P3005 recurs, redo the baseline and check Neon restore/branch history.
 
 ---
 
-## Phase 2 — Echo bot
+## Phase 2: Echo bot
 
 **Date:** 2026-08-01 (unang attempt 2026-07-27)
-**Gate:** "your own text comes back in Messenger"
-**Gate result:** ✅ PASSED (2026-08-01) — merchant nag-send ng `hello` sa
-The Flowercart page, eksaktong `Echo: hello` ang balik nang isang beses.
-Log evidence (rev 00169-5xn, 04:44:01Z): `[messenger] echoed mid=m_ZQLJ…
-reply=m_t1VK…` — isang log line lang, patunay ng `is_echo` loop guard.
-
-**Saga papunta sa gate (lahat may live log evidence):**
-
-- ✅ Inbound: mula 2026-07-27 08:23Z, lahat ng events ay `messaging=1 standby=0`
-  (naayos ang routing/handover saga — Business Suite Inbox routing + sticky
-  thread control). Postbacks tama ang pag-skip.
-- ✅ `messenger-verify-token` proven: pumasa ang Meta callback verification.
-- ✅ `messenger-app-secret` proven: 0 rejected-signature sa 24h ng live POSTs.
-- ❌→✅ `messenger-page-token`: namatay ang v1 (`Graph API 401: session has
-  been invalidated…` — security-flux sa merchant FB account). 2026-07-27:
-  bagong token → Secret Manager version 2 → Cloud Run rev 00169-5xn.
-  2026-08-01: echo gate passed sa token v2.
-- Post-gate cleanup: tinanggal na ang TEMP diagnostic logs sa route
-  (entry-shape / standby / skipped-event) — pending redeploy ng backend.
-
-### Evidence
-
-- `npm test` — **208/208 passed** (35 bago: 8 signature lib, 7 send service,
-  20 route — kasama ang `is_echo` loop-prevention pin, malformed-JSON-na-valid-sig
-  → 200, send-failure → 200 pa rin, standby ignored, 2000-char truncation).
-- `npm run typecheck` — clean. `npm run lint` — clean.
-- TDD end-to-end: bawat test file isinulat muna at pinanood na pumalya
-  (missing module) bago ang implementation nito.
 
 ### Files touched
 
 | File | Ano |
 |---|---|
-| `app/routes/webhooks.messenger.ts` | NEW — GET verify handshake + POST events (signature verify → parse → echo → always-200) |
-| `app/lib/verify-meta-signature.server.ts` | NEW — `verifyMetaWebhookSignature` (HMAC-SHA256 over raw body, timing-safe) |
-| `app/services/messenger-send.server.ts` | NEW — `sendMessengerTextMessage` (plain fetch, Graph `v23.0` pinned, Bearer header only, never throws) |
-| `test/verify-meta-signature.server.test.ts` | NEW — 8 cases |
-| `test/messenger-send.server.test.ts` | NEW — 7 cases |
-| `test/webhooks-messenger-route.test.ts` | NEW — 20 cases |
+| `app/routes/webhooks.messenger.ts` | NEW: GET verify handshake + POST events (signature verify → parse → echo → always-200) |
+| `app/lib/verify-meta-signature.server.ts` | NEW: `verifyMetaWebhookSignature` (HMAC-SHA256 over raw body, timing-safe) |
+| `app/services/messenger-send.server.ts` | NEW: `sendMessengerTextMessage` (plain fetch, Graph `v23.0` pinned, Bearer header only, never throws) |
+| `test/verify-meta-signature.server.test.ts` | NEW: 8 cases |
+| `test/messenger-send.server.test.ts` | NEW: 7 cases |
+| `test/webhooks-messenger-route.test.ts` | NEW: 20 cases |
 | `.gitignore` | +`*.token`, +`token.txt` |
 | `.env.example` | +4 MESSENGER_* names, empty values lang |
 | `docs/api.md`, `docs/architecture.md`, `docs/changelog.md`, `docs/verification-log.md` | repo docs-set updates (5th auth surface) |
 
 ### Deviations
 
-1. **Inline send bago ang 200.** Master doc: "return 200 fast, before any
-   processing." Sa RR7/Cloud Run walang `waitUntil` — kapag bumalik na ang
-   response, thina-throttle ang CPU at namamatay ang fire-and-forget work
-   (mismong trap na binabanggit ng master doc sa Phase 3 note). Kaya sa Phase 2:
-   verify → process → `await` ng isang echo send (5s timeout) → 200. Isang Graph
-   call lang ito, malayo sa Meta delivery timeout. Ang totoong fast-ack +
-   enqueue ay Phase 3 (Cloud Tasks).
-2. **Malformed JSON na may valid signature → 200** (hindi 400) — walang
-   maaayos ang Meta redelivery sa sirang body; log lang.
-3. **Echo truncation sa 2000 chars** — Messenger hard text limit; hindi nasa
-   literal spec pero kailangan para hindi ma-reject ang mahabang echo.
-4. **Walang dedupe sa Phase 2** — ang `mid`-unique dedupe ay Phase 3 (Neon).
-   Posibleng mag-double-echo kapag nag-redeliver si Meta; tanggap sa echo bot.
-5. **Progress handoff sa repo** (`docs/messenger-progress.md`) sa halip na sa
-   Drive folder — hindi pa naka-sync ang `flowercart-messenger-build` sa machine
-   na ito; ang human ang mag-a-upload. (Files-to-copy para sa Drive: ang tatlong
-   `app/` files sa itaas + ang route test.)
-6. **Page token na-proxy ni Claude (2026-07-27, explicit merchant authorization).**
-   Ang master-doc rule na "human pastes secrets only" ay ni-waive ng merchant
-   para ma-unblock ang gate: si Claude ang nag-generate ng token sa Meta
-   dashboard, nag-store sa Secret Manager (v2), at nag-update ng Cloud Run.
-   Ang token ay dumaan sa Claude session context. **Obligasyon: i-rotate ang
-   `messenger-page-token` (bagong generate + bagong secret version + bagong
-   revision) BAGO ideklarang production-ready.** Wala pa ring token sa repo
-   o sa docs.
+Moved to [decisions.md § Messenger Agent Phase Deviations Log](./decisions.md) (Phase 2 entries, including the page-token proxy-by-Claude incident: closed 2026-08-03).
 
-### Config (walang values dito — pangalan lang)
+### Config (walang values dito: pangalan lang)
 
 | Env var | Kind | Secret Manager name |
 |---|---|---|
 | `MESSENGER_APP_SECRET` | secret | `delivery-scheduler-messenger-app-secret` |
 | `MESSENGER_VERIFY_TOKEN` | secret | `delivery-scheduler-messenger-verify-token` |
 | `MESSENGER_PAGE_ACCESS_TOKEN` | secret | `delivery-scheduler-messenger-page-access-token` |
-| `MESSENGER_PAGE_ID` | plain env (`105284684761365`) | — |
+| `MESSENGER_PAGE_ID` | plain env (`105284684761365`) |: |
 
 Callback URL para sa Meta dashboard:
 `https://delivery-scheduler-299861709433.us-central1.run.app/webhooks/messenger`
 Page fields na isu-subscribe (eksaktong 5): `messages`, `messaging_postbacks`,
 `messaging_handovers`, `standby`, `message_echoes`.
 
-### Open questions
+## Phase 5: Product carousel (2026-08-02)
 
-1. Graph API version pin `v23.0` — kumpirmahin sa Meta dashboard supported
-   range kapag nag-generate ng page access token; i-bump ang constant kung
-   kailangan (isang linya sa `messenger-send.server.ts`).
-2. Meta built-in Business AI — kumpirmahing OFF sa The Flowercart page bago
-   ang live test (operator checklist sa master doc).
-3. Development mode — app-role users lang (admin/developer/tester) ang
-   makakatanggap ng echo; sinong account ang gagamitin sa gate test?
-
-## Phase 5 — Product carousel (2026-08-02)
-
-**Gate:** a tap resolves to the right variant (live re-validation, never the card price).
-
-- `app/services/messenger-products.server.ts` — NEW: `searchShopProducts` (Admin GraphQL
+- `app/services/messenger-products.server.ts`: NEW: `searchShopProducts` (Admin GraphQL
   `products` query, `status:active` + optional title keyword + `price:>=/<=` bounds,
   `sortKey: BEST_SELLING`, cap 8 per the master doc) at `getVariantLive` (variant gid →
-  live price/availability; tinatawag TUWING may `[TAP] PRODUCT_<variantId>` — hard rule:
+  live price/availability; tinatawag TUWING may `[TAP] PRODUCT_<variantId>`: hard rule:
   never trust a rendered card). Same `unauthenticated.admin(MESSENGER_SHOP)` pattern ng
   slots tool; designed failures, never throws, READ-ONLY (zero order writes).
-- `messenger-send.server.ts` — `sendMessengerGenericTemplate` (Generic Template, hindi
-  Product Template — locked decision #8): 10-element/80-char/3-button hard caps enforced;
+- `messenger-send.server.ts`: `sendMessengerGenericTemplate` (Generic Template, hindi
+  Product Template: locked decision #8): 10-element/80-char/3-button hard caps enforced;
   shared `postMessengerMessage` core.
-- `webhooks.messenger.ts` — postbacks recorded na (dating ignored): synthetic mid
+- `webhooks.messenger.ts`: postbacks recorded na (dating ignored): synthetic mid
   `pb:<psid>:<timestamp>` (o ang postback mid kung meron), text `[TAP] <payload>`,
   same record→enqueue→worker path at dedupe ng text messages.
-- Orchestrator — `search_products` tool result → carousel auto-attach pagkatapos ng text
-  reply (best-effort: carousel failure after the text send ay LOG ONLY, hindi retry — no
+- Orchestrator: `search_products` tool result → carousel auto-attach pagkatapos ng text
+  reply (best-effort: carousel failure after the text send ay LOG ONLY, hindi retry: no
   duplicate risk). Cards: title, live ₱price (+ "out of stock"), image, `Piliin ito`
   postback (`PRODUCT_<variantId>`) + `Tingnan sa website` URL button. Slot quick replies
   ay dinodrop kapag may carousel sa same turn (Messenger UI dismisses them anyway).
-- System prompt — PRODUCT DISCOVERY section: search_products sa product/price/budget asks;
+- System prompt: PRODUCT DISCOVERY section: search_products sa product/price/budget asks;
   bawal i-enumerate ang products sa text (carousel na ang magpapakita); `[TAP]` = button
   tap; laging get_product_details muna bago i-quote ang napiling product.
 - Tests: 363/363 (products service, generic template caps, postback recording, carousel
   attach/failure/empty sa agent loop).
 
-## Phase 6 — Draft order + invoice (2026-08-02, PENDING scope approval)
+## Phase 6: Draft order + invoice (2026-08-02, PENDING scope approval)
 
-**Gate:** one order in Shopify, never two. (Built + unit-proven; live gate test naka-hold
-hanggang ma-approve ng merchant ang bagong scopes.)
-
-- `app/services/messenger-orders.server.ts` — NEW: slot-filling state machine (code
+- `app/services/messenger-orders.server.ts`: NEW: slot-filling state machine (code
   advances state, LLM language lang; fields sa fixed order product→date→slot→recipient→
   address→phone; jump-back clears only that field) + idempotent draftOrderCreate.
 - Idempotency: conversationOrderKey (UUID) sa Neon BAGO ang anumang Shopify call; dala ng
   draft bilang custom attribute + tag `mo-key-<uuid>`; check-before-create; ambiguous/
   timeout → lookup-by-tag adopt, never blind retry; stale-key guard; created-replay =
-  zero Shopify calls. Gate tests: duplicate mid, timeout-retry, replay — laging ISANG create.
+  zero Shopify calls.
 - Frozen shapes: draft carries "Delivery Date"/"Delivery Time" customAttributes + [date,
   slot] tags (exact checkout shape) + `messenger` tag; existing orders/create sync ang
   bahala sa metafields pag nabayaran ang invoice. reserveInventoryUntil 15 min.
@@ -283,48 +150,24 @@ hanggang ma-approve ng merchant ang bagong scopes.)
   ang summary (Confirm ✅ / Baguhin quick replies) at ang confirm reply.
 - Webhook: quick_reply.payload recorded na bilang "[TAP] <payload>" (dating title lang).
 - **ENV GATE**: MESSENGER_ORDERS_ENABLED=true ang kailangan bago mag-alok ng ordering ang
-  bot — naka-OFF by default dahil kailangan pa ng read/write_draft_orders scopes
+  bot: naka-OFF by default dahil kailangan pa ng read/write_draft_orders scopes
   (config deploy + merchant re-approval sa store) bago gumana ang draftOrderCreate.
-- Gate-review adds (main agent): sanitizeMessengerText (markdown strip sa lahat ng sends;
-  live smoke test nakakita ng literal **), search_products purpose=lookup (walang carousel
-  sa pagpili ng pangalan), Cloud Tasks dispatchDeadline 30s→180s (live duplicate-reply fix).
+- Gate-review adds (main agent): sanitizeMessengerText (markdown strip sa lahat ng sends),
+  search_products purpose=lookup (walang carousel sa pagpili ng pangalan), Cloud Tasks
+  dispatchDeadline 30s→180s.
 - Tests: 418/418. New migration 20260802000000 (orderStateJson + conversationOrderKey sa
-  MessengerThread) — auto-applied sa prod via docker-start; sa local: npm run setup.
+  MessengerThread): auto-applied sa prod via docker-start; sa local: npm run setup.
 
-### Phase 6 GATE PASSED (2026-08-02)
-
-Live evidence: draft #D37 -> Order #3979 (Rosa Bouquet P899, delivery 2026-08-03
-3PM-6PM). EKSAKTONG ISANG draft/order para sa key 453b023a... sa kabila ng: 5x
-Cloud Tasks retry noong walang scopes ang token (lahat transient, walang create),
-1x failed create (tag > 40 chars), at final na successful confirm tap. Metafields
-auto-synced ng existing orders/create webhook (delivery.date, time_slot,
-sync_status=ok) — zero Messenger-specific sync code, gaya ng dinisenyo.
-
-Live fixes sa gate run: (1) mo-key tag pinaikli sa 39 chars (Shopify 40-char tag
-limit); (2) scope activation ay nangangailangan ng app open sa admin para sa token
-exchange — ang .env ay walang epekto sa prod session. MESSENGER_ORDERS_ENABLED=true
-na sa Cloud Run (rev 00196+).
-
-## Phase 7 — Human takeover + disclosure (2026-08-02)
-
-**Gate:** reply from the phone -> bot mutes; toggle -> bot resumes.
-**Gate result:** ✅ PASSED (2026-08-03, rev 00198-6z2) — merchant live test, lahat
-ng 4 na hakbang pasado: (1) Business Suite reply -> bot muted (humanControl on);
-(2) customer message habang muted -> walang bot reply; (3) admin app "Messenger"
-tab -> Resume; (4) customer message -> bot reply na MAY FlowerBot re-disclosure.
-Kumpirmado rin: ang Business Suite human replies ay WALANG app_id — tama ang
-primary discriminator.
+## Phase 7: Human takeover + disclosure (2026-08-02)
 
 - Webhook echo branch (dating blanket skip): echo na HINDI galing sa bot = operator
   typing sa Business Suite -> humanControl=true + humanControlAt=now + operator row
-  recorded (role "operator"; psid mula sa recipient.id — baliktad ang roles sa echoes).
+  recorded (role "operator"; psid mula sa recipient.id: baliktad ang roles sa echoes).
   Walang task na ine-enqueue para sa echo, kailanman.
 - Discriminator: message.app_id PRIMARY (present = app-sent = sarili nating bot, panalo
-  din sa bookkeeping race), bot-mid Neon lookup ang FALLBACK. ⚠️ Live-gate check: kung
-  ang Business Suite replies ay MAY app_id pala, hindi magti-trigger ang takeover —
-  i-verify sa totoong phone reply.
+  din sa bookkeeping race), bot-mid Neon lookup ang FALLBACK.
 - Mute: processAgentTurnByMid -> skipped bago pa ang LLM at bago ang CONFIRM path
-  (kasama ang Confirm taps sa mute — deviation, deliberate). Bot KEEPS LISTENING:
+  (kasama ang Confirm taps sa mute: deviation, deliberate). Bot KEEPS LISTENING:
   recorded pa rin lahat. repliedAt untouched (zero-duplicate contract).
 - Auto-handback: 6h default (MESSENGER_HANDBACK_HOURS env) na walang operator message
   (bawat operator echo nagre-refresh ng humanControlAt) -> clear flag + disclosedBot=false
@@ -338,33 +181,23 @@ primary discriminator.
 - Tests 450/450; typecheck + lint clean. Walang migration (humanControl/humanControlAt
   ay nasa schema na since phase 3).
 
-## Phase 8 — Orders listing + typing indicator + Messenger profile (2026-08-03)
+## Phase 8: Orders listing + typing indicator + Messenger profile (2026-08-03)
 
-**Gate:** orders table sa embedded app, typing bubble sa chat, ice breakers/menu
-visible pagkatapos ng setup tap.
-**Gate result:** ✅ PASSED (2026-08-03, rev 00199-j2l) — merchant live test:
-"nakita ko lahat" — orders table, profile setup, typing indicator, persistent
-menu, at ice breakers lahat verified. Merchant follow-up (bagong backlog item):
-kailangan pang matutunan ng bot ang laman ng bawat bouquet (flower types per
-product) — plano: isama ang product description/metafields sa product tools
-para Shopify data ang pagmulan (merchant-maintained, laging current), hindi
-prompt hardcoding.
-
-- `/app/messenger-orders` — bagong Shopify orders section (READ-ONLY): Admin GraphQL
+- `/app/messenger-orders`: bagong Shopify orders section (READ-ONLY): Admin GraphQL
   `orders(query: "tag:messenger", first: 25, CREATED_AT desc)` sa existing
   `authenticate.admin` loader; columns: order name (`shopify://admin/orders/<id>` deep
   link, same idiom ng OrderDetailsPanel), created, customer/recipient display name,
   Delivery Date/Time (mula sa customAttributes), payment status, total. Upstream Graph
   failure → error Banner lang, buo pa rin ang threads section (walang crash). ZERO order
-  writes — hindi nagbago ang §2 write-paths table ng api.md.
-- `messenger-send.server.ts` — `sendMessengerSenderAction` (typing_on / typing_off /
+  writes: hindi nagbago ang §2 write-paths table ng api.md.
+- `messenger-send.server.ts`: `sendMessengerSenderAction` (typing_on / typing_off /
   mark_seen): sariling body-builder (`{ recipient, sender_action }`, WALANG `message`
   field) sa ibabaw ng shared `postMessengerSendApi` core (parehong token/URL/timeout/
   error handling); never throws. Orchestrator: `typing_on` fire-and-forget bago ang LLM
-  turn — pagkatapos ng humanControl mute gate (walang typing sa muted thread) at
+  turn: pagkatapos ng humanControl mute gate (walang typing sa muted thread) at
   pagkatapos ng deterministic confirm-tap check; walang typing_off (kusa itong
   naki-clear pagdating ng reply).
-- NEW `app/services/messenger-profile.server.ts` — `setMessengerProfile()` (isang POST
+- NEW `app/services/messenger-profile.server.ts`: `setMessengerProfile()` (isang POST
   sa `/me/messenger_profile`: Get Started `GET_STARTED`, 4 Taglish ice breakers
   `ICEBREAKER_PRODUCTS/FEE/SAMEDAY/ORDER`, persistent menu: 2 web_url + postback
   `MENU_ORDER`) at `getMessengerProfile()` (fields read para sa set/not-set display).
@@ -373,98 +206,49 @@ prompt hardcoding.
   profile" sa page (route op `setupProfile`, ADR-11: 200 + ok:false + error toast);
   profile status sa loader ay best-effort ("unknown" sa failure).
 - Postbacks ng profile buttons ay dumadaan sa EXISTING webhook postback path bilang
-  `[TAP] <payload>` — zero webhook changes. System prompt: bagong maikling
+  `[TAP] <payload>`: zero webhook changes. System prompt: bagong maikling
   "MENU & GREETING TAPS" section (append-only; walang binago sa existing sections),
   kasama ang env-gated na sagot sa ICEBREAKER_ORDER/MENU_ORDER (ordering flow kapag
   MESSENGER_ORDERS_ENABLED, else website).
 - Tests: 478/478 (28 bago: 4 sender action, 13 profile service, 7 route
-  orders/profile, 6 agent typing + prompt taps — bilang sa describe-level ay tingnan
-  sa test files). Typecheck + lint clean. Walang migration, walang bagong env var,
-  walang bagong dependency.
+  orders/profile, 6 agent typing + prompt taps). Typecheck + lint clean. Walang migration,
+  walang bagong env var, walang bagong dependency.
 
 ### Deviations (phase 8)
 
-1. **Success/failure feedback ng profile setup ay App Bridge toast**
-   (`useAppBridge().toast.show`, same idiom ng scheduler op-plumbing) — ang brief ay
-   nagsabi ng "toast", ito ang pinakamalapit na existing pattern sa repo.
-2. **Ice breakers sa locale-wrapped shape** (`[{ locale: "default", call_to_actions:
-   [...] }]`) — ito ang kasalukuyang Graph API format (ang flat `[{question,payload}]`
-   ay lumang v7 shape).
-3. **Typing indicator ay `void` fire-and-forget** (hindi awaited): ang send ay
-   never-throws by design at ang worker request ay buhay pa habang tumatakbo ang LLM
-   turn, kaya hindi ito napuputol ng Cloud Run CPU throttling.
+Moved to [decisions.md § Messenger Agent Phase Deviations Log](./decisions.md) (Phase 8 entries).
 
-### Open questions (phase 8)
+## Phase 9: Product descriptions + typo-tolerant search (2026-08-03)
 
-1. Live verify: ice breakers ay lumalabas lang sa BAGONG conversations (Meta caches
-   existing threads) — i-test sa fresh test user o i-delete muna ang conversation.
-2. `mark_seen` ay supported ng service pero hindi pa fired kahit saan — gamitin ba
-   pagkatanggap ng message (bago ang typing_on) sa isang susunod na polish pass?
-
-## Phase 9 — Product descriptions + typo-tolerant search (2026-08-03)
-
-**Gate:** inclusion question answered from BLOOMS; typo resolves to the right product.
-**Gate result:** ✅ PASSED (2026-08-03, rev 00201-mmv) — merchant live test pasado.
-Merchant clarification: ang ~24 products na walang BLOOMS ay add-ons (bears,
-chocolates, Ferrero, balloons) at draft products — TAMA na walang inclusions,
-walang backfill na kailangan.
-
-### TOKEN ROTATION — CLOSED (2026-08-03) ✅
-
-Ang Phase 2 deviation #6 obligation ay TAPOS NA: merchant nag-generate ng
-bagong page token sa Meta dashboard at siya mismo ang nag-upload sa Secret
-Manager (`messenger-page-token` v4 — hindi dumaan sa Claude session, hindi
-kailanman na-print). Na-verify valid via live `messenger_profile` GET; bagong
-revision 00200-x76 ang kumuha ng bagong version; versions 1-3 disabled na ng
-merchant. **Wala nang natitirang pre-production obligation sa token.**
-**Gate result:** ⏳ PENDING — merchant live test: (1) tanungin ang bot ng "ano inclusion
-ng flowers" para sa Pastel Dreams → sagot mula sa BLOOMS section ng Shopify description
-(hindi imbento, hindi "no access"); (2) i-type ang "pastil dream" → bot nagko-confirm ng
-"Ito po ba ang ibig niyong sabihin — Pastel Dreams?" at tama ang product.
-
-Dalawang merchant-reported live defects (may screenshots) ang saklaw:
-
-- **Descriptions reach the LLM** — `messenger-products.server.ts`: `descriptionHtml`
+- **Descriptions reach the LLM**: `messenger-products.server.ts`: `descriptionHtml`
   idinagdag sa search query at sa `getVariantLive` product lookup; bagong pure helper
   `productDescriptionText()` (strip tags, `<li>` → `-` bullets, unescape entities,
-  collapse whitespace, cap 1200 chars keep-the-start — nasa unahan ang BLOOMS/SIZE/
+  collapse whitespace, cap 1200 chars keep-the-start: nasa unahan ang BLOOMS/SIZE/
   COMES WITH bullets; 65/89 products may BLOOMS section). Ang `description` ay optional
   field na ng `MessengerProduct`, kaya dumadaloy ito sa tool results ng PAREHONG
   `search_products` at `get_product_details` (ang orchestrator ay `JSON.stringify` ng
-  buong result) — pero HINDI sa carousel cards (title/price/image lang doon). Bounded:
+  buong result): pero HINDI sa carousel cards (title/price/image lang doon). Bounded:
   8 results × 1200 chars max.
-- **Typo-tolerant fallback** — `searchShopProducts`: kapag ZERO ang keyword search
+- **Typo-tolerant fallback**: `searchShopProducts`: kapag ZERO ang keyword search
   (at may keyword), isang titles-only query (`first: 100`, `status:active`) ang
   kinukuha at fuzzy-match IN CODE via bagong exported `fuzzyTitleSimilarity()`
   (bigram/Sørensen–Dice, walang bagong dependency; normalize = lowercase + strip
   punctuation). Threshold ≥ 0.55, best-first, cap 3 guesses, tapos isang full refetch
   na may `title:"..."` OR terms (kasama pa rin ang price bounds ng customer). Result
-  shape unchanged + optional `fuzzyMatched: true` flag; "pastil dream" → "Pastel
-  Dreams" (score ≈ 0.7) unit-proven.
-- **Prompt (append-only, 2 bullets sa PRODUCT DISCOVERY):** INCLUSIONS — sagutin mula
+  shape unchanged + optional `fuzzyMatched: true` flag.
+- **Prompt (append-only, 2 bullets sa PRODUCT DISCOVERY):** INCLUSIONS: sagutin mula
   sa description sa tool result; kung walang BLOOMS info, aminin at i-offer ang product
   page link, NEVER invent inclusions. `fuzzyMatched=true` → i-confirm muna ang product
   name bago i-quote nang final. Walang binago sa existing prompt sections.
 - READ-ONLY pa rin ang product queries (zero writes); walang bagong env var, walang
   migration, walang dependency. Tests 478 → 498 (20 bago: 4 description helper,
   4 fuzzy helper, 2 description-sa-result, 6 fallback query shapes/gating, 4 agent
-  prompt + tool-result flow — bilang exact ay nasa test files). Typecheck + lint +
-  build clean.
+  prompt + tool-result flow). Typecheck + lint + build clean.
 
-### Open questions (phase 9)
-
-1. May ~24 products na WALANG BLOOMS section sa description — sasagot ang bot ng
-   "wala pong nakalagay" + product link; gusto ba ng merchant na dagdagan ang mga
-   descriptions sa Shopify admin?
-
-## Phase 10 — Add-on upsell + abandoned-order follow-up (2026-08-03)
-
-**Gate:** add-on lumalabas bilang pangalawang line item sa draft order; ISANG
-follow-up reminder pagkalipas ng ~3h sa unconfirmed na summary, kailanman
-walang pangalawa.
+## Phase 10: Add-on upsell + abandoned-order follow-up (2026-08-03)
 
 - **Add-on upsell** (`messenger-orders.server.ts`): bagong `add_on` required step
-  pagkatapos ng phone — one-time offer (addOnDecided gate). Pumili = validated
+  pagkatapos ng phone: one-time offer (addOnDecided gate). Pumili = validated
   live via parehong getVariant (out-of-stock rejected); tumanggi = add_on:"none".
   Quick replies auto-attached ng code (🧸 Bear / 🍫 Chocolates / 🎈 Balloon /
   Hindi na po → ADDON_* payloads; prompt rules ang nagmamapa sa search_products
@@ -473,7 +257,7 @@ walang pangalawa.
   ang deploy ay itinuturing nang desidido (hindi masisira ang lumang Confirm taps).
 - **Abandoned follow-up**: pag-send ng summary → delayed Cloud Tasks task
   (`scheduleTime`, walang bagong infra; `MESSENGER_FOLLOWUP_HOURS` default 3,
-  0 = off). Worker route dispatch sa `processOrderFollowUp`: guards — humanControl
+  0 = off). Worker route dispatch sa `processOrderFollowUp`: guards: humanControl
   off; huling customer message > 45 min (hindi sasabad sa aktibong usapan) at
   < 20h (Meta 24h window na may margin); `claimOrderFollowUp` = **mark-BEFORE-send**
   (followUpSentAt sa Neon bago ang Graph call) kaya zero-duplicate kahit mag-retry
@@ -486,76 +270,33 @@ walang pangalawa.
 
 ### Deviations (phase 10)
 
-1. Ang add-on ay REQUIRED step sa state machine (hindi optional flag) — ito ang
-   pinakasimpleng paraan para ma-garantiya ng code ang one-time offer nang hindi
-   umaasa sa LLM memory; ang "decline" ay first-class na desisyon.
-2. Follow-up: mas pinili ang zero-duplicate kaysa guaranteed delivery — kapag
-   pumalya ang send PAGKATAPOS ng claim, hindi na inuulit (isang nudge lang ito,
-   hindi transactional message).
+Moved to [decisions.md § Messenger Agent Phase Deviations Log](./decisions.md) (Phase 10 entries).
 
-## Phase 11 — Streamlined checkout flow + email order lookup + lost-message fix (2026-08-03)
+## Phase 11: Streamlined checkout flow + email order lookup + lost-message fix (2026-08-03)
 
-**Gate:** order flow = bouquet→date→slot→add-on lang (walang tanungan ng
-shipping); lookup ng order status via checkout email; walang nawawalang
-message sa DB hiccup.
-
-- **Streamline (merchant feedback):** tinanggal sa REQUIRED_FIELDS ang
-  recipient_name/address/phone — "expected ni customer na magbabayad na lang
-  siya". Ang Shopify checkout na ang kokolekta ng shipping. Kusang-bigay na
-  details ay sine-save pa rin (checkout prefill + coverage check). Summary:
-  shipping lines lumalabas lang kapag ibinigay; may "doon niyo na ilalagay ang
-  delivery address" na note. Draft order: shippingAddress isinasama lang kapag
-  may address.
-- **lookup_order tool (bagong tool #7):** order status by checkout EMAIL —
-  gumagana pati sa WEBSITE orders. Merchant decision: email lang ang
-  verification (hindi na kailangan ng order number). Limitadong fields lang
-  ang ibinabalik/ibinubunyag: order number, payment/fulfillment status,
-  delivery date/time — KAILANMAN walang address/phone/payment details; zero
-  matches = hindi kinukumpirma kung existing ang email. READ-ONLY query.
-- **Lost-message fix (live incident):** sa 00203 deploy overlap, nag-timeout
-  ang Neon connection pool → record failed → 200 pa rin ang sagot kay Meta →
-  tuluyang nawala ang 2 messages (walang redelivery sa 200). Ngayon: record
-  failure → **503** → nagre-redeliver si Meta; ligtas dahil mid-unique dedupe.
+- **Streamline:** tinanggal sa REQUIRED_FIELDS ang recipient_name/address/phone. Ang
+  Shopify checkout na ang kokolekta ng shipping. Kusang-bigay na details ay sine-save
+  pa rin (checkout prefill + coverage check). Summary: shipping lines lumalabas lang
+  kapag ibinigay; may "doon niyo na ilalagay ang delivery address" na note. Draft order:
+  shippingAddress isinasama lang kapag may address.
+- **lookup_order tool (bagong tool #7):** order status by checkout EMAIL;
+  gumagana pati sa WEBSITE orders. Limitadong fields lang ang ibinabalik/ibinubunyag:
+  order number, payment/fulfillment status, delivery date/time: KAILANMAN walang
+  address/phone/payment details; zero matches = hindi kinukumpirma kung existing ang
+  email. READ-ONLY query.
+- **Lost-message fix:** sa 00203 deploy overlap, nag-timeout ang Neon connection
+  pool → record failed → 200 pa rin ang sagot kay Meta → tuluyang nawala ang 2 messages
+  (walang redelivery sa 200). Ngayon: record failure → **503** → nagre-redeliver si
+  Meta; ligtas dahil mid-unique dedupe.
 - Tests: 538/538 (+7 lookup/streamline; 3 in-place updates). Typecheck/lint/
   build clean. Walang migration, walang bagong scope/env/dependency.
+- Post-deploy: `MESSENGER_FOLLOWUP_HOURS` reverted to `3` (rev `00206-5qm`) pagkatapos
+  ng isang test window kung saan pinababa ito.
 
-### Phases 10+11 GATE PASSED (2026-08-03, agent-driven E2E via browser)
-
-Live end-to-end sa messenger.com bilang customer (Claude-driven, merchant-requested),
-revs `00204-tjb` → `00205-8dg`:
-
-1. **Streamlined order (P11):** "Gusto ko po umorder ng Pastel Dreams para sa Aug 5,
-   9AM-12PM" → isang turn lang, diretso sa add-on offer (Bear/Chocolates/Balloon/
-   "Hindi na po" quick replies) → "Hindi na po" → ORDER SUMMARY (Pastel Dreams ₱2,499,
-   2026-08-05 • 9AM-12PM) + Confirm ✅/Baguhin — ZERO tanong tungkol sa pangalan/
-   address/phone; ang summary text ay nagtuturo sa checkout para sa address. Walang
-   em-dash sa mga reply (sanitizer verified live).
-2. **Email order lookup (P11):** "may dati po akong order sa website niyo" → hiningi
-   ang checkout email → binigay → 3 orders nilista (#3979 Voided, #3948 Pending/
-   Fulfilled, #3945 Pending) na order number + payment/fulfillment status + delivery
-   schedule LANG — walang address/phone na ibinunyag. Kasama ang website orders. ✅
-3. **Abandoned-order follow-up (P10):** unang subok nabisto ang totoong bug — ang
-   45-min active-chat guard ay TERMINAL skip, kaya sa 3-min test delay ay hinding-
-   hindi lalabas ang reminder (logs: `follow-up skipped … conversation is active`).
-   Fix: `followUpActiveChatMs()` = min(45min, delay/2) — production 3h → 45min pa
-   rin, test 0.05h → 90s. Deployed `00205-8dg`, summary re-triggered → pagkalipas
-   ng 3 min dumating nang kusa ang reminder ("Naka-reserve pa po ang order niyo…")
-   na may Confirm ✅/Baguhin. ✅ +1 test (69/69 sa agent suite, 539 total).
-
-Post-gate: `MESSENGER_FOLLOWUP_HOURS` ibinalik sa `3` (rev `00206-5qm`). Ang test
-thread ay iniwang naka-awaiting_confirm na may followUpSentAt — wala nang susunod
-na nudge (already_sent claim guard).
-
-## Phase 12 — image recognition: screenshot ng ad → product match (2026-08-04)
-
-**Gate:** magpadala ng photo/screenshot ng bouquet nang WALANG product name →
-tutukuyin ni FlowerBot ang pinakamalapit na 1-3 products mula sa catalog at
-iko-confirm muna bago mag-quote ng presyo (parang Meta Business AI behavior;
-merchant insight: "hindi binabanggit ng customer ang product name dahil wala
-silang pakialam dun").
+## Phase 12: image recognition: screenshot ng ad → product match (2026-08-04)
 
 - **Webhook:** ang mga message na may `attachments[type=image]` ay hindi na
-  nilalaktawan — nire-record ang caption + `[IMAGE] <cdn-url>` lines (cap 3,
+  nilalaktawan: nire-record ang caption + `[IMAGE] <cdn-url>` lines (cap 3,
   walang migration). Non-image attachments (audio/stickers) ay skip pa rin.
 - **Agent:** ang CURRENT message lang ang fina-fetch ang images (8s timeout,
   4MB cap, jpeg/png/gif/webp lang) at ipinapasa bilang base64 vision blocks
@@ -563,44 +304,36 @@ silang pakialam dun").
   na ang Meta CDN urls, sayang ang re-fetch). Fetch failure → "hindi ma-load"
   na note, hindi kailanman crash.
 - **LLM interface:** +`image` content block sa `LlmContentBlock` (base64
-  source) — dumadaan nang direkta sa Anthropic API (vision-capable na ang
+  source): dumadaan nang direkta sa Anthropic API (vision-capable na ang
   claude-sonnet-5, walang bagong dependency).
-- **Prompt:** bagong "PHOTOS" section — ilarawan ang bouquet mula sa larawan,
+- **Prompt:** bagong "PHOTOS" section: ilarawan ang bouquet mula sa larawan,
   i-search via search_products (flower type + color keywords), CONFIRM FIRST
   ang 1-3 matches na may presyo mula sa tool result bago mag-quote; huwag
   kailanman kunin ang presyo mula sa photo mismo.
 - Tests: 546/546 (+7: 3 webhook, 4 agent incl. no-fetch-for-old-rows pin).
-  Typecheck clean. Gate: live E2E pagkatapos ng app-secret rotation.
+  Typecheck clean.
 
-**Kasabay na incident (2026-08-04):** na-reset ng merchant ang Meta App Secret
-(bahagi ng App Review prep) → ang lahat ng webhook ay 401 "invalid signature"
-mula 17:51Z dahil ang Meta ay nagsa-sign na gamit ang bagong secret. Hindi
-nawawala ang messages (nagre-redeliver si Meta sa non-200). Fix: merchant-run
-`gcloud secrets versions add messenger-app-secret` + bagong revision.
-
-## Phase 13 — product discovery filters, best sellers, prompt caching (2026-08-04)
+## Phase 13: product discovery filters, best sellers, prompt caching (2026-08-04)
 
 **Status:** naisulat 2026-08-04, naidokumento 2026-08-13, **HINDI PA NA-DEPLOY**.
-Walang Cloud Run revision, walang live gate. Ang code ay hindi na ginalaw noong
-idinokumento ito (merchant instruction: itala at i-commit ang nandiyan na,
-huwag nang halukayin).
+Walang Cloud Run revision.
 
 ### Ano ang binago
 
-- **`search_products` — apat na bagong param.**
+- **`search_products`: apat na bagong param.**
   - `sort=price_asc|price_desc` para sa "pinakamura/pinakamahal". Walang
     product-level price sortKey ang Shopify (variant-level ang presyo), kaya
     bounded pool (`SORT_POOL_LIMIT = 100`) ang kinukuha at **in code** nag-so-sort,
     tapos `PRODUCT_CAROUSEL_LIMIT` lang ang ibinabalik. Ang prompt rule:
-    pwede LANG magsabi ng superlative kapag galing sa sorted result — bawal
+    pwede LANG magsabi ng superlative kapag galing sa sorted result: bawal
     tantiyahin mula sa unsorted browse.
-  - `tags` / `exclude_tags` — reliable na color/type/compound matching
+  - `tags` / `exclude_tags`: reliable na color/type/compound matching
     (pink, red, white…, roses, carnation, lilies…, "red rose", "white rose").
     "puro white" → `tags=["white"]`; "ayaw ko ng roses" → `exclude_tags=["roses"]`.
     Kapalit ito ng title-guessing.
-  - `addons` — scope switch. Ang normal na bouquet browse/sort/reco ay laging
+  - `addons`: scope switch. Ang normal na bouquet browse/sort/reco ay laging
     nagpupush ng `-tag:'Add-ons'`; ang add-on upsell ay opt-in na `tag:'Add-ons'`.
-- **`get_best_sellers` — bagong tool.** Fixed na 7 merchant-curated titles
+- **`get_best_sellers`: bagong tool.** Fixed na 7 merchant-curated titles
   (Autumn Morning, Sweet Heart, California Dreaming, Luxe Noir, Majestic Bouquet,
   Meadow Fresh, Crimson Whisper) via OR-of-titles query, ibinabalik sa curated
   order (ang matched-but-unlisted ay idinudugtong defensively). **Hindi** ito
@@ -608,26 +341,26 @@ huwag nang halukayin).
   sumasakay sa parehong carousel path ng `search_products`, at ipinagbabawal ng
   prompt na tawaging best seller ang plain search result.
 - **Hidden products skip.** Nilalaktawan na ng `runProductSearch` ang node na
-  walang `onlineStoreUrl` — para hindi sumulpot ang internal na "COD Fee"
+  walang `onlineStoreUrl`: para hindi sumulpot ang internal na "COD Fee"
   product sa carousel ng customer.
 - **Prompt caching.** Hinati ang prompt: `buildStaticSystemPrompt(ordersEnabled)`
-  (byte-identical sa bawat conversation — deploy-constant ang `ordersEnabled`)
+  (byte-identical sa bawat conversation: deploy-constant ang `ordersEnabled`)
   at `buildDynamicContext(now)` (ang petsa lang). Isang `cache_control:
   {type:"ephemeral"}` breakpoint sa static block; dahil ang render order ay
   **tools → system → messages**, sakop nito ang buong tools+system prefix, at
   ang volatile na petsa ay nasa trailing **uncached** block. Ang
   `buildSystemPrompt()` ay pinanatili bilang concatenation ng dalawa.
-  Bagong log line: `[messenger-llm] input=… cache_write=… cache_read=… output=…`
-  — **counts lang, kailanman walang message text**.
-- **Prompt corrections (merchant-reported).**
+  Bagong log line: `[messenger-llm] input=… cache_write=… cache_read=… output=…`,
+  **counts lang, kailanman walang message text**.
+- **Prompt corrections.**
   - "SF" = shipping fee, **hindi** San Francisco. Magtanong muna ng
     barangay/city/zip bago mag-quote; bawal ipasa ang "SF" sa `check_delivery_coverage`.
   - Delivery hours = hanggang **11PM** (may 6PM–11PM slot). Ang 5PM ay closing
     ng **walk-in store**, hindi delivery limit. Bawal sabihing 5PM na ang huli.
-  - 5PM same-day cutoff — pwede nang sabihin nang direkta kapag tinanong.
+  - 5PM same-day cutoff: pwede nang sabihin nang direkta kapag tinanong.
   - 7 araw kada linggo, **walang holiday closure**.
   - Ang pagpapabago/cancel ng **nailagay nang order** ay purong self-service sa
-    flowercart.store/account. Bawat mangako ang bot na siya ang gagawa —
+    flowercart.store/account. Bawat mangako ang bot na siya ang gagawa;
     iba ito sa order na binubuo pa sa chat (`update_order` bago mag-Confirm).
   - COD **lampas ₱2,500** = online payment lang; tinanggal ang split-payment
     arrangement.
@@ -636,19 +369,12 @@ huwag nang halukayin).
 - **Coverage alias fix.** Kapag miss ang exact `AREA_ALIASES` lookup, may
   whole-word regex pass na nag-e-expand ng naka-embed na alias:
   "BGC, Taguig" → fort bonifacio (dati ay exact-match lang).
+- Tests 546 → 547 (+1: trailing uncached `systemContext` block); typecheck at
+  lint clean.
 
 Walang migration, walang bagong env/secret/dependency, walang binago sa write path.
 
-### Gates
-
-Tests **546 → 547** (+1: trailing uncached `systemContext` block); typecheck at
-lint clean. (Ang 556/556 na nakikita sa buong repo ngayon ay kasama na ang
-hiwalay na Thank-You COD work na hindi pa naka-commit.)
-
 ### ⚠️ Hindi pa na-verify sa totoong store
-
-Apat na assumption ang dapat unahin sa deploy — nakadetalye sa
-[verification-log.md](./verification-log.md) row ng 2026-08-04:
 
 1. **`onlineStoreUrl` skip = silent behavior change.** Dati, ang product na
    walang storefront URL ay ibinabalik pa rin (`url` lang ang wala). Kung ang
@@ -659,11 +385,11 @@ Apat na assumption ang dapat unahin sa deploy — nakadetalye sa
    → mali ang filter sa **bawat** bouquet browse (laging naka-append ang
    `-tag:'Add-ons'`).
 3. **Best-seller prefix match.** Tokenized ang title search ng Shopify, kaya ang
-   `title:"Sweet Heart"` ay pwedeng tumama rin sa "Sweet Heart Deluxe" —
+   `title:"Sweet Heart"` ay pwedeng tumama rin sa "Sweet Heart Deluxe";
    napupunta ito sa `extra` at ipinapakitang best seller.
 4. **Alias override.** Pinapalitan ng buo ang area string sa whole-word hit,
    kaya ang "Maynila Street, Cavite" ay magiging manila at mawawala ang Cavite.
-   (Constants ang aliases at walang regex metacharacter — walang injection risk.)
+   (Constants ang aliases at walang regex metacharacter: walang injection risk.)
 
 Manipis ang test coverage ng batch na ito: ang tool-registry name list at ang
 caching block lang ang naka-pin. Ang sort, tags/exclude_tags, addons scoping,

@@ -71,11 +71,21 @@ export type MarkDeliveredResult =
 // poller's cadence).
 export async function markLalamoveOrderDelivered(
   admin: AdminGraphQLClient,
+  shop: string,
   lalamoveOrderId: string,
   order?: LalamoveOrderStatus,
 ): Promise<MarkDeliveredResult> {
   const row = await prisma.lalamoveTracking.findUnique({ where: { lalamoveOrderId } });
   if (!row) return { status: "not_tracked" };
+  // The row must belong to the shop whose admin client we hold — a cross-shop
+  // id collision must never write a DELIVERED event into the wrong store.
+  // Single-shop in practice today (LALAMOVE_SHOP), so a mismatch is loud.
+  if (row.shop !== shop) {
+    console.warn(
+      `[lalamove-tracking] ${lalamoveOrderId} is tracked for ${row.shop}, not ${shop} — skipping.`,
+    );
+    return { status: "not_tracked" };
+  }
   if (row.deliveredAt) return { status: "already_delivered" };
 
   const dropoff = order?.stops?.[order.stops.length - 1];
@@ -183,7 +193,7 @@ export async function recordLalamoveOrderId(
   }
 
   if (statusResult.order.status === "COMPLETED" || statusResult.order.status === "COMPLETE") {
-    const result = await markLalamoveOrderDelivered(admin, trimmedId, statusResult.order);
+    const result = await markLalamoveOrderDelivered(admin, shop, trimmedId, statusResult.order);
     if (result.status === "shopify_write_failed") {
       return { status: "shopify_write_failed", error: result.error };
     }

@@ -34,13 +34,13 @@ const {
   }));
 
 vi.mock("../app/db.server", () => ({ default: prismaMock }));
-vi.mock("../app/services/messenger-llm.server", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../app/services/messenger-llm.server")>();
+vi.mock("../app/services/agent-llm.server", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../app/services/agent-llm.server")>();
   return { ...original, runLlmTurn: llmMock };
 });
 // Fully mocked (no importOriginal): the real module imports shopify.server,
 // whose Prisma session storage cannot initialize inside vitest.
-vi.mock("../app/services/messenger-agent-tools.server", () => ({
+vi.mock("../app/services/agent-tools.server", () => ({
   executeAgentTool: executeToolMock,
   getManilaNowLabel: () => "Saturday, August 1, 2026 at 12:00 PM",
   MESSENGER_AGENT_TOOLS: [],
@@ -73,7 +73,7 @@ vi.mock("../app/services/messenger-send.server", async (importOriginal) => {
   };
 });
 
-import { MESSENGER_LLM_NOT_CONFIGURED_MESSAGE } from "../app/services/messenger-llm.server";
+import { MESSENGER_LLM_NOT_CONFIGURED_MESSAGE } from "../app/services/agent-llm.server";
 import {
   buildStaticSystemPrompt,
   messengerFollowUpHours,
@@ -454,6 +454,26 @@ describe("processAgentTurnByMid — order summary + Confirm quick replies (phase
       { title: "Baguhin", payload: "EDIT_ORDER" },
     ]);
     expect(summaryMock).toHaveBeenCalledWith(readyUpdateResult().state);
+  });
+
+  it("never truncates the summary — a near-limit LLM lead is what gets cut (2026-08-24 budget fix)", async () => {
+    llmMock
+      .mockResolvedValueOnce({
+        ok: true,
+        stopReason: "tool_use",
+        blocks: [{ type: "tool_use", id: "t1", name: "update_order", input: { phone: "0917..." } }],
+      })
+      .mockResolvedValueOnce(textTurn("L".repeat(2500)));
+    executeToolMock.mockResolvedValue(readyUpdateResult("key-77"));
+
+    const result = await processAgentTurnByMid(MID);
+    expect(result.status).toBe("sent");
+
+    const sentText: string = sendMock.mock.calls[0][0].text;
+    expect(sentText.length).toBeLessThanOrEqual(2000);
+    // The full deterministic summary survives at the tail; the oversized LLM
+    // lead is what got budgeted down.
+    expect(sentText.endsWith("\n\n🧾 ORDER SUMMARY (deterministic)")).toBe(true);
   });
 
   it("does not attach Confirm quick replies while details are still missing", async () => {

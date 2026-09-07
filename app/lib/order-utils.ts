@@ -86,6 +86,12 @@ export interface Order {
   customTimeSlot: Metafield | null;
   rescheduleHistory: Metafield | null;
   rescheduleStatus?: Metafield | null;
+  /** Numeric Shopify id — only the recent-reschedules banner query fetches it. */
+  legacyResourceId?: string | null;
+  /** `$app.reschedule_seen_at` — the requestedAt of the last reschedule the merchant acknowledged. */
+  rescheduleSeenAt?: Metafield | null;
+  /** Loader-computed, shop-local: "Rescheduled · 8:47 AM" (today) or "Rescheduled · Sep 3, 5:09 PM". */
+  rescheduleBadgeLabel?: string | null;
   shippingAddress: ShippingAddress | null;
   billingAddress: BillingAddress | null;
   note: string | null;
@@ -99,13 +105,6 @@ export interface Order {
   lineItems: { edges: { node: LineItem }[] } | null;
   fulfillments: { createdAt: string; deliveredAt: string | null }[] | null;
   emailLog: { sentAt: string; to: string }[];
-  // Occasion-reminder conversions (ADR-19): reminder rows whose convertedOrderId
-  // is THIS order — i.e. this order exists because a reminder email worked.
-  reminderConversions?: {
-    touch: string;
-    occasionType: string;
-    sentAt: string | null;
-  }[];
 }
 
 export type BadgeTone =
@@ -434,19 +433,32 @@ export function getAttr(attrs: CustomAttribute[], ...keys: string[]): string {
 
 // ─── Line item helpers ────────────────────────────────────────────────────────
 
-export function getFirstItemImageUrl(order: Order): string | undefined {
-  const item = order.lineItems?.edges?.[0]?.node ?? null;
-  return item?.image?.url || item?.product?.featuredImage?.url || undefined;
+export interface ItemThumbnail {
+  url: string;
+  altText: string;
 }
 
-export function getFirstItemAltText(order: Order): string {
-  const item = order.lineItems?.edges?.[0]?.node ?? null;
-  if (!item) return "Product image";
-  return (
-    item.image?.altText ||
-    item.product?.featuredImage?.altText ||
-    `Image of ${item.name}`
-  );
+/**
+ * Up to `max` line-item images for the table's stacked thumbnails. Per item:
+ * variant image first, product featured image as fallback; items without any
+ * image are skipped so the second slot can still fill from a later item.
+ */
+export function getItemImages(order: Order, max = 2): ItemThumbnail[] {
+  const images: ItemThumbnail[] = [];
+  for (const edge of order.lineItems?.edges ?? []) {
+    const item = edge.node;
+    const url = item?.image?.url || item?.product?.featuredImage?.url;
+    if (!url) continue;
+    images.push({
+      url,
+      altText:
+        item.image?.altText ||
+        item.product?.featuredImage?.altText ||
+        `Image of ${item.name}`,
+    });
+    if (images.length >= max) break;
+  }
+  return images;
 }
 
 // ─── Shipping address helpers ─────────────────────────────────────────────────
@@ -661,10 +673,4 @@ export function getEmailSentEvents(
   order: Order,
 ): { sentAt: string; to: string }[] {
   return order.emailLog || [];
-}
-
-export function getReminderConversionEvents(
-  order: Order,
-): { touch: string; occasionType: string; sentAt: string | null }[] {
-  return order.reminderConversions || [];
 }

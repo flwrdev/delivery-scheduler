@@ -26,6 +26,7 @@ import {
   getMeaningfulTags,
   getDeliveryDateValue,
   getDeliveryTimeValue,
+  formatDeliveryDate,
 } from "../lib/order-utils";
 import {
   useLoaderData,
@@ -55,21 +56,56 @@ import { MarkFulfilledModal } from "../components/orders/MarkFulfilledModal";
 import { RescheduleModal } from "../components/orders/RescheduleModal";
 import { SendEmailModal } from "../components/orders/SendEmailModal";
 import { EditDetailsModal } from "../components/orders/EditDetailsModal";
+import { RecentReschedulesBanner } from "../components/orders/RecentReschedulesBanner";
 import {
+  DEFAULT_DELIVERY_SCHEDULE_RULES,
   getShopLocalDate,
   validateMerchantRescheduleSelection,
 } from "../lib/delivery-availability";
 import { slotValuesMatch } from "../lib/slot-value";
-import { rescheduleOrderDelivery } from "../services/reschedule-order-delivery.server";
+import {
+  type RecentRescheduleItem,
+  buildRecentRescheduleSearchQuery,
+  rescheduleBadgeLabel,
+  selectRecentReschedules,
+} from "../lib/recent-reschedules";
 import { handleSendEmailOp } from "../services/send-customer-email.server";
 import { handleEditDetailsOp } from "../services/update-order-contact.server";
-import { recordLalamoveOrderId } from "../services/lalamove-tracking.server";
+import { handleMarkRescheduleSeenOp } from "../services/reschedule-seen.server";
+import type { AdminGraphQLClient } from "../services/order-delivery-metafields.server";
+import {
+  getDeliverySyncIssues,
+  retryDeliverySyncIssues,
+  type DeliverySyncIssueSummary,
+} from "../services/delivery-sync-task.server";
+import {
+  BULK_INLINE_MAX,
+  MAX_SELECTED_ORDER_IDS,
+  executeBulkAction,
+  fetchRescheduleOrderStates,
+  isBulkActionName,
+  rescheduleCurrentDateOf,
+  rescheduleCurrentSlotOf,
+  type BulkActionItemResult,
+  type BulkActionName,
+  type BulkActionResponse,
+  type BulkOpParams,
+} from "../services/bulk-actions.server";
+import {
+  createBulkActionJob,
+  runBulkJobToCompletion,
+} from "../services/bulk-action-jobs.server";
+import { enqueueBulkActionTask } from "../services/messenger-queue.server";
 import prisma from "../db.server";
 import {
   getScheduleRules,
   getScheduleRulesWithBookedCounts,
 } from "../services/schedule-rules.server";
-import { buildOrderEventTag, MAX_ORDER_TAG_LENGTH } from "../lib/order-tags";
+import {
+  MAX_ORDER_TAG_LENGTH,
+  buildDeliveryDateTagQuery,
+} from "../lib/order-tags";
+import { computeDateRefs, enumerateISODates } from "../lib/date-refs";
 import { authenticate } from "../shopify.server";
 import panelStylesHref from "../styles/order-details-panel.css?url";
 
@@ -255,6 +291,92 @@ const GET_ORDERS_QUERY = `
   }
 `;
 
+// ─── Recent reschedules (the "Rescheduled today" banner, 2026-09-04) ──────────
+//
+// A second, small query per load: orders tagged `resched-<day>` for the last
+// three shop-local days (query string built in lib/recent-reschedules). It is
+// separate from GET_ORDERS_QUERY on purpose — the banner must show on EVERY
+// tab, and the rescheduled order has usually just left the tab being viewed.
+const RECENT_RESCHEDULE_PAGE = 50;
+
+const GET_RECENT_RESCHEDULES_QUERY = `
+  query GetRecentReschedules($first: Int!, $query: String!) {
+    orders(first: $first, query: $query, sortKey: UPDATED_AT, reverse: true) {
+      edges {
+        node {
+          id
+          legacyResourceId
+          name
+          tags
+          customer {
+            id
+            firstName
+            lastName
+            numberOfOrders
+            defaultEmailAddress {
+              emailAddress
+            }
+            defaultPhoneNumber {
+              phoneNumber
+            }
+          }
+          customAttributes {
+            key
+            value
+          }
+          customDate: metafield(namespace: "custom", key: "date") {
+            value
+          }
+          customTimeSlot: metafield(namespace: "custom", key: "time_slot") {
+            value
+          }
+          rescheduleHistory: metafield(namespace: "delivery", key: "reschedule_history") {
+            value
+            jsonValue
+          }
+          rescheduleSeenAt: metafield(namespace: "$app", key: "reschedule_seen_at") {
+            value
+          }
+        }
+      }
+    }
+  }
+`;
+
+// Banner garnish, never page-critical: every failure degrades to "no banner".
+async function fetchRecentRescheduleOrders(
+  admin: AdminGraphQLClient,
+  todayISO: string,
+): Promise<Order[]> {
+  const query = buildRecentRescheduleSearchQuery(todayISO);
+  if (!query) return [];
+  try {
+    const response = await admin.graphql(GET_RECENT_RESCHEDULES_QUERY, {
+      variables: { first: RECENT_RESCHEDULE_PAGE, query },
+    });
+    const body = (await response.json()) as {
+      data?: { orders?: { edges?: Array<{ node: Order }> } };
+      errors?: Array<{ message: string }>;
+    };
+    if (body.errors?.length) {
+      console.warn(
+        `[orders loader] recent reschedules skipped: ${body.errors
+          .map((e) => e.message)
+          .join("; ")}`,
+      );
+      return [];
+    }
+    return body.data?.orders?.edges?.map((edge) => edge.node) ?? [];
+  } catch (error) {
+    console.warn(
+      `[orders loader] recent reschedules skipped: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return [];
+  }
+}
+
 // ─── Runtime safety helpers ───────────────────────────────────────────────────
 
 function isIsoDateParam(value: string | null): value is string {
@@ -292,8 +414,23 @@ type LoaderData = {
   timeWindowParam: string;
   tabParam: string;
   sortParam: string;
+  /**
+   * SHOP-local "today" (YYYY-MM-DD), stamped fresh on every loader run — the
+   * client's date tabs / overdue chips derive from this, never from the
+   * browser clock, so a merchant (or VA) on a non-Manila machine and a page
+   * left open past shop midnight both still see the shop's real "Today".
+   */
+  todayISO: string;
+  /** Orders page size this load used (25 or 250) — tab counts derived from a 25-row page are hidden as unrepresentative. */
+  pageSize: number;
   /** Google Maps key for the Edit-details address search; "" hides the field. */
   mapsApiKey: string;
+  /** Delivery-sync tasks stuck/failed for this shop (ADR-22) — drives the ops banner; degrades to zero on DB trouble. */
+  syncIssues: DeliverySyncIssueSummary;
+  /** Customer reschedules from the last 48 h not yet marked Seen — the "Rescheduled today" banner; degrades to empty. */
+  recentReschedules: RecentRescheduleItem[];
+  /** True when the page was server-scoped by a delivery-date tag (dated tab or date filter) — other tabs' counts are then unknowable. */
+  dateScoped: boolean;
 };
 
 export const loader = async ({
@@ -320,21 +457,45 @@ export const loader = async ({
   const after = url.searchParams.get("after") || null;
   const before = url.searchParams.get("before") || null;
 
+  // "Today" is the SHOP's calendar day (event tags, cutoffs, and the booked
+  // counts all already run on rules.timezone — the client must agree). The
+  // timezone read is non-critical: a Postgres hiccup falls back to the shop
+  // default instead of failing the page. Resolved BEFORE the query is built
+  // because the dated views now send the day's tag as a server term.
+  let shopTimezone = DEFAULT_DELIVERY_SCHEDULE_RULES.timezone;
+  try {
+    ({ timezone: shopTimezone } = await getScheduleRules(session.shop));
+  } catch (error) {
+    console.warn(
+      `[orders loader] timezone read failed, using ${shopTimezone}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const todayISO = getShopLocalDate(shopTimezone) || toLocalISODate(new Date());
+
   // Build composite Shopify query string from the SERVER-supported filters.
   //
-  // ⚠️ Delivery date / time-slot terms (`metafields.custom.date` /
-  // `metafields.custom.time_slot`) are deliberately NOT sent: Shopify silently
-  // ignores metafield search terms on the orders query unless the metafield
-  // definition is indexed as filterable (verified live 2026-07-11 — an applied
-  // time-slot filter returned every order unfiltered). All delivery-date /
-  // time-slot filtering (Today/Tomorrow tabs, the two toolbar filters) is done
-  // CLIENT-side over an enlarged page, same as the pre-existing thisWeek
-  // pattern. Enabling the filterable capability on those definitions could
-  // move this server-side later — documented in the verification log.
+  // ⚠️ Metafield terms (`metafields.custom.date` / `metafields.custom.time_slot`)
+  // are deliberately NOT sent: Shopify silently ignores metafield search terms
+  // on the orders query unless the definition is indexed as filterable
+  // (verified live 2026-07-11 — an applied time-slot filter returned every
+  // order unfiltered). The delivery-date TAG, however, IS exact-match
+  // searchable, and since 2026-09-04 the dated views send it (below); the
+  // time-slot filter stays CLIENT-side (slot tags carry legacy spelling
+  // variants) over the enlarged page, as before.
   const queryParts: string[] = [];
 
   if (searchParam) {
-    queryParts.push(searchParam);
+    // A raw ":" parses as a field:value operator in Shopify's search syntax
+    // (e.g. "status:closed" typed into the search box widens the All view
+    // past its -status:closed guard) — quote such input so it searches as a
+    // literal term. Plain searches pass through untouched.
+    queryParts.push(
+      searchParam.includes(":")
+        ? `"${searchParam.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+        : searchParam,
+    );
   }
   if (tabParam === "unfulfilled") {
     // status:open — the workqueue: excludes archived AND cancelled orders.
@@ -354,13 +515,46 @@ export const loader = async ({
     queryParts.push("-status:closed");
   }
 
+  // Dated views (2026-09-04): every synced order carries its delivery date
+  // as a bare `YYYY-MM-DD` tag (written by the orders/create sync, re-synced
+  // by both reschedule paths), and tag search is exact-match. Sending it
+  // means a dated tab lists EVERY order for that day; the old 250-newest
+  // window silently dropped old pre-orders and far-forward reschedules
+  // (#4030, placed Aug 7 for Sep 5, was invisible on Tomorrow). The client's
+  // metafield filter below still runs as the safety net.
+  const dateRefs = computeDateRefs(todayISO);
+  const tabDates =
+    tabParam === "today"
+      ? [dateRefs.todayISO]
+      : tabParam === "yesterday"
+        ? [dateRefs.yesterdayISO]
+        : tabParam === "tomorrow"
+          ? [dateRefs.tomorrowISO]
+          : tabParam === "thisWeek"
+            ? enumerateISODates(dateRefs.startWeekISO, dateRefs.endWeekISO)
+            : tabParam === "lastWeek"
+              ? enumerateISODates(dateRefs.lastWeekStartISO, dateRefs.lastWeekEndISO)
+              : [];
+  const tabDateTerm = buildDeliveryDateTagQuery(tabDates);
+  if (tabDateTerm) queryParts.push(tabDateTerm);
+  const filterDateTerm = deliveryDateParam
+    ? buildDeliveryDateTagQuery([deliveryDateParam])
+    : "";
+  if (filterDateTerm) queryParts.push(filterDateTerm);
+  // Echoed to the client: a date-scoped page can only count its own view.
+  const dateScoped = Boolean(tabDateTerm || filterDateTerm);
+
   const compositeQuery = queryParts.join(" ") || null;
 
-  // Client-side date/slot filtering needs more rows to filter from.
+  // Client-side slot filtering (and the metafield safety net) needs rows to
+  // filter from. Dated views are server-scoped to the day's orders now, so
+  // 250 is a generous ceiling rather than the whole workable window.
   const needsClientFilter =
     tabParam === "today" ||
+    tabParam === "yesterday" ||
     tabParam === "tomorrow" ||
     tabParam === "thisWeek" ||
+    tabParam === "lastWeek" ||
     Boolean(deliveryDateParam) ||
     Boolean(timeWindowParam);
   const pageSize = needsClientFilter ? 250 : 25;
@@ -374,7 +568,12 @@ export const loader = async ({
     reverse: sortParam !== "orderDate asc",
   };
 
-  const response = await admin.graphql(GET_ORDERS_QUERY, { variables });
+  // The banner's query rides alongside the page query; it fails open on its
+  // own, so it can never take the table down with it.
+  const [response, recentRescheduleOrders] = await Promise.all([
+    admin.graphql(GET_ORDERS_QUERY, { variables }),
+    fetchRecentRescheduleOrders(admin, todayISO),
+  ]);
   const body = (await response.json()) as {
     data?: {
       orders?: {
@@ -390,15 +589,30 @@ export const loader = async ({
 
   // Email-sent history (E-5 revisit, docs/customer-email-design.md) lives in
   // Postgres, never on the Shopify order — one lookup keyed by this page's
-  // order ids, grouped and attached below.
+  // order ids, grouped and attached below. Panel-timeline garnish, not
+  // page-critical: a Neon cold-start rejection here must degrade to an empty
+  // list, never 500 the whole ops page — and on the Today view this loader
+  // re-runs every 5 minutes, so the exposure is constant.
   const orderIds = orders.map((o) => o.id);
-  const emailLogRows =
-    orderIds.length > 0
-      ? await prisma.emailSendLog.findMany({
-          where: { shop: session.shop, shopifyOrderId: { in: orderIds } },
-          orderBy: { sentAt: "desc" },
-        })
-      : [];
+  let emailLogRows: Array<{
+    shopifyOrderId: string;
+    sentAt: Date;
+    to: string;
+  }> = [];
+  if (orderIds.length > 0) {
+    try {
+      emailLogRows = await prisma.emailSendLog.findMany({
+        where: { shop: session.shop, shopifyOrderId: { in: orderIds } },
+        orderBy: { sentAt: "desc" },
+      });
+    } catch (error) {
+      console.warn(
+        `[orders loader] email enrichment skipped: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   const emailLogByOrderId = new Map<string, { sentAt: string; to: string }[]>();
   for (const row of emailLogRows) {
     const list = emailLogByOrderId.get(row.shopifyOrderId) ?? [];
@@ -409,37 +623,29 @@ export const loader = async ({
     order.emailLog = emailLogByOrderId.get(order.id) ?? [];
   }
 
-  // Occasion-reminder conversions (ADR-19): a row whose convertedOrderId is
-  // one of this page's orders means THAT order came from a reminder email —
-  // surfaced in the panel's DeliveryTimeline. Read-only Postgres lookup.
-  const conversionRows =
-    orderIds.length > 0
-      ? await prisma.occasionReminder.findMany({
-          where: { shop: session.shop, convertedOrderId: { in: orderIds } },
-          select: {
-            convertedOrderId: true,
-            touch: true,
-            occasionType: true,
-            sentAt: true,
-          },
-        })
-      : [];
-  const conversionsByOrderId = new Map<
-    string,
-    { touch: string; occasionType: string; sentAt: string | null }[]
-  >();
-  for (const row of conversionRows) {
-    if (!row.convertedOrderId) continue;
-    const list = conversionsByOrderId.get(row.convertedOrderId) ?? [];
-    list.push({
-      touch: row.touch,
-      occasionType: row.occasionType,
-      sentAt: row.sentAt ? row.sentAt.toISOString() : null,
-    });
-    conversionsByOrderId.set(row.convertedOrderId, list);
-  }
+  // Shop-local reschedule labels are stamped here, not in the browser: the
+  // client has todayISO but not the shop timezone, and a VA on a non-Manila
+  // machine must read the same "8:47 AM" as the merchant.
+  const shopLocal = { todayISO, timezone: shopTimezone };
   for (const order of orders) {
-    order.reminderConversions = conversionsByOrderId.get(order.id) ?? [];
+    order.rescheduleBadgeLabel = rescheduleBadgeLabel(order, shopLocal);
+  }
+  const recentReschedules = selectRecentReschedules(
+    recentRescheduleOrders,
+    shopLocal,
+  );
+
+  // Sync-issue banner count (ADR-22): same guarded posture as the enrichment
+  // above — banner garnish, never page-critical.
+  let syncIssues: DeliverySyncIssueSummary = { count: 0, orderNames: [] };
+  try {
+    syncIssues = await getDeliverySyncIssues(session.shop);
+  } catch (error) {
+    console.warn(
+      `[orders loader] sync-issue count skipped: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
 
   return Response.json(
@@ -452,195 +658,31 @@ export const loader = async ({
       timeWindowParam,
       tabParam,
       sortParam,
+      todayISO,
+      pageSize,
+      syncIssues,
+      recentReschedules,
+      dateScoped,
+      // Client-exposed by design (Maps JS SDK requires it in the browser) —
+      // the key itself must be locked down in the Google Cloud console:
+      // HTTP-referrer restriction + Places API only.
       mapsApiKey: process.env.GOOGLE_MAPS_API_KEY ?? "",
     } satisfies LoaderData,
     { headers: { "Cache-Control": "no-store" } },
   );
 };
 
-// ─── Bulk action mutations ────────────────────────────────────────────────────
+// ─── Bulk action types (moved to services/bulk-actions.server.ts, ADR-22 Phase B) ──
+//
+// The executor, its mutations, and the result types now live in the shared
+// service so the inline path and the Cloud Tasks worker cannot drift.
+// Re-exported here so existing imports (useBulkActions) keep their path.
+export type { BulkActionName, BulkActionResponse } from "../services/bulk-actions.server";
 
-const ORDER_CLOSE_MUTATION = `
-  mutation OrderClose($input: OrderCloseInput!) {
-    orderClose(input: $input) {
-      order { id }
-      userErrors { field message }
-    }
-  }
-`;
-
-const ORDER_OPEN_MUTATION = `
-  mutation OrderOpen($input: OrderOpenInput!) {
-    orderOpen(input: $input) {
-      order { id }
-      userErrors { field message }
-    }
-  }
-`;
-
-const ORDER_CANCEL_MUTATION = `
-  mutation OrderCancel(
-    $orderId: ID!
-    $reason: OrderCancelReason!
-    $restock: Boolean!
-    $notifyCustomer: Boolean
-    $staffNote: String
-  ) {
-    orderCancel(
-      orderId: $orderId
-      reason: $reason
-      restock: $restock
-      notifyCustomer: $notifyCustomer
-      staffNote: $staffNote
-    ) {
-      job { id }
-      orderCancelUserErrors { field message code }
-    }
-  }
-`;
-
-const TAGS_ADD_MUTATION = `
-  mutation TagsAdd($id: ID!, $tags: [String!]!) {
-    tagsAdd(id: $id, tags: $tags) {
-      node { id }
-      userErrors { field message }
-    }
-  }
-`;
-
-const TAGS_REMOVE_MUTATION = `
-  mutation TagsRemove($id: ID!, $tags: [String!]!) {
-    tagsRemove(id: $id, tags: $tags) {
-      node { id }
-      userErrors { field message }
-    }
-  }
-`;
-
-// Fulfillment-order workflow — used ONLY when the merchant clicks "Mark as fulfilled".
-// Requires read_merchant_managed_fulfillment_orders (query) and
-// write_merchant_managed_fulfillment_orders (mutation). Never added to GET_ORDERS_QUERY.
-// Builds one aliased query for all selected orders to replace N serial API roundtrips.
-function buildBatchFulfillmentQuery(ids: string[]): string {
-  const fragments = ids
-    .map(
-      (id, i) =>
-        `  o${i}: order(id: "${id}") {
-    id
-    fulfillmentOrders(first: 50) {
-      nodes {
-        id
-        status
-        supportedActions { action }
-      }
-    }
-  }`,
-    )
-    .join("\n");
-  return `query BatchFulfillmentOrders {\n${fragments}\n}`;
-}
-
-const FULFILLMENT_CREATE_MUTATION = `
-  mutation FulfillmentCreate($fulfillment: FulfillmentInput!) {
-    fulfillmentCreate(fulfillment: $fulfillment) {
-      fulfillment { id status }
-      userErrors { field message }
-    }
-  }
-`;
-
-// Rewrite raw Shopify access-denied / scope errors into something the merchant can act on.
-function scopeHint(msg: string): string {
-  if (
-    /access denied|fulfillmentOrders|not authorized|missing.*scope/i.test(msg)
-  ) {
-    return "Access denied — the app needs fulfillment-order permission. Please reinstall the app to grant the new scope.";
-  }
-  return msg;
-}
-
-// Batch current-delivery-state read for the merchant reschedule op: the
-// from→to history values, attribute rewrite, and tag replacement all derive
-// from the order state at write time (single call for the whole selection).
-const RESCHEDULE_ORDER_STATE_QUERY = `#graphql
-  query RescheduleOrderStates($ids: [ID!]!) {
-    nodes(ids: $ids) {
-      ... on Order {
-        id
-        tags
-        customAttributes {
-          key
-          value
-        }
-        currentDeliveryDate: metafield(namespace: "custom", key: "date") {
-          value
-        }
-        currentDeliveryTimeSlot: metafield(namespace: "custom", key: "time_slot") {
-          value
-        }
-        rescheduleHistory: metafield(namespace: "delivery", key: "reschedule_history") {
-          value
-        }
-      }
-    }
-  }
-`;
-
-// ─── Action result types ──────────────────────────────────────────────────────
-
-export type BulkActionName =
-  | "archive"
-  | "unarchive"
-  | "cancel"
-  | "tagsAdd"
-  | "tagsRemove"
-  | "markFulfilled"
-  | "reschedule";
-
-const BULK_ACTION_NAMES: readonly BulkActionName[] = [
-  "archive",
-  "unarchive",
-  "cancel",
-  "tagsAdd",
-  "tagsRemove",
-  "markFulfilled",
-  "reschedule",
-];
-const MAX_SELECTED_ORDER_IDS = 100;
-// Shopify's real per-tag cap is 40, not 255 (live-verified 2026-08-14: 40 is
-// accepted, 41 answers "Order tags is invalid"). The old 255 let a merchant's
-// long tag pass our validation and then fail at Shopify — and because one bad
-// tag fails the ENTIRE tagsAdd call, every other tag in that submit was lost
-// with it. Single-sourced in lib/order-tags.ts.
+// Shopify's real per-tag cap is 40, not 255 (live-verified 2026-08-14) —
+// single-sourced in lib/order-tags.ts.
 const MAX_TAG_LENGTH = MAX_ORDER_TAG_LENGTH;
 
-function isBulkActionName(value: string): value is BulkActionName {
-  return (BULK_ACTION_NAMES as readonly string[]).includes(value);
-}
-
-interface BulkActionItemResult {
-  orderId: string;
-  success: boolean;
-  message?: string;
-}
-
-export interface BulkActionResponse {
-  ok: boolean;
-  action: BulkActionName | null;
-  message?: string;
-  results: BulkActionItemResult[];
-  summary: { ok: number; failed: number };
-  // Reschedule only (REC-4): the target slot's capacity would be exceeded and
-  // the submit did not carry the explicit override — the modal re-renders as
-  // a confirm step showing the projected load instead of a toast.
-  code?: "capacity_override_required";
-  capacity?: {
-    capacity: number;
-    booked: number;
-    moving: number;
-    projected: number;
-  };
-}
 
 // ─── Action handler ───────────────────────────────────────────────────────────
 
@@ -674,6 +716,14 @@ export const action = async ({
     return handleSendEmailOp(admin, fd, session.shop);
   }
 
+  // Seen on the "Rescheduled today" banner: records the acknowledged event's
+  // requestedAt on `$app.reschedule_seen_at`. An order write, NOT a delivery
+  // write (none of the api.md §2 fields) — single orderId, so it dispatches
+  // before the bulk machinery like the ops around it.
+  if (opRaw === "markRescheduleSeen") {
+    return handleMarkRescheduleSeenOp(admin, fd);
+  }
+
   // Edit details: single-order shipping-address rewrite from the panel's
   // Actions menu. An order write, but NOT a delivery write — it touches no
   // delivery metafield, tag, or customAttribute, so the §2 contract in
@@ -686,6 +736,37 @@ export const action = async ({
     // minutes apart could tag different days.
     const { timezone } = await getScheduleRules(session.shop);
     return handleEditDetailsOp(admin, fd, timezone);
+  }
+
+  // Retry stuck delivery syncs (ADR-22): re-arms failed/stuck DeliverySyncTask
+  // rows and enqueues a worker task each. Carries no orderId selection, so it
+  // dispatches before the bulk machinery like sendEmail/editDetails.
+  if (opRaw === "retryDeliverySync") {
+    try {
+      const { retried } = await retryDeliverySyncIssues(session.shop);
+      return Response.json({
+        ok: true,
+        action: "retryDeliverySync",
+        message:
+          retried > 0
+            ? `Retrying delivery sync for ${retried} order${retried === 1 ? "" : "s"} in the background.`
+            : "Nothing left to retry.",
+        retried,
+      });
+    } catch (error) {
+      console.warn(
+        `[orders action] retryDeliverySync failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      // ADR-11: upstream trouble is 200 + ok:false, never a 5xx.
+      return Response.json({
+        ok: false,
+        action: "retryDeliverySync",
+        message: "Could not restart the delivery sync. Try again in a moment.",
+        retried: 0,
+      });
+    }
   }
 
   const op = isBulkActionName(opRaw) ? opRaw : "";
@@ -725,68 +806,15 @@ export const action = async ({
     );
   }
 
-  const results: BulkActionItemResult[] = [];
-
-  const runOne = async (
-    id: string,
-    mutation: string,
-    variables: Record<string, unknown>,
-    rootKey: string,
-    errorsKey: "userErrors" | "orderCancelUserErrors",
-  ) => {
-    try {
-      const res = await admin.graphql(mutation, { variables });
-      const j = (await res.json()) as {
-        data?: Record<string, { [k: string]: unknown }>;
-        errors?: Array<{ message: string }>;
-      };
-      if (j.errors?.length) {
-        results.push({
-          orderId: id,
-          success: false,
-          message: j.errors.map((e) => e.message).join("; "),
-        });
-        return j;
-      }
-      const errs =
-        (j?.data?.[rootKey]?.[errorsKey] as Array<{ message: string }>) || [];
-      if (errs.length) {
-        results.push({
-          orderId: id,
-          success: false,
-          message: errs.map((e) => e.message).join("; "),
-        });
-      } else {
-        results.push({ orderId: id, success: true });
-      }
-      return j;
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "GraphQL error";
-      results.push({ orderId: id, success: false, message });
-      return undefined;
-    }
-  };
-
-  if (op === "archive") {
-    for (const id of orderIds) {
-      await runOne(
-        id,
-        ORDER_CLOSE_MUTATION,
-        { input: { id } },
-        "orderClose",
-        "userErrors",
-      );
-    }
-  } else if (op === "unarchive") {
-    for (const id of orderIds) {
-      await runOne(
-        id,
-        ORDER_OPEN_MUTATION,
-        { input: { id } },
-        "orderOpen",
-        "userErrors",
-      );
-    }
+  // ── Parse + validate op params (ADR-22 Phase B): validation happens BEFORE
+  //    the inline/job split, so a BulkOpParams is valid by construction
+  //    wherever it ends up — executed inline below, or snapshotted into a
+  //    BulkActionJob for the Cloud Tasks worker. The execution itself lives in
+  //    executeBulkAction (services/bulk-actions.server.ts), shared by both
+  //    paths so they cannot drift. ──────────────────────────────────────────
+  let opParams: BulkOpParams;
+  if (op === "archive" || op === "unarchive") {
+    opParams = { op };
   } else if (op === "cancel") {
     const validReasons = new Set([
       "CUSTOMER",
@@ -801,16 +829,13 @@ export const action = async ({
     const restock = fd.get("restock") === "1";
     const notifyCustomer = fd.get("notifyCustomer") === "1";
     const staffNoteRaw = String(fd.get("staffNote") || "").slice(0, 255);
-    const staffNote = staffNoteRaw.trim() || null;
-    for (const id of orderIds) {
-      await runOne(
-        id,
-        ORDER_CANCEL_MUTATION,
-        { orderId: id, reason, restock, notifyCustomer, staffNote },
-        "orderCancel",
-        "orderCancelUserErrors",
-      );
-    }
+    opParams = {
+      op: "cancel",
+      reason,
+      restock,
+      notifyCustomer,
+      staffNote: staffNoteRaw.trim() || null,
+    };
   } else if (op === "tagsAdd" || op === "tagsRemove") {
     const tags = String(fd.get("tags") || "")
       .split(",")
@@ -831,12 +856,7 @@ export const action = async ({
         { status: 400 },
       );
     }
-    const mutation =
-      op === "tagsAdd" ? TAGS_ADD_MUTATION : TAGS_REMOVE_MUTATION;
-    const rootKey = op === "tagsAdd" ? "tagsAdd" : "tagsRemove";
-    for (const id of orderIds) {
-      await runOne(id, mutation, { id, tags }, rootKey, "userErrors");
-    }
+    opParams = { op, tags };
   } else if (op === "markFulfilled") {
     const trackingUrl = String(fd.get("trackingUrl") || "").trim();
     const notifyCustomer = fd.get("notifyCustomer") === "1";
@@ -854,199 +874,8 @@ export const action = async ({
         { status: 400 },
       );
     }
-
-    // ── Step 1: Batch-fetch fulfillment orders (single API call) ─────────────
-    const SHOPIFY_ORDER_GID_RE = /^gid:\/\/shopify\/Order\/\d+$/;
-    const safeIds = orderIds.filter((id) => SHOPIFY_ORDER_GID_RE.test(id));
-    for (const id of orderIds) {
-      if (!SHOPIFY_ORDER_GID_RE.test(id)) {
-        results.push({ orderId: id, success: false, message: "Invalid order ID." });
-      }
-    }
-
-    type FulfillmentNode = {
-      id: string;
-      status: string;
-      supportedActions?: Array<{ action: string }>;
-    };
-    const fulfillableByOrderId = new Map<string, FulfillmentNode[]>();
-    let batchQueryFailed = false;
-
-    if (safeIds.length > 0) {
-      const batchQuery = buildBatchFulfillmentQuery(safeIds);
-      let batchJson: {
-        data?: Record<string, {
-          id: string;
-          fulfillmentOrders: { nodes: FulfillmentNode[] };
-        } | null>;
-        errors?: Array<{ message: string }>;
-      } = {};
-      try {
-        const batchRes = await admin.graphql(batchQuery);
-        batchJson = await batchRes.json();
-      } catch (e: unknown) {
-        batchQueryFailed = true;
-        const m =
-          e instanceof Error ? e.message : "Failed to read fulfillment orders";
-        for (const id of safeIds) {
-          results.push({ orderId: id, success: false, message: scopeHint(m) });
-        }
-      }
-
-      if (!batchQueryFailed) {
-        if (batchJson.errors?.length) {
-          batchQueryFailed = true;
-          const msg = batchJson.errors.map((e) => e.message).join("; ");
-          for (const id of safeIds) {
-            results.push({ orderId: id, success: false, message: scopeHint(msg) });
-          }
-        } else {
-          safeIds.forEach((id, i) => {
-            const orderData = batchJson.data?.[`o${i}`];
-            fulfillableByOrderId.set(
-              id,
-              (orderData?.fulfillmentOrders?.nodes ?? []).filter((n) =>
-                (n.supportedActions || []).some(
-                  (a) => a.action === "CREATE_FULFILLMENT",
-                ),
-              ),
-            );
-          });
-        }
-      }
-    }
-
-    // ── Step 2: Create fulfillments (one mutation per order) ─────────────────
-    if (!batchQueryFailed) {
-      for (const id of safeIds) {
-        const fulfillable = fulfillableByOrderId.get(id) ?? [];
-        if (fulfillable.length === 0) {
-          results.push({
-            orderId: id,
-            success: false,
-            message: "No fulfillable items remaining.",
-          });
-          continue;
-        }
-
-        const fulfillment: Record<string, unknown> = {
-          lineItemsByFulfillmentOrder: fulfillable.map((fo) => ({
-            fulfillmentOrderId: fo.id,
-          })),
-          notifyCustomer,
-        };
-        if (trackingUrl) {
-          fulfillment.trackingInfo = { url: trackingUrl };
-        }
-
-        const before = results.length;
-        const fulfillJson = await runOne(
-          id,
-          FULFILLMENT_CREATE_MUTATION,
-          { fulfillment },
-          "fulfillmentCreate",
-          "userErrors",
-        );
-        for (let i = before; i < results.length; i++) {
-          const r = results[i];
-          if (!r.success && r.message) r.message = scopeHint(r.message);
-        }
-
-        // ADR-16: record the Lalamove correlation right after the fulfillment
-        // that created it succeeds — never fails the fulfillment itself, a
-        // bad/mistyped id just gets logged (mirrors the tracking-tag write's
-        // guarded posture below). lalamoveOrderId is only ever truthy when
-        // orderIds.length === 1 (forced above), so `id` here is always that
-        // one order — no extra identity check needed.
-        if (lalamoveOrderId) {
-          const succeeded = results
-            .slice(before)
-            .some((r) => r.orderId === id && r.success);
-          const fulfillmentId = (
-            fulfillJson?.data?.fulfillmentCreate as
-              | { fulfillment?: { id?: string } }
-              | undefined
-          )?.fulfillment?.id;
-          if (succeeded && fulfillmentId) {
-            try {
-              const lalamoveResult = await recordLalamoveOrderId(
-                admin,
-                session.shop,
-                id,
-                fulfillmentId,
-                lalamoveOrderId,
-              );
-              if (lalamoveResult.status === "not_found") {
-                console.warn(
-                  `[markFulfilled] Lalamove order id "${lalamoveOrderId}" not found — check it's the numeric order id, not the tracking link.`,
-                );
-              } else if (
-                lalamoveResult.status === "lalamove_lookup_failed" ||
-                lalamoveResult.status === "shopify_write_failed"
-              ) {
-                console.warn(
-                  `[markFulfilled] Lalamove tracking record failed: ${lalamoveResult.error}`,
-                );
-              } else if (lalamoveResult.status === "already_tracked") {
-                console.warn(
-                  `[markFulfilled] Lalamove order id "${lalamoveOrderId}" is already linked to a different order — not re-linked to ${id}.`,
-                );
-              }
-            } catch (e: unknown) {
-              console.warn("[markFulfilled] Lalamove tracking record threw:", e);
-            }
-          }
-        }
-      }
-
-      // ── Step 3: timeline event tag, only for orders that actually got
-      //    tracking and only where the fulfillment succeeded. A tagging
-      //    failure never turns a successful fulfillment into a reported
-      //    failure — the tag is a mirror, like the reschedule sync's.
-      //    Fires on Tracking URL OR the Lalamove Order ID (ADR-16) — either
-      //    one alone still means "tracking got added to this fulfillment."
-      if (trackingUrl || lalamoveOrderId) {
-        const fulfilledIds = results
-          .filter((r) => r.success && safeIds.includes(r.orderId))
-          .map((r) => r.orderId);
-        if (fulfilledIds.length > 0) {
-          try {
-            const { timezone } = await getScheduleRules(session.shop);
-            const eventTag = buildOrderEventTag(
-              "trackingAdded",
-              getShopLocalDate(timezone),
-            );
-            if (eventTag) {
-              for (const id of fulfilledIds) {
-                const res = await admin.graphql(TAGS_ADD_MUTATION, {
-                  variables: { id, tags: [eventTag] },
-                });
-                const j = (await res.json()) as {
-                  data?: {
-                    tagsAdd?: { userErrors?: Array<{ message: string }> } | null;
-                  };
-                  errors?: Array<{ message: string }>;
-                };
-                const tagErrors = [
-                  ...(j.errors?.map((e) => e.message) ?? []),
-                  ...(j.data?.tagsAdd?.userErrors?.map((e) => e.message) ?? []),
-                ];
-                if (tagErrors.length > 0) {
-                  console.warn(
-                    "[markFulfilled] tracking event tag errors:",
-                    id,
-                    tagErrors,
-                  );
-                }
-              }
-            }
-          } catch (e: unknown) {
-            console.warn("[markFulfilled] tracking event tag threw:", e);
-          }
-        }
-      }
-    }
-  } else if (op === "reschedule") {
+    opParams = { op: "markFulfilled", trackingUrl, notifyCustomer, lalamoveOrderId };
+  } else {
     // Merchant reschedule = administrative override (§5, ADR-10). Only the
     // data-integrity checks bind this path; the customer self-service gates
     // (resched lock, ≥2-days, FULFILLED, cutoff/prep window) deliberately do
@@ -1064,83 +893,32 @@ export const action = async ({
       );
     }
 
-    const SHOPIFY_ORDER_GID_RE = /^gid:\/\/shopify\/Order\/\d+$/;
-    const safeIds = orderIds.filter((id) => SHOPIFY_ORDER_GID_RE.test(id));
-    for (const id of orderIds) {
-      if (!SHOPIFY_ORDER_GID_RE.test(id)) {
-        results.push({ orderId: id, success: false, message: "Invalid order ID." });
+    if (check.capacity) {
+      // Capacity projection needs current order state; the EXECUTOR re-reads
+      // state at write time (fresh per chunk on the worker path), so this
+      // read is projection-only. Orders already sitting in the target
+      // date+slot are not double-counted (§5 bulk rule) — the slot half of
+      // that "already there" test uses the SAME canonical comparison the
+      // booked-count matcher does (§4.2).
+      const stateFetch = await fetchRescheduleOrderStates(admin, orderIds);
+      if (!stateFetch.ok) {
+        return Response.json({
+          ...empty,
+          message: stateFetch.message,
+          results: orderIds.map((id) => ({
+            orderId: id,
+            success: false,
+            message: stateFetch.message,
+          })),
+          summary: { ok: 0, failed: orderIds.length },
+        } satisfies BulkActionResponse);
       }
-    }
-
-    type RescheduleOrderState = {
-      id: string;
-      tags?: string[] | null;
-      customAttributes?: Array<{ key: string; value: string }> | null;
-      currentDeliveryDate?: { value?: string | null } | null;
-      currentDeliveryTimeSlot?: { value?: string | null } | null;
-      rescheduleHistory?: { value?: string | null } | null;
-    };
-
-    const stateByOrderId = new Map<string, RescheduleOrderState>();
-    let stateQueryFailed = false;
-    if (safeIds.length > 0) {
-      try {
-        const stateRes = await admin.graphql(RESCHEDULE_ORDER_STATE_QUERY, {
-          variables: { ids: safeIds },
-        });
-        const stateJson = (await stateRes.json()) as {
-          data?: { nodes?: Array<RescheduleOrderState | null> };
-          errors?: Array<{ message: string }>;
-        };
-        if (stateJson.errors?.length) {
-          stateQueryFailed = true;
-          const msg = stateJson.errors.map((e) => e.message).join("; ");
-          for (const id of safeIds) {
-            results.push({ orderId: id, success: false, message: msg });
-          }
-        } else {
-          for (const node of stateJson.data?.nodes ?? []) {
-            if (node?.id) stateByOrderId.set(node.id, node);
-          }
-        }
-      } catch (e: unknown) {
-        stateQueryFailed = true;
-        const msg =
-          e instanceof Error ? e.message : "Failed to read order state.";
-        for (const id of safeIds) {
-          results.push({ orderId: id, success: false, message: msg });
-        }
-      }
-    }
-
-    const attrValueOf = (
-      state: RescheduleOrderState,
-      key: string,
-    ): string | null =>
-      state.customAttributes?.find((a) => a.key === key)?.value ?? null;
-    const currentDateOf = (state: RescheduleOrderState): string | null =>
-      state.currentDeliveryDate?.value?.trim() ||
-      attrValueOf(state, "Delivery Date");
-    const currentSlotOf = (state: RescheduleOrderState): string | null =>
-      state.currentDeliveryTimeSlot?.value?.trim() ||
-      attrValueOf(state, "Delivery Time");
-
-    if (!stateQueryFailed && check.capacity) {
-      // Orders already sitting in the target date+slot are not double-counted
-      // against the remaining capacity (§5 bulk rule) — `booked` already counts
-      // them. The slot half of that "already there" test must use the SAME
-      // canonical comparison the booked-count matcher does (§4.2): a raw
-      // compare treats a drifted stored spelling ("9:00AM - 12:00PM" vs the
-      // configured "9AM-12PM") as a move and asks the merchant to override a
-      // limit that was never going to be exceeded. The date half stays an exact
-      // ISO compare — the same slot on a different date IS moving in, and so is
-      // an order with nothing scheduled yet (null date, null slot).
-      const moving = safeIds.filter((id) => {
-        const state = stateByOrderId.get(id);
+      const moving = orderIds.filter((id) => {
+        const state = stateFetch.stateByOrderId.get(id);
         if (!state) return false;
         return (
-          currentDateOf(state) !== date ||
-          !slotValuesMatch(currentSlotOf(state), timeSlot)
+          rescheduleCurrentDateOf(state) !== date ||
+          !slotValuesMatch(rescheduleCurrentSlotOf(state), timeSlot)
         );
       }).length;
       const projected = check.capacity.booked + moving;
@@ -1162,71 +940,57 @@ export const action = async ({
       }
     }
 
-    if (!stateQueryFailed) {
-      const requestedAt = new Date().toISOString();
-      for (const id of safeIds) {
-        const state = stateByOrderId.get(id);
-        if (!state) {
-          results.push({
-            orderId: id,
-            success: false,
-            message: "Order not found.",
-          });
-          continue;
-        }
-        try {
-          const r = await rescheduleOrderDelivery(admin, {
-            orderId: id,
-            date,
-            timeSlot,
-            source: "merchant",
-            currentDeliveryDate: currentDateOf(state),
-            currentDeliveryTimeSlot: currentSlotOf(state),
-            currentTags: state.tags ?? [],
-            currentCustomAttributes: (state.customAttributes ?? []).map(
-              (a) => ({ key: a.key, value: a.value }),
-            ),
-            existingRescheduleHistoryValue:
-              state.rescheduleHistory?.value ?? null,
-            requestedAt,
-            shopTimezone: rules.timezone,
-          });
-          if (!r.ok) {
-            const msg =
-              [...r.canonicalErrors.graphql, ...r.canonicalErrors.user].join(
-                "; ",
-              ) || "Failed to update the delivery schedule.";
-            results.push({ orderId: id, success: false, message: msg });
-            continue;
-          }
-          const failedMirrors = [
-            r.historySync === "failed" ? "history" : null,
-            r.attributeSync === "failed" ? "attributes" : null,
-            r.tagSync === "failed" ? "tags" : null,
-          ].filter(Boolean);
-          results.push({
-            orderId: id,
-            success: true,
-            message:
-              failedMirrors.length > 0
-                ? `Rescheduled, but the ${failedMirrors.join(" + ")} sync failed.`
-                : undefined,
-          });
-        } catch (e: unknown) {
-          results.push({
-            orderId: id,
-            success: false,
-            message: e instanceof Error ? e.message : "Reschedule failed.",
-          });
-        }
-      }
-    }
-  } else {
-    return Response.json(
-      { ...empty, message: "Unknown action." },
-      { status: 400 },
-    );
+    opParams = {
+      op: "reschedule",
+      date,
+      timeSlot,
+      // Customer notice (2026-09-04): the modal's checkbox, default on. The
+      // executor sends it AFTER a successful write and never lets a send
+      // failure fail the reschedule.
+      notifyCustomer: fd.get("notifyCustomer") === "1",
+      // Stamped once here so every chunk/retry writes the same history
+      // timestamp.
+      requestedAt: new Date().toISOString(),
+      shopTimezone: rules.timezone,
+    };
   }
+
+  // ── Inline vs job (ADR-22 Phase B; threshold = merchant decision
+  //    2026-08-26): small selections stay synchronous exactly as before,
+  //    large ones become a job the client polls — the response never again
+  //    outlives the embedded fetcher / Cloudflare window (S4). ─────────────
+  if (orderIds.length > BULK_INLINE_MAX) {
+    const { jobId } = await createBulkActionJob(session.shop, opParams, orderIds);
+    const enqueued = await enqueueBulkActionTask({ jobId });
+    if (!enqueued.ok) {
+      if (!enqueued.notConfigured) {
+        console.warn(
+          `[orders action] bulk-job enqueue failed (${enqueued.error}); running in-process.`,
+        );
+      }
+      // Local dev (no queue) or an enqueue hiccup: run in-process WITHOUT
+      // awaiting — the response must stay fast (the whole point of Phase B);
+      // the hourly sweep rescues the job if this process dies mid-run.
+      void runBulkJobToCompletion(jobId);
+    }
+    return Response.json({
+      ok: true,
+      action: op,
+      mode: "job",
+      jobId,
+      total: orderIds.length,
+      message: `Processing ${orderIds.length} orders in the background.`,
+      results: [],
+      summary: { ok: 0, failed: 0 },
+    } satisfies BulkActionResponse);
+  }
+
+  const results: BulkActionItemResult[] = await executeBulkAction(
+    admin,
+    session.shop,
+    opParams,
+    orderIds,
+  );
 
   const okCount = results.filter((r) => r.success).length;
   const failedCount = results.length - okCount;
@@ -1244,8 +1008,10 @@ export const action = async ({
 type ActiveTab =
   | "all"
   | "today"
+  | "yesterday"
   | "tomorrow"
   | "thisWeek"
+  | "lastWeek"
   | "unfulfilled"
   | "unpaid"
   | "archived";
@@ -1280,29 +1046,19 @@ function Extension() {
   const [searchTerm, setSearchTerm] = useState<string>(searchParam);
   const searchParamRef = useRef(searchParam);
 
-  // Stable date references for tab filtering (computed once per mount)
-  const dateRefs = useMemo(() => {
-    const now = new Date();
-    const todayISO = toLocalISODate(now);
-    const tom = new Date(now);
-    tom.setDate(now.getDate() + 1);
-    const tomorrowISO = toLocalISODate(tom);
-    // "This week" = the current CALENDAR week, Sunday through Saturday. The
-    // previous Monday-start window made the tab empty on Sundays for every
-    // upcoming delivery (2026-07-12 smoke test: today Sun Jul 12, delivery
-    // Sat Jul 18 → excluded from the Mon Jul 6 – Sun Jul 12 window).
-    const dow = now.getDay();
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - dow);
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 6);
-    return {
-      todayISO,
-      tomorrowISO,
-      startWeekISO: toLocalISODate(weekStart),
-      endWeekISO: toLocalISODate(weekEnd),
-    };
-  }, []);
+  // Date references for tab filtering, derived from the SHOP-local todayISO
+  // the loader stamped — never from the browser clock, which drifts from the
+  // shop day on a non-Manila machine. Keyed on todayISO so every loader
+  // settle (including the §6 auto-refresh) rolls the boundary over at the
+  // shop's midnight; the old once-per-mount version kept filtering "Today"
+  // on yesterday during a past-midnight prep session. All arithmetic is UTC
+  // over the ISO string, so no timezone conversion can shift the day.
+  // Same helper the loader uses for its server-side date-tag terms
+  // (lib/date-refs.ts) — one definition of tomorrow / this week on both ends.
+  const dateRefs = useMemo(
+    () => computeDateRefs(loaderData.todayISO),
+    [loaderData.todayISO],
+  );
 
   // ── Client-side view shaping — every delivery-date/time-slot constraint is
   //    applied HERE, not in the loader query: Shopify ignores metafield search
@@ -1318,6 +1074,10 @@ function Extension() {
       list = list.filter(
         (order) => getDeliveryDateValue(order) === dateRefs.todayISO,
       );
+    } else if (tabParam === "yesterday") {
+      list = list.filter(
+        (order) => getDeliveryDateValue(order) === dateRefs.yesterdayISO,
+      );
     } else if (tabParam === "tomorrow") {
       list = list.filter(
         (order) => getDeliveryDateValue(order) === dateRefs.tomorrowISO,
@@ -1327,6 +1087,15 @@ function Extension() {
         const d = getDeliveryDateValue(order);
         return (
           d !== "—" && d >= dateRefs.startWeekISO && d <= dateRefs.endWeekISO
+        );
+      });
+    } else if (tabParam === "lastWeek") {
+      list = list.filter((order) => {
+        const d = getDeliveryDateValue(order);
+        return (
+          d !== "—" &&
+          d >= dateRefs.lastWeekStartISO &&
+          d <= dateRefs.lastWeekEndISO
         );
       });
     }
@@ -1420,6 +1189,8 @@ function Extension() {
     handleAddTags,
     handleRemoveTags,
     handleMarkFulfilled,
+    activeJob,
+    jobProgress,
   } = useBulkActions(selectedResources, clearSelection, removeSelectedResources);
 
   // Shared row-level tags modal + KPI items-to-prepare modal — plain React
@@ -1436,11 +1207,13 @@ function Extension() {
   //    arrives with the Phase 4 reschedule form. ────────────────────────────
   const fetchers = useFetchers();
   const actionInFlight = fetchers.some((f) => f.state !== "idle");
-  const refreshPaused =
-    activeModal !== null ||
-    tagsModalOrderId !== null ||
-    kpiProductsOpen ||
-    actionInFlight;
+  // Any modal stacked over the page — pauses the smart refresh below, and
+  // disables the details panel's own Escape handler (one Esc otherwise
+  // closed the modal AND the panel underneath it, taking a half-typed
+  // compose down with the ?order= param).
+  const anyModalOpen =
+    activeModal !== null || tagsModalOrderId !== null || kpiProductsOpen;
+  const refreshPaused = anyModalOpen || actionInFlight;
   const { lastUpdatedLabel, refresh, isRefreshing } = useSmartRefresh({
     isTodayView: tabParam === "today",
     paused: refreshPaused,
@@ -1461,6 +1234,46 @@ function Extension() {
     changedIds: changedOrderIds,
     dismiss: dismissOrdersDiff,
   } = useOrdersDiff(displayedOrders, ordersViewKey);
+
+  // ADR-22 sync-issue banner: dedicated fetcher — it counts into
+  // actionInFlight via useFetchers above, so the smart refresh pauses while a
+  // retry runs, and its completion revalidates the loader (banner updates).
+  const syncRetryFetcher = useFetcher<{ ok: boolean; message: string }>();
+
+  // "Rescheduled today" banner: Seen goes through its own fetcher (it counts
+  // into actionInFlight like the retry above). The acknowledged row hides
+  // optimistically while the submit + revalidation run, then the loader stops
+  // returning it — no client-side list surgery.
+  const rescheduleSeenFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const pendingSeenIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (rescheduleSeenFetcher.state !== "idle") {
+      for (const id of rescheduleSeenFetcher.formData?.getAll("orderId") ?? []) {
+        if (typeof id === "string") ids.add(id);
+      }
+    }
+    return ids;
+  }, [rescheduleSeenFetcher.state, rescheduleSeenFetcher.formData]);
+  // One op for both buttons: parallel orderId/requestedAt pairs (the service
+  // chunks the metafield writes), so "Mark all" after a 30-order bulk
+  // reschedule is one round trip, not thirty.
+  const submitReschedulesSeen = useCallback(
+    (items: RecentRescheduleItem[]) => {
+      if (items.length === 0) return;
+      const fd = new FormData();
+      fd.append("_action", "markRescheduleSeen");
+      for (const item of items) {
+        fd.append("orderId", item.orderId);
+        fd.append("requestedAt", item.requestedAt);
+      }
+      rescheduleSeenFetcher.submit(fd, { method: "post" });
+    },
+    [rescheduleSeenFetcher],
+  );
+  const markRescheduleSeen = useCallback(
+    (item: RecentRescheduleItem) => submitReschedulesSeen([item]),
+    [submitReschedulesSeen],
+  );
 
   const ordersDiffTitle = useMemo(() => {
     const parts: string[] = [];
@@ -1601,6 +1414,29 @@ function Extension() {
       navigate(`?${params.toString()}`, { preventScrollReset: true });
     },
     [searchParams, navigate, closeModal],
+  );
+
+  // Banner "Open": the moved order is usually OUTSIDE the current view (it
+  // just left Today), and the panel only renders orders present on the loaded
+  // page — so jump to All + search by order number (guarantees it is on the
+  // page), then open it.
+  const openRecentReschedule = useCallback(
+    (item: RecentRescheduleItem) => {
+      closeModal();
+      setTagsModalOrderId(null);
+      setKpiProductsOpen(false);
+      const params = new URLSearchParams(searchParams);
+      params.delete("tab");
+      params.delete("timeWindow");
+      params.delete("deliveryDate");
+      params.delete("after");
+      params.delete("before");
+      params.set("search", item.name.replace(/^#/, ""));
+      params.set("order", item.legacyId);
+      clearSelection();
+      navigate(`?${params.toString()}`);
+    },
+    [searchParams, navigate, closeModal, clearSelection],
   );
 
   const handleCloseDrawer = useCallback(() => {
@@ -1871,6 +1707,9 @@ function Extension() {
     return {
       today: orders.filter((o) => getDeliveryDateValue(o) === dateRefs.todayISO)
         .length,
+      yesterday: orders.filter(
+        (o) => getDeliveryDateValue(o) === dateRefs.yesterdayISO,
+      ).length,
       tomorrow: orders.filter(
         (o) => getDeliveryDateValue(o) === dateRefs.tomorrowISO,
       ).length,
@@ -1878,6 +1717,14 @@ function Extension() {
         const d = getDeliveryDateValue(o);
         return (
           d !== "—" && d >= dateRefs.startWeekISO && d <= dateRefs.endWeekISO
+        );
+      }).length,
+      lastWeek: orders.filter((o) => {
+        const d = getDeliveryDateValue(o);
+        return (
+          d !== "—" &&
+          d >= dateRefs.lastWeekStartISO &&
+          d <= dateRefs.lastWeekEndISO
         );
       }).length,
       unfulfilled: orders.filter(
@@ -1909,16 +1756,38 @@ function Extension() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  // Tab counts are derived from the LOADED page only. On the server-filtered
+  // tabs the page is just 25 rows, so a derived count would be badly wrong
+  // ("Today (2)" while 15 exist) — counts render only when the enlarged
+  // 250-row page was loaded. Even then a further server page may exist
+  // (cursor pagination), so counts show as lower bounds ("12+").
+  //
+  // Date-scoped pages (2026-09-04): the server already narrowed the page to
+  // ONE day (or one week), so the page knows its own count exactly but
+  // nothing about the other tabs — only the active tab shows a count there.
+  const tabCountsVisible = loaderData.pageSize >= 250;
+  const tabCountsPartial = Boolean(
+    pageInfo?.hasNextPage || pageInfo?.hasPreviousPage,
+  );
+  const tabCount = (id: string, n: number): number | null => {
+    if (!tabCountsVisible) return null;
+    if (loaderData.dateScoped && id !== tabParam) return null;
+    return n;
+  };
   const tabDefs: OrdersTabDef[] = [
-    { id: "all", label: "All", count: orders.length },
-    { id: "today", label: "Today", count: tabCounts.today },
-    { id: "tomorrow", label: "Tomorrow", count: tabCounts.tomorrow },
-    { id: "thisWeek", label: "This week", count: tabCounts.thisWeek },
-    { id: "unfulfilled", label: "Unfulfilled", count: tabCounts.unfulfilled },
-    { id: "unpaid", label: "Unpaid", count: tabCounts.unpaid },
+    { id: "all", label: "All", count: tabCount("all", orders.length), approximate: tabCountsPartial },
+    { id: "today", label: "Today", count: tabCount("today", tabCounts.today), approximate: tabCountsPartial },
+    { id: "tomorrow", label: "Tomorrow", count: tabCount("tomorrow", tabCounts.tomorrow), approximate: tabCountsPartial },
+    { id: "thisWeek", label: "This week", count: tabCount("thisWeek", tabCounts.thisWeek), approximate: tabCountsPartial },
+    // Past views sit after the forward-looking ones so the first four tabs
+    // keep their positions (Today is the merchant's daily landing tab).
+    { id: "yesterday", label: "Yesterday", count: tabCount("yesterday", tabCounts.yesterday), approximate: tabCountsPartial },
+    { id: "lastWeek", label: "Last week", count: tabCount("lastWeek", tabCounts.lastWeek), approximate: tabCountsPartial },
+    { id: "unfulfilled", label: "Unfulfilled", count: tabCount("unfulfilled", tabCounts.unfulfilled), approximate: tabCountsPartial },
+    { id: "unpaid", label: "Unpaid", count: tabCount("unpaid", tabCounts.unpaid), approximate: tabCountsPartial },
     // Archived orders are excluded from every other view's query, so no
     // client-side count is knowable here — the label renders without one.
-    { id: "archived", label: "Archived", count: 0 },
+    { id: "archived", label: "Archived", count: null },
   ];
 
   const hasActiveFilters = Boolean(
@@ -1927,6 +1796,52 @@ function Extension() {
     deliveryDateFilter ||
     tabParam !== "all",
   );
+
+  // A search typed on a dated tab (or with a date/slot filter) still gets the
+  // client-side filter applied on top, so the row the merchant is looking for
+  // can be on the loaded page yet hidden by the tab — exactly what happens
+  // after a customer moves an order off Today. Name those hits instead of
+  // showing a bare empty state.
+  const hiddenSearchMatches = useMemo(() => {
+    if (!searchParam || displayedOrders.length > 0) return [];
+    const clientFilterActive =
+      tabParam === "today" ||
+      tabParam === "yesterday" ||
+      tabParam === "tomorrow" ||
+      tabParam === "thisWeek" ||
+      tabParam === "lastWeek" ||
+      Boolean(deliveryDateFilter) ||
+      Boolean(timeWindowParam);
+    if (!clientFilterActive) return [];
+    return orders.slice(0, 3).map((o) => {
+      const date = getDeliveryDateValue(o);
+      const slot = getDeliveryTimeValue(o);
+      const when = [
+        date !== "—" ? formatDeliveryDate(date) : "",
+        slot !== "—" ? slot : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return { id: o.id, name: o.name, when: when || "no delivery date" };
+    });
+  }, [
+    searchParam,
+    displayedOrders.length,
+    tabParam,
+    deliveryDateFilter,
+    timeWindowParam,
+    orders,
+  ]);
+  const showSearchInAll = useCallback((): void => {
+    const params = new URLSearchParams(searchParams);
+    params.delete("tab");
+    params.delete("timeWindow");
+    params.delete("deliveryDate");
+    params.delete("after");
+    params.delete("before");
+    clearSelection();
+    navigate(`?${params.toString()}`, { replace: true });
+  }, [searchParams, navigate, clearSelection]);
 
   const selectedCount = selectedResources.length;
 
@@ -1941,6 +1856,88 @@ function Extension() {
             onDismiss={() => setErrorDismissed(true)}
           >
             <Text as="p">{error}</Text>
+          </Banner>
+        )}
+
+        {/* ── Delivery-sync issue banner (ADR-22): failed/stuck webhook syncs.
+            Not dismissible on purpose — it reports a real capacity-count gap
+            and disappears on its own once the sync completes. ───────────── */}
+        {loaderData.syncIssues.count > 0 && (
+          <Banner
+            tone="warning"
+            title={`Delivery info has not synced for ${loaderData.syncIssues.count} order${
+              loaderData.syncIssues.count === 1 ? "" : "s"
+            }`}
+            action={{
+              content: "Retry sync",
+              loading: syncRetryFetcher.state !== "idle",
+              onAction: () =>
+                syncRetryFetcher.submit(
+                  { _action: "retryDeliverySync" },
+                  { method: "post" },
+                ),
+            }}
+          >
+            <Text as="p">
+              {loaderData.syncIssues.orderNames.join(", ")}
+              {loaderData.syncIssues.count > loaderData.syncIssues.orderNames.length
+                ? " and more"
+                : ""}{" "}
+              — booked-slot counts may be undercounting these orders until the
+              sync completes. Retry runs in the background.
+            </Text>
+          </Banner>
+        )}
+
+        {/* ── Recent customer reschedules (2026-09-04) — on EVERY tab, because
+            the moved order has by definition just left the view being looked
+            at. Rows clear on Seen or after 48 h; no dismiss on purpose. ──── */}
+        <RecentReschedulesBanner
+          items={loaderData.recentReschedules}
+          pendingSeenIds={pendingSeenIds}
+          errorMessage={
+            rescheduleSeenFetcher.state === "idle" &&
+            rescheduleSeenFetcher.data?.ok === false
+              ? rescheduleSeenFetcher.data.message
+              : null
+          }
+          onOpen={openRecentReschedule}
+          onSeen={markRescheduleSeen}
+          onSeenAll={submitReschedulesSeen}
+        />
+
+        {/* ── Search hit hidden by the dated tab / date-slot filter ───────── */}
+        {hiddenSearchMatches.length > 0 && (
+          <Banner
+            tone="info"
+            title="No match in this view"
+            action={{ content: "Show in All", onAction: showSearchInAll }}
+          >
+            <Text as="p">
+              Found in All:{" "}
+              {hiddenSearchMatches.map((m) => `${m.name} · ${m.when}`).join(", ")}
+              {orders.length > hiddenSearchMatches.length ? " and more" : ""}.
+            </Text>
+          </Banner>
+        )}
+
+        {/* ── Background bulk-job progress (ADR-22 Phase B) — a large
+            selection runs server-side, chunk by chunk; this banner tracks the
+            poll until the completion toast fires ─────────────────────────── */}
+        {activeJob && (
+          <Banner
+            tone="info"
+            title={`Processing ${activeJob.total} order${
+              activeJob.total === 1 ? "" : "s"
+            } in the background`}
+          >
+            <Text as="p">
+              {jobProgress && jobProgress.done > 0
+                ? `${jobProgress.done} of ${jobProgress.total} processed…`
+                : "Starting…"}{" "}
+              The job continues on the server even if this page closes — the
+              result toast just needs the page open.
+            </Text>
           </Banner>
         )}
 
@@ -2179,12 +2176,13 @@ function Extension() {
         rules={rescheduleRulesFetcher.data ?? null}
         rulesLoading={rescheduleRulesFetcher.state !== "idle"}
         serverCapacity={rescheduleServerCapacity}
-        onConfirm={(date, timeSlot, override) =>
+        onConfirm={(date, timeSlot, override, notifyCustomer) =>
           submitReschedule(
             panelRescheduleIds ?? selectedResources,
             date,
             timeSlot,
             override,
+            notifyCustomer,
           )
         }
       />
@@ -2238,7 +2236,9 @@ function Extension() {
         <Suspense fallback={null}>
           <OrderDetailsPanel
             order={selectedOrder}
+            todayISO={dateRefs.todayISO}
             notInView={selectedOrderNotInView}
+            escDisabled={anyModalOpen}
             onClose={handleCloseDrawer}
             onReschedule={openPanelReschedule}
             onSendEmail={openPanelSendEmail}

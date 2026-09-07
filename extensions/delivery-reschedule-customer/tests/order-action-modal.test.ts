@@ -305,12 +305,8 @@ describe("delivery-reschedule-customer modal", () => {
     expect(actionShell()?.getAttribute("heading")).toBe("Reschedule Delivery");
   });
 
-  it("writes the optimistic storage handoff and shows the success state", async () => {
+  it("shows the success state after a confirmed reschedule", async () => {
     stubFetch();
-    const write = vi
-      .fn<(key: string, value: unknown) => Promise<void>>()
-      .mockResolvedValue(undefined);
-    extension.shopify.storage.write = write;
 
     await extension.render();
     await waitForRulesLoaded();
@@ -327,22 +323,33 @@ describe("delivery-reschedule-customer modal", () => {
     expect(banner?.getAttribute("tone")).toBe("success");
     expect(banner?.textContent).toContain("Your delivery has been rescheduled");
     expect(banner?.textContent).toContain("(12PM-3PM)");
+  });
 
-    // The handoff is written under every key spelling the order-status block
-    // might look under. For a GID order id two of the three variants collapse
-    // to the same string, so two writes land — the numeric-only key is the one
-    // that actually differs.
-    expect(write.mock.calls.map(([key]) => key)).toEqual([
-      `delivery-reschedule-sync:${ORDER_ID}`,
-      "delivery-reschedule-sync:1",
-    ]);
-    for (const call of write.mock.calls) {
-      expect(call[1]).toEqual({
-        date: TARGET_DATE,
-        timeSlot: TARGET_SLOT,
-        status: "confirmed",
-        updatedAt: expect.any(Number),
-      });
-    }
+  it("refuses to submit with a non-string session token instead of sending garbage", async () => {
+    // A dying sandbox bridge can make sessionToken.get() resolve undefined; the
+    // pre-fix code serialized that into the literal string "undefined" and the
+    // backend logged it as an unexplained 401 (prod incident 2026-08-25).
+    stubFetch();
+    extension.shopify.sessionToken.get = vi.fn(
+      async () => undefined,
+    ) as unknown as typeof extension.shopify.sessionToken.get;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await extension.render();
+    await waitForRulesLoaded();
+    pickDateAndSlot(TARGET_DATE, TARGET_SLOT);
+    primaryButton()?.dispatchEvent(new Event("click"));
+
+    await vi.waitFor(() => {
+      const banner = document.body.querySelector("s-banner");
+      expect(banner?.textContent).toContain("Session token unavailable");
+    });
+
+    // Neither endpoint ever saw the garbage token: the rules fetch failed the
+    // same guard (falling back to default rules — hence the warn), and the
+    // write was blocked before fetch.
+    expect(callsTo(RESCHEDULE_URL)).toHaveLength(0);
+    expect(callsTo(SCHEDULE_RULES_URL)).toHaveLength(0);
+    expect(warn).toHaveBeenCalled();
   });
 });

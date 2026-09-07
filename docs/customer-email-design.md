@@ -166,12 +166,13 @@ the order has no customer email) → `sendCustomerEmail(...)` → typed response
 
 ## 7. Out of scope (future enhancements, in likely order)
 
-> **2026-08-21 update:** the "delivery reminder" idea in #1 shipped in a
-> bigger form as the **occasion reminder emails** feature (ADR-19) — an
-> automated second caller of `sendCustomerEmail` with its own template module
-> ([`reminder-copy.server.ts`](../app/services/reminder-copy.server.ts)),
-> suppression/unsubscribe layer, and `EmailSendLog` reuse. See
-> [api.md § Occasion reminder emails](./api.md) for the route/auth detail.
+> **2026-08-21 → reverted 2026-08-28:** the "delivery reminder" idea in #1 was
+> built as the **occasion reminder emails** feature (ADR-19) but **removed from
+> the codebase on 2026-08-28** — it detected nothing (year-over-year design vs.
+> pre-migration orders that had no `custom.date` metafield) and the merchant
+> moved to a dedicated third-party Shopify reminder app. See
+> [decisions.md ADR-19](./decisions.md) (Reverted note). `sendCustomerEmail` +
+> `EmailSendLog` remain for the manual compose-email feature.
 
 1. **Template presets** (reschedule confirmation / delay notice / delivery
    reminder) prefilled from order data — natural once the modal exists.
@@ -188,3 +189,37 @@ the order has no customer email) → `sendCustomerEmail(...)` → typed response
   path — §2 table unchanged) · architecture.md: outbound-email side-effect
   note · decisions.md: ADR (in-app email via merchant business SMTP; Gmail API
   rejected) · changelog.md + verification-log.md rows · this doc's status line.
+
+## 8. Second sender: the merchant-reschedule notice (2026-09-04)
+
+The compose modal stayed the only *manual* sender. A second, *automatic*
+sender now rides the same pipeline: when the merchant reschedules an order
+from `/app/orders` with the modal's "Email the customer about the new
+schedule" checkbox on (default), the bulk executor calls
+`sendRescheduleNotice` (`app/services/reschedule-notice.server.ts`) after —
+and only after — the canonical delivery write succeeded.
+
+- **Same transport, same envelope.** It calls `sendCustomerEmail`, so From,
+  the BCC-self copy (E-3), timeouts, and error humanizing are unchanged. No
+  photos. Plain text: greeting by first name, "New delivery: Mon, Sep 28,
+  2026, 9AM-12PM", "Previous: …" when it differs, a reply-to-this-email line,
+  and the `EMAIL_FROM_NAME` signature.
+- **E-4 holds.** The recipient is the order's customer email read by the
+  executor's own Admin GraphQL state query (`customer.defaultEmailAddress`,
+  then `order.email`), never a client-supplied address. No email → skipped,
+  reported as "No customer email on file".
+- **E-5 holds.** Still no Shopify order write for the email itself; a
+  successful send writes the same `EmailSendLog` row the compose op writes, so
+  the panel timeline shows "Email sent to …" under the reschedule entry.
+- **Never a failure.** The outcome (`sent` / `skipped_no_email` / `failed`) is
+  appended to the item's message while `success` stays true — an SMTP hiccup
+  must not read as a failed reschedule, and a Cloud Tasks retry must not
+  re-run the write just to re-send. Runs identically on the inline path and
+  the worker (same executor, same env).
+- **Not sent** for the customer's own self-service reschedule (they did it
+  themselves in the modal) and when the write was a no-op ("already at the
+  selected date and slot").
+- **Volume.** At most one email per rescheduled order; a 100-order bulk move
+  is 100 sends against the provider's 500/hour — no queue needed.
+
+Design record: decisions.md ADR-23 addendum.

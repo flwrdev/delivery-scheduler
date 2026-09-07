@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Banner,
   BlockStack,
+  Checkbox,
   Modal,
   Select,
   Text,
   TextField,
 } from "@shopify/polaris";
 import type { RescheduleRulesData } from "../../routes/app.orders_.reschedule-rules";
+import { findSlotOverrideKey, slotValuesMatch } from "../../lib/slot-value";
+import { getShopLocalDate } from "../../lib/delivery-availability";
 
 // "Update delivery slot" modal (Phase 4) — one date+slot applied to N target
 // orders. Serves both the bulk-actions bar (selection) and the details
@@ -38,7 +41,12 @@ export interface RescheduleModalProps {
   // Server-side capacity backstop (action responded capacity_override_required
   // because the client's booked counts were stale).
   serverCapacity: RescheduleCapacityInfo | null;
-  onConfirm: (date: string, timeSlot: string, override: boolean) => void;
+  onConfirm: (
+    date: string,
+    timeSlot: string,
+    override: boolean,
+    notifyCustomer: boolean,
+  ) => void;
 }
 
 export function RescheduleModal({
@@ -53,6 +61,9 @@ export function RescheduleModal({
 }: RescheduleModalProps) {
   const [date, setDate] = useState("");
   const [slot, setSlot] = useState("");
+  // Default ON: a merchant-side move is the one schedule change the customer
+  // did not make themselves, so silence is the surprising option.
+  const [notifyCustomer, setNotifyCustomer] = useState(true);
   // The server capacity warning belongs to one specific submit — remember
   // what was submitted so editing the date/slot afterwards drops the warning.
   const [lastSubmitted, setLastSubmitted] = useState<{
@@ -75,15 +86,19 @@ export function RescheduleModal({
   const dateBlocked = Boolean(
     rules && date && rules.disabledDates.includes(date),
   );
-  const blockedSlotsForDate = useMemo(
-    () => new Set(rules?.disabledSlots?.[date] ?? []),
-    [rules, date],
-  );
 
+  // Config override keys can carry drifted spellings ("9am - 12pm" vs the
+  // configured "9AM-12PM") — the server resolves them canonically
+  // (findSlotOverrideKey, §4.2), so this display must too, or a blocked/full
+  // slot shows as clean here and the merchant only learns from the submit's
+  // 400/409.
   const slotOptions = useMemo(() => {
+    const disabledForDate = rules?.disabledSlots?.[date] ?? [];
+    const caps = rules?.slotCapacity?.[date];
     const options = (rules?.slots ?? []).map((s) => {
-      const cap = rules?.slotCapacity?.[date]?.[s.value];
-      const blocked = blockedSlotsForDate.has(s.value);
+      const capKey = caps ? findSlotOverrideKey(Object.keys(caps), s.value) : null;
+      const cap = capKey == null ? undefined : caps?.[capKey];
+      const blocked = findSlotOverrideKey(disabledForDate, s.value) != null;
       const suffix = blocked
         ? " — blocked"
         : cap
@@ -96,15 +111,20 @@ export function RescheduleModal({
       };
     });
     return [{ label: "Select a time slot", value: "", disabled: true }, ...options];
-  }, [rules, date, blockedSlotsForDate]);
+  }, [rules, date]);
 
   // Client-side projected load (REC-4): orders already in the target
-  // date+slot don't count against the remaining capacity.
+  // date+slot don't count against the remaining capacity. The slot half of
+  // "already there" uses the same canonical comparison the server does —
+  // a raw compare treats a drifted stored spelling as a move.
   const clientCapacity = useMemo<RescheduleCapacityInfo | null>(() => {
-    const cap = rules?.slotCapacity?.[date]?.[slot];
+    const caps = rules?.slotCapacity?.[date];
+    const capKey =
+      caps && slot ? findSlotOverrideKey(Object.keys(caps), slot) : null;
+    const cap = capKey == null ? undefined : caps?.[capKey];
     if (!cap) return null;
     const moving = targets.filter(
-      (t) => t.currentDate !== date || t.currentSlot !== slot,
+      (t) => t.currentDate !== date || !slotValuesMatch(t.currentSlot, slot),
     ).length;
     return {
       capacity: Number(cap.capacity),
@@ -113,6 +133,14 @@ export function RescheduleModal({
       projected: Number(cap.booked) + moving,
     };
   }, [rules, date, slot, targets]);
+
+  // Administrative override deliberately allows any date (§5) — but a PAST
+  // date is almost always a typo'd year, and the order would quietly leave
+  // the Today/Tomorrow views as overdue. Warn, never block.
+  const shopTodayISO = rules ? getShopLocalDate(rules.timezone) : "";
+  const dateInPast = Boolean(
+    shopTodayISO && /^\d{4}-\d{2}-\d{2}$/.test(date) && date < shopTodayISO,
+  );
 
   const serverWarningActive = Boolean(
     serverCapacity &&
@@ -133,7 +161,9 @@ export function RescheduleModal({
     targetCount === 1
       ? `order ${targets[0].name}`
       : `${targetCount} orders`;
-  const slotBlocked = Boolean(slot && blockedSlotsForDate.has(slot));
+  const slotBlocked = Boolean(
+    slot && findSlotOverrideKey(rules?.disabledSlots?.[date] ?? [], slot) != null,
+  );
   const canSubmit =
     !isSubmitting &&
     targetCount > 0 &&
@@ -145,7 +175,7 @@ export function RescheduleModal({
 
   const handleConfirm = () => {
     setLastSubmitted({ date, slot });
-    onConfirm(date, slot, Boolean(capacityWarning));
+    onConfirm(date, slot, Boolean(capacityWarning), notifyCustomer);
   };
 
   return (
@@ -199,6 +229,15 @@ export function RescheduleModal({
             }
             helpText="Administrative override — customer booking limits (cutoff, lead time, reschedule lock) don't apply here."
           />
+          {dateInPast && (
+            <Banner tone="warning" title="This date is in the past">
+              <Text as="p">
+                {date} is before today ({shopTodayISO}) on the shop calendar —
+                the order will immediately show as overdue. Double-check the
+                year before confirming.
+              </Text>
+            </Banner>
+          )}
           <Select
             label="Time slot"
             options={slotOptions}
@@ -222,6 +261,13 @@ export function RescheduleModal({
               </Text>
             </Banner>
           )}
+          <Checkbox
+            label="Email the customer about the new schedule"
+            checked={notifyCustomer}
+            onChange={setNotifyCustomer}
+            disabled={isSubmitting}
+            helpText="Plain-text email from your business mailbox, sent right after the update. Skipped for orders without a customer email."
+          />
         </BlockStack>
       </Modal.Section>
     </Modal>

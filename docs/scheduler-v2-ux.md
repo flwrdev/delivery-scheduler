@@ -77,7 +77,7 @@ caller); the theme's client-side-only checkout gating is out of scope.
 | `orders/create` webhook | drops data on late validation (DEF-7) | always-sync when parseable + `delivery.sync_status` + checkout-time semantics | **REWORK (D4)** |
 | Order write contract (api.md §2) | metafields/tags/attrs per contract | unchanged, **plus additive `delivery.sync_status`** | **PRESERVE (+additive)** |
 | Slot `value` wire format on orders | `"9AM-12PM"` shape in tags/metafields/attrs | identical | **FROZEN** |
-| Storefront proxy GET / validate / customer-account rules routes | full blob, advisory validate | unchanged | **FROZEN (D5)** |
+| Storefront proxy GET / validate / customer-account rules routes | full blob, advisory validate | unchanged (2026-09-02: proxy GET gained one ADDITIVE top-level key `availabilityWindow`; existing keys byte-identical — see api.md App-proxy table) | **FROZEN (D5, +additive)** |
 | Reschedule routes + `rescheduleOrderDelivery()` | per ADR-10 | unchanged (benefit from cheaper counts + `excludeOrderId`) | **PRESERVE (+additive)** |
 | Prisma `DeliveryScheduleConfig` | 4 scalars + 4 JSON strings | same columns **+ `version Int @default(0)`** | **ADDITIVE MIGRATION** |
 

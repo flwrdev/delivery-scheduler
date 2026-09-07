@@ -15,7 +15,7 @@ import {
   getVariantLive,
   productDescriptionText,
   searchShopProducts,
-} from "../app/services/messenger-products.server";
+} from "../app/services/agent-products.server";
 
 const graphqlMock = vi.fn();
 

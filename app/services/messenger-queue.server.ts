@@ -57,10 +57,13 @@ async function postMessengerTask(
   rawPayload: string,
   scheduleTime?: string,
   workerUrlOverride?: string,
+  // Ops rail (ADR-22): lets the delivery-sync enqueue point at its own queue
+  // and signing secret while sharing this exact POST core.
+  opts?: { queuePath?: string; secret?: string },
 ): Promise<EnqueueMessengerEchoTaskResult> {
-  const queuePath = process.env.MESSENGER_TASKS_QUEUE_PATH?.trim();
+  const queuePath = opts?.queuePath ?? process.env.MESSENGER_TASKS_QUEUE_PATH?.trim();
   const workerUrl = workerUrlOverride ?? process.env.MESSENGER_WORKER_URL?.trim();
-  const workerSecret = process.env.MESSENGER_WORKER_SECRET?.trim();
+  const workerSecret = opts?.secret ?? process.env.MESSENGER_WORKER_SECRET?.trim();
   if (!queuePath || !workerUrl || !workerSecret) {
     return { ok: false, error: MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE, notConfigured: true };
   }
@@ -203,4 +206,130 @@ export async function enqueueSupportChatTask({
     return { ok: false, error: MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE, notConfigured: true };
   }
   return postMessengerTask(JSON.stringify({ jobId }), undefined, workerUrl);
+}
+
+// ─── Ops rail: delivery-sync tasks (ADR-22, Phase A) ─────────────────────────
+//
+// Own secret/queue when configured (OPS_WORKER_SECRET / OPS_TASKS_QUEUE_PATH),
+// falling back to the Messenger infra so Phase A goes live with ZERO new
+// infrastructure. The SAME resolution runs on the signing side (here) and the
+// verifying side (webhooks.delivery-sync_.worker.ts, internal.delivery-sync-
+// sweep.ts import this function), so the two can never disagree about which
+// secret is in force.
+
+export function resolveOpsWorkerSecret(): string | undefined {
+  return (
+    process.env.OPS_WORKER_SECRET?.trim() ||
+    process.env.MESSENGER_WORKER_SECRET?.trim() ||
+    undefined
+  );
+}
+
+function resolveOpsQueuePath(): string | undefined {
+  return (
+    process.env.OPS_TASKS_QUEUE_PATH?.trim() ||
+    process.env.MESSENGER_TASKS_QUEUE_PATH?.trim() ||
+    undefined
+  );
+}
+
+// Same URL-derivation pattern (and the same silent-misroute guard) as the
+// support-chat worker above.
+function resolveDeliverySyncWorkerUrl(): string | undefined {
+  const explicit = process.env.DELIVERY_SYNC_WORKER_URL?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const messengerWorkerUrl = process.env.MESSENGER_WORKER_URL?.trim();
+  if (!messengerWorkerUrl) {
+    return undefined;
+  }
+  try {
+    const url = new URL(messengerWorkerUrl);
+    const swappedPathname = url.pathname.replace(
+      /\/webhooks\/messenger\/worker\/?$/,
+      "/webhooks/delivery-sync/worker",
+    );
+    if (swappedPathname === url.pathname) {
+      console.error(
+        "[delivery-sync] resolveDeliverySyncWorkerUrl: MESSENGER_WORKER_URL path did not match the expected " +
+          "/webhooks/messenger/worker suffix, so no delivery-sync worker URL could be derived. Set DELIVERY_SYNC_WORKER_URL explicitly.",
+      );
+      return undefined;
+    }
+    url.pathname = swappedPathname;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+// Same URL-derivation pattern for the bulk-action worker (ADR-22 Phase B).
+function resolveBulkActionWorkerUrl(): string | undefined {
+  const explicit = process.env.BULK_ACTION_WORKER_URL?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const messengerWorkerUrl = process.env.MESSENGER_WORKER_URL?.trim();
+  if (!messengerWorkerUrl) {
+    return undefined;
+  }
+  try {
+    const url = new URL(messengerWorkerUrl);
+    const swappedPathname = url.pathname.replace(
+      /\/webhooks\/messenger\/worker\/?$/,
+      "/webhooks/bulk-action/worker",
+    );
+    if (swappedPathname === url.pathname) {
+      console.error(
+        "[bulk-jobs] resolveBulkActionWorkerUrl: MESSENGER_WORKER_URL path did not match the expected " +
+          "/webhooks/messenger/worker suffix, so no bulk-action worker URL could be derived. Set BULK_ACTION_WORKER_URL explicitly.",
+      );
+      return undefined;
+    }
+    url.pathname = swappedPathname;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+export interface EnqueueBulkActionTaskInput {
+  jobId: string;
+}
+
+export async function enqueueBulkActionTask({
+  jobId,
+}: EnqueueBulkActionTaskInput): Promise<EnqueueMessengerEchoTaskResult> {
+  const workerUrl = resolveBulkActionWorkerUrl();
+  const secret = resolveOpsWorkerSecret();
+  const queuePath = resolveOpsQueuePath();
+  if (!workerUrl || !secret || !queuePath) {
+    return { ok: false, error: MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE, notConfigured: true };
+  }
+  return postMessengerTask(JSON.stringify({ bulkActionJobId: jobId }), undefined, workerUrl, {
+    queuePath,
+    secret,
+  });
+}
+
+export interface EnqueueDeliverySyncTaskInput {
+  taskId: string;
+}
+
+export async function enqueueDeliverySyncTask({
+  taskId,
+}: EnqueueDeliverySyncTaskInput): Promise<EnqueueMessengerEchoTaskResult> {
+  const workerUrl = resolveDeliverySyncWorkerUrl();
+  const secret = resolveOpsWorkerSecret();
+  const queuePath = resolveOpsQueuePath();
+  if (!workerUrl || !secret || !queuePath) {
+    return { ok: false, error: MESSENGER_QUEUE_NOT_CONFIGURED_MESSAGE, notConfigured: true };
+  }
+  // Distinct payload key (not `mid`/`jobId`) so a misrouted task lands as a
+  // loud no-op in the wrong worker instead of silently doing the wrong work.
+  return postMessengerTask(JSON.stringify({ deliverySyncTaskId: taskId }), undefined, workerUrl, {
+    queuePath,
+    secret,
+  });
 }
