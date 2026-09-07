@@ -6,6 +6,17 @@ const TIME_SLOTS = ["9AM-12PM", "12PM-3PM", "3PM-6PM", "6PM-11PM"];
 const SOURCES = ["messenger", "instagram"];
 
 type VariantOption = { id: string; label: string; price: string };
+type UserError = { field: string[] | null; message: string };
+type ActionResult = {
+  error?: string;
+  ok?: true;
+  mode?: "draft" | "order";
+  draftName?: string;
+  orderName?: string;
+  orderId?: string;
+  total?: string;
+  invoiceUrl?: string;
+};
 
 const VARIANTS_QUERY = `#graphql
   query VariantsForForm($after: String) {
@@ -111,7 +122,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const createRes = await admin.graphql(DRAFT_CREATE, { variables: { input } });
   const create = (await createRes.json()).data.draftOrderCreate;
   if (create.userErrors.length) {
-    return Response.json({ error: create.userErrors.map((e: any) => e.message).join("; ") }, { status: 400 });
+    return Response.json({ error: create.userErrors.map((e: UserError) => e.message).join("; ") }, { status: 400 });
   }
   const draft = create.draftOrder;
 
@@ -128,7 +139,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const completeRes = await admin.graphql(DRAFT_COMPLETE, { variables: { id: draft.id, source } });
   const complete = (await completeRes.json()).data.draftOrderComplete;
   if (complete.userErrors.length) {
-    return Response.json({ error: complete.userErrors.map((e: any) => e.message).join("; ") }, { status: 400 });
+    return Response.json({ error: complete.userErrors.map((e: UserError) => e.message).join("; ") }, { status: 400 });
   }
   return Response.json({
     ok: true,
@@ -141,7 +152,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
 export default function MessengerOrder() {
   const { variants, timeSlots } = useLoaderData() as { variants: VariantOption[]; timeSlots: string[] };
-  const result = useActionData<typeof action>() as any;
+  const result = useActionData() as ActionResult | undefined;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
