@@ -140,7 +140,7 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function MessengerOrder() {
-  const { variants, timeSlots } = useLoaderData<typeof loader>();
+  const { variants, timeSlots } = useLoaderData() as { variants: VariantOption[]; timeSlots: string[] };
   const result = useActionData<typeof action>() as any;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
