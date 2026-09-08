@@ -150,7 +150,7 @@ export async function action({ request }: ActionFunctionArgs) {
   });
 }
 
-export default function MessengerOrder() {
+export default function ManualOrder() {
   const { variants, timeSlots } = useLoaderData() as { variants: VariantOption[]; timeSlots: string[] };
   const result = useActionData() as ActionResult | undefined;
   const nav = useNavigation();
@@ -166,7 +166,7 @@ export default function MessengerOrder() {
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto", padding: 24, font: "14px system-ui, sans-serif" }}>
-      <h1 style={{ fontSize: 20, marginBottom: 16 }}>Messenger order</h1>
+      <h1 style={{ fontSize: 20, marginBottom: 16 }}>Manual order</h1>
 
       {result?.error && (
         <div style={{ background: "#fed3d1", padding: 12, borderRadius: 8, marginBottom: 16 }}>{result.error}</div>
