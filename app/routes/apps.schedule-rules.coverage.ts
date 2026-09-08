@@ -1,19 +1,20 @@
 import type { LoaderFunctionArgs } from "react-router";
 
 import { verifyAppProxySignature } from "../lib/verify-app-proxy.server";
-import { checkDeliveryCoverage } from "../services/messenger-coverage.server";
+import { resolveShopDomain } from "../lib/shop-domain.server";
+import { checkDeliveryCoverage } from "../services/delivery-coverage.server";
 
 // Storefront delivery-fee checker (delivery-fee-checker.liquid block, which
-// lives inside the storefront-chat-widget theme extension — Shopify allows
+// lives in the delivery-fee-checker theme extension — Shopify allows
 // only ONE theme extension per app, so every storefront block ships there).
 //
 // A SECOND caller for checkDeliveryCoverage() — the same pure lookup the
 // FlowerBot agent uses via agent-tools.server.ts, so the storefront quote and
 // the chat quote can never drift. This route adds NO logic of its own: it
 // only adapts the agent-shaped result into a UI-shaped payload. Any future
-// display tweak belongs HERE, never in messenger-coverage.server.ts (that
+// display tweak belongs HERE, never in delivery-coverage.server.ts (that
 // service is shared with the agent and locked by
-// test/messenger-coverage.server.test.ts).
+// test/delivery-coverage.server.test.ts).
 //
 // Same hand-rolled App Proxy HMAC auth as apps.schedule-rules.widget-config.ts
 // — skips the Prisma session lookup, which matters because shoppers can type
@@ -34,7 +35,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const shop = url.searchParams.get("shop");
-  const expectedShop = process.env.MESSENGER_SHOP?.trim();
+  const expectedShop = resolveShopDomain();
   if (!shop || !expectedShop || shop !== expectedShop) {
     console.warn(
       `[coverage] shop mismatch — expected=${expectedShop ?? "(unset)"} got=${shop ?? "(missing)"}`,

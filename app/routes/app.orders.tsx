@@ -95,7 +95,7 @@ import {
   createBulkActionJob,
   runBulkJobToCompletion,
 } from "../services/bulk-action-jobs.server";
-import { enqueueBulkActionTask } from "../services/messenger-queue.server";
+import { enqueueBulkActionTask } from "../services/ops-queue.server";
 import prisma from "../db.server";
 import {
   getScheduleRules,

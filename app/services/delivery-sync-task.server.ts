@@ -35,7 +35,7 @@
 
 import prisma from "../db.server";
 import { applyCodFeeToOrder } from "./cod-fee.server";
-import { enqueueDeliverySyncTask } from "./messenger-queue.server";
+import { enqueueDeliverySyncTask } from "./ops-queue.server";
 import {
   evaluateDeliverySyncStatus,
   syncOrderDeliveryMetafields,

@@ -21,8 +21,8 @@ import {
 } from "../lib/delivery-availability";
 import type { DeliveryScheduleRules } from "../lib/delivery-availability";
 import { getScheduleRulesWithBookedCounts } from "./schedule-rules.server";
-import { checkDeliveryCoverage } from "./messenger-coverage.server";
-import type { CheckDeliveryCoverageInput } from "./messenger-coverage.server";
+import { checkDeliveryCoverage } from "./delivery-coverage.server";
+import type { CheckDeliveryCoverageInput } from "./delivery-coverage.server";
 import { getBestSellers, getVariantLive, searchShopProducts } from "./agent-products.server";
 import type { SearchShopProductsInput } from "./agent-products.server";
 import { updateMessengerOrderState } from "./messenger-orders.server";

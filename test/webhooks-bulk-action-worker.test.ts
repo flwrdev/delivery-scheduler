@@ -16,8 +16,8 @@ vi.mock("../app/services/bulk-action-jobs.server", () => ({
   processBulkActionJobChunk: processMock,
 }));
 
-vi.mock("../app/services/messenger-queue.server", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../app/services/messenger-queue.server")>();
+vi.mock("../app/services/ops-queue.server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../app/services/ops-queue.server")>();
   return { ...actual, enqueueBulkActionTask: enqueueMock };
 });
 

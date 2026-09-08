@@ -14,7 +14,7 @@ import {
   enqueueBulkActionTask,
   enqueueDeliverySyncTask,
   resolveOpsWorkerSecret,
-} from "../services/messenger-queue.server";
+} from "../services/ops-queue.server";
 
 // Hourly rescue sweep for the ops work queues (ADR-22) — belt-and-suspenders
 // behind the Cloud Tasks retry chains, same posture as

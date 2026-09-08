@@ -29,7 +29,7 @@ import {
   processDeliverySyncTask,
   upsertDeliverySyncTask,
 } from "../services/delivery-sync-task.server";
-import { enqueueDeliverySyncTask } from "../services/messenger-queue.server";
+import { enqueueDeliverySyncTask } from "../services/ops-queue.server";
 import {
   extractDeliveryAttributesFromPayload,
   getOrderGidFromPayload,

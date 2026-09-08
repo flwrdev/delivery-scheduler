@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NCR_ZIP_ENTRIES } from "../app/data/ncr-zipcodes";
-import { checkDeliveryCoverage } from "../app/services/messenger-coverage.server";
+import { checkDeliveryCoverage } from "../app/services/delivery-coverage.server";
 
 describe("NCR_ZIP_ENTRIES data", () => {
   it("covers all 17 NCR LGUs with a substantial entry count", () => {
@@ -139,7 +139,7 @@ describe("flat per-city delivery fees (merchant's quoting table, 2026-07)", () =
 describe("delivery fee estimation (Lalamove motorcycle + handling fee)", () => {
   it("computes haversine distance within tolerance (pickup to Makati CPO ~10km)", async () => {
     const { haversineKm, PICKUP_POINT } = await import(
-      "../app/services/messenger-coverage.server"
+      "../app/services/delivery-coverage.server"
     );
     const km = haversineKm(PICKUP_POINT, { lat: 14.554, lng: 121.018 });
     expect(km).toBeGreaterThan(8);
@@ -148,7 +148,7 @@ describe("delivery fee estimation (Lalamove motorcycle + handling fee)", () => {
 
   it("applies the fee bands: base P49 + P6/km first 5km + P5/km beyond + P40 handling", async () => {
     const { estimateDeliveryFeePhp } = await import(
-      "../app/services/messenger-coverage.server"
+      "../app/services/delivery-coverage.server"
     );
     // 3 km: 49 + 18 + 0 + 40 = 107
     expect(estimateDeliveryFeePhp(3)).toBe(107);

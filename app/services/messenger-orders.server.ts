@@ -35,7 +35,7 @@ import crypto from "node:crypto";
 import prisma from "../db.server";
 import { isIsoDateString } from "../lib/delivery-availability";
 import { unauthenticated } from "../shopify.server";
-import type { CheckDeliveryCoverageInput, CheckDeliveryCoverageResult } from "./messenger-coverage.server";
+import type { CheckDeliveryCoverageInput, CheckDeliveryCoverageResult } from "./delivery-coverage.server";
 import type { GetVariantLiveResult } from "./agent-products.server";
 
 // Frozen attribute keys — the same keys the checkout writes and the
