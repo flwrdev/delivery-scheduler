@@ -8,8 +8,8 @@ import {
 } from "../services/ops-queue.server";
 
 // Cloud Tasks worker for the orders/create delivery sync (ADR-22, Phase A).
-// Mirrors webhooks.support-chat_.worker.ts exactly — same signature scheme,
-// same status contract with Cloud Tasks (it retries on any non-2xx):
+// Same signature scheme as webhooks.bulk-action_.worker.ts and the same
+// status contract with Cloud Tasks (it retries on any non-2xx):
 //   200 — done, or retrying can never help (terminal row, unknown task,
 //         another worker holds the lease, permanent failure)
 //   503 — transient failure; retry with backoff
