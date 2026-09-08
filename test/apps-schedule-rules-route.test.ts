@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // GET /apps/schedule-rules — the storefront App Proxy rules endpoint. Pins the
 // additive `availabilityWindow` key (2026-09-02) on top of the frozen (D5)
-// rules payload. Same mock idiom as test/api-support-chat-route.test.ts:
+// rules payload. Same mock idiom as test/api-agent-routes.test.ts:
 // authenticate.public.appProxy and the rules service are mocked so this runs in
 // plain node with no DB/Admin API; the availability engine itself
 // (app/lib/delivery-availability.ts) is REAL so the assertions exercise the

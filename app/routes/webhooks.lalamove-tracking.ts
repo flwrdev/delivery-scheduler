@@ -27,7 +27,7 @@ import { unauthenticated } from "../shopify.server";
 // Registered once via lalamove-client.server.ts#configureLalamoveWebhook
 // against this route's public URL. Single-shop app (AppDistribution.
 // SingleMerchant) — LALAMOVE_SHOP names the one shop this app manages,
-// same convention as MESSENGER_SHOP.
+// same convention as SHOP_DOMAIN.
 //
 // Payload shape (eventType/orderId/status field paths) is UNVERIFIED against
 // a real delivery as of 2026-08-16 — Lalamove's webhook tutorial PDF is

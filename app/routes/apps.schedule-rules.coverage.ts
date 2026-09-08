@@ -8,17 +8,14 @@ import { checkDeliveryCoverage } from "../services/delivery-coverage.server";
 // lives in the delivery-fee-checker theme extension — Shopify allows
 // only ONE theme extension per app, so every storefront block ships there).
 //
-// A SECOND caller for checkDeliveryCoverage() — the same pure lookup the
-// FlowerBot agent uses via agent-tools.server.ts, so the storefront quote and
-// the chat quote can never drift. This route adds NO logic of its own: it
-// only adapts the agent-shaped result into a UI-shaped payload. Any future
-// display tweak belongs HERE, never in delivery-coverage.server.ts (that
-// service is shared with the agent and locked by
+// Calls checkDeliveryCoverage(), the same pure lookup the agent API quote
+// endpoint uses, and adapts its result into a UI-shaped payload. Display
+// tweaks belong here, not in delivery-coverage.server.ts (locked by
 // test/delivery-coverage.server.test.ts).
 //
-// Same hand-rolled App Proxy HMAC auth as apps.schedule-rules.widget-config.ts
-// — skips the Prisma session lookup, which matters because shoppers can type
-// into the field repeatedly. Pure in-process: no DB, no external API.
+// Hand-rolled App Proxy HMAC auth (verifyAppProxySignature): skips the Prisma
+// session lookup since shoppers can type into the field repeatedly. Pure
+// in-process: no DB, no external API.
 //
 // GET /apps/schedule-rules/coverage?q=Makati
 //   -> { ok:true, covered:true, areas:[{label,feePhp,estimate,provincial}], ... }
