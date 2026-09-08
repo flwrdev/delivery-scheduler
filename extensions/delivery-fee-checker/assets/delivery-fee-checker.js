@@ -2,7 +2,7 @@
 //
 // Talks to /apps/schedule-rules/coverage (App Proxy, same origin as the
 // storefront, so Shopify signs the request for us — no key in the theme).
-// The fee math itself lives server-side in messenger-coverage.server.ts, the
+// The fee math itself lives server-side in delivery-coverage.server.ts, the
 // same lookup FlowerBot uses.
 (function () {
   "use strict";

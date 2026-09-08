@@ -24,7 +24,7 @@ vi.mock("../app/services/delivery-sync-task.server", () => ({
   processDeliverySyncTask: processMock,
 }));
 
-vi.mock("../app/services/messenger-queue.server", () => ({
+vi.mock("../app/services/ops-queue.server", () => ({
   enqueueDeliverySyncTask: enqueueMock,
 }));
 

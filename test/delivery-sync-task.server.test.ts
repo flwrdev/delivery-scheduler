@@ -68,7 +68,7 @@ vi.mock("../app/services/cod-fee.server", () => ({
   applyCodFeeToOrder: codFeeMock,
 }));
 
-vi.mock("../app/services/messenger-queue.server", () => ({
+vi.mock("../app/services/ops-queue.server", () => ({
   enqueueDeliverySyncTask: enqueueMock,
 }));
 

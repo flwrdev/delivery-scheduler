@@ -27,7 +27,7 @@ vi.mock("../app/services/bulk-action-jobs.server", () => ({
   runBulkJobToCompletion: runToCompletionMock,
 }));
 
-vi.mock("../app/services/messenger-queue.server", () => ({
+vi.mock("../app/services/ops-queue.server", () => ({
   enqueueBulkActionTask: enqueueBulkMock,
   enqueueDeliverySyncTask: vi.fn(),
 }));
