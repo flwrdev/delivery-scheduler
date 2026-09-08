@@ -115,9 +115,10 @@ byte-identical; if you edit one, edit the other.
 
 ### `network_access` needs no dashboard approval here
 
-The customer-account `support-chat` extension declares
-`network_access = true` in its `shopify.extension.toml`, and `npm run deploy:prod`
-released it with **no approval step and no dashboard toggle**. The docs'
+The customer-account `delivery-reschedule-customer` and `delivery-date-editor`
+extensions declare `network_access = true` in their `shopify.extension.toml`, and
+`npm run deploy:prod` released them with **no approval step and no dashboard toggle**
+(first observed on the since-removed `support-chat` extension, 2026-08). The docs'
 ["Request network access" flow](https://shopify.dev/docs/apps/build/customer-accounts/capabilities)
 routes through the Partner Dashboard, which this app does not have. Do not go
 hunting for that toggle — declare the capability in the extension TOML and deploy.
