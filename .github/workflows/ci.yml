@@ -10,11 +10,18 @@ on:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    env:
+      # Placeholder Shopify config so modules that build the app object at
+      # import time (app/shopify.server.js) load under vitest. No real values.
+      SHOPIFY_APP_URL: https://ci.invalid
+      SHOPIFY_API_KEY: ci-placeholder
+      SHOPIFY_API_SECRET: ci-placeholder
+      SCOPES: read_orders
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20 # matches the production Dockerfile
+          node-version: 22 # matches the production Dockerfile (node:22-alpine) and package.json engines (>=22.12)
           cache: npm
       - run: npm ci
       - run: npx prisma generate
