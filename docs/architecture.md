@@ -18,7 +18,7 @@
 
 A Shopify embedded app (React Router 7 on `@shopify/shopify-app-react-router`, `AppDistribution.SingleMerchant`, expiring offline access tokens, Prisma session storage) that adds delivery-date/time-slot scheduling to checkout, syncs that state onto Shopify orders, and gives the merchant an Orders Operations page to run deliveries from. It runs as one Node 22 container on Cloud Run (`Dockerfile`; container start runs `prisma generate && prisma migrate deploy`) against a Postgres database on Neon.
 
-**Delivery state lives on the Shopify order, not in Postgres.** Everything about a specific order's delivery date, slot, reschedule status, and sync status is stored as order metafields, tags, and customAttributes (see [Delivery state on the Shopify order](#delivery-state-on-the-shopify-order)). Postgres holds seven models: the Shopify session, the shop's schedule configuration, and side tables for work bookkeeping and courier/email correlation (see [Database](#database)). Booked-slot counts are never persisted: `services/delivery-bookings.server.ts` derives them from one Admin GraphQL orders search filtered by `metafields.custom.date:` over the capacity-tracked dates, matched on `custom.date` + `custom.time_slot` only, memoized in-process per shop for a short TTL.
+**Delivery state lives on the Shopify order, not in Postgres.** Everything about a specific order's delivery date, slot, reschedule status, and sync status is stored as order metafields, tags, and customAttributes (see [Delivery state on the Shopify order](#delivery-state-on-the-shopify-order)). Postgres holds eight models: the Shopify session, the shop's schedule configuration, and side tables for work bookkeeping, the agent draft-order idempotency reservation, and courier/email correlation (see [Database](#database)). Booked-slot counts are never persisted: `services/delivery-bookings.server.ts` derives them from one Admin GraphQL orders search filtered by `metafields.custom.date:` over the capacity-tracked dates, matched on `custom.date` + `custom.time_slot` only, memoized in-process per shop for a short TTL.
 
 The app has these external integrations beyond the Shopify Admin, Storefront, and extension APIs:
 
@@ -237,7 +237,7 @@ The theme's own date/slot picker (in the theme repo, not here) writes the cart a
 
 | Route | What it does today |
 |---|---|
-| `POST /api/agent/orders/draft` | Validates the body, validates date + slot against the live rules, resolves products (variant id, handle, or title), and creates a draft order carrying `Delivery Date`, `Delivery Time`, `Card Message`, `Instruction`, `Agent Idempotency Key`, and (when supplied) `_Messenger PSID` customAttributes; tags `<date>`, `<slot>`, `source:messenger`, `agent-key-<key>`; a `LALAMOVE` shipping line. Idempotent: a draft already tagged `agent-key-<key>` is returned instead of created. `paymentMode: "cod"` checks NCR area + the COD amount window from the same function-configuration metafield, adds the `COD-FEE` variant line, and completes the draft with `paymentPending: true`, so a real order exists immediately. Otherwise it returns the draft's `invoiceUrl`. |
+| `POST /api/agent/orders/draft` | Validates the body, validates date + slot against the live rules, resolves products (variant id, handle, or title), and creates a draft order carrying `Delivery Date`, `Delivery Time`, `Card Message`, `Instruction`, `Agent Idempotency Key`, and (when supplied) `_Messenger PSID` customAttributes; tags `<date>`, `<slot>`, `source:messenger`, `agent-key-<key>`; a `LALAMOVE` shipping line. Idempotent: the key is claimed with a unique insert into `AgentOrderRequest` before any Shopify write; a repeat of a finished key returns the existing draft or order, a repeat while the first request is still running gets `409 in_progress`, and a pending row older than two minutes is taken over. The recipient must be inside `checkDeliveryCoverage`, and every resolved variant must be `availableForSale`. `paymentMode: "cod"` checks the NCR ZIP ranges or an exact normalized city match (with the checkout Function's alias table and a province guard) plus the COD amount window from the same function-configuration metafield (minimum defaults to 2500 when absent; an unreadable config fails closed), adds the `COD-FEE` variant line, and completes the draft with `paymentPending: true`, so a real order exists immediately; a drafted COD reservation whose completion failed is completed on retry. Otherwise it returns the draft's `invoiceUrl`. The `agent-key-<key>` tag (hashed when the key is longer than 30 characters) stays on the draft for visibility. |
 | `GET /api/agent/orders/status` | Order number + email → stage computed by `lib/order-tracking.server.ts` (`waiting_payment` / `confirmed` / `preparing` / `on_the_way` / `own_rider` / `delivered` / `cancelled`), delivery date/slot, fulfillment tracking URL, status page URL, reschedule page URL. Works for every Shopify order; the email must match the order. |
 | `GET /api/agent/delivery/quote` | Coverage + fee range for a city/ZIP (`delivery-coverage.server.ts`), COD availability and amount window, the configured slots, and, for an optional date, whether it is bookable and which slots remain. |
 
@@ -333,7 +333,7 @@ The merchant books every delivery by hand on web.lalamove.com and pastes the Lal
 
 ## Database
 
-Prisma 7, `prisma/schema.prisma`, PostgreSQL on Neon. Seven models; none holds an order's delivery state.
+Prisma 7, `prisma/schema.prisma`, PostgreSQL on Neon. Eight models; none holds an order's delivery state.
 
 ```mermaid
 erDiagram
@@ -419,12 +419,22 @@ erDiagram
         datetime sentAt
     }
 
+    AgentOrderRequest {
+        string   idempotencyKey PK
+        string   shop
+        string   paymentMode
+        string   status
+        string   draftId
+        string   orderId
+        datetime lockedAt
+    }
+
     BulkActionJob ||--o{ BulkActionJobItem : "jobId"
     Session ||..o{ DeliveryScheduleConfig : "shop string (no FK)"
 ```
 
 - `DeliveryScheduleConfig` is the only merchant-edited configuration. `disabledSlotsJson` and `slotCapacityJson` are date-keyed maps whose inner keys are slot-value references resolved through the canonical slot comparator (`lib/slot-value.ts`), which tolerates drifted spellings such as `"9am - 12pm"` vs `"9AM-12PM"`.
-- `DeliverySyncTask`, `BulkActionJob`, `BulkActionJobItem` are work bookkeeping; `LalamoveTracking` and `EmailSendLog` are side tables for the ops page timeline and the courier poll.
+- `DeliverySyncTask`, `BulkActionJob`, `BulkActionJobItem` are work bookkeeping; `AgentOrderRequest` is the idempotency reservation for `POST /api/agent/orders/draft` (one row per key: `pending` → `drafted` → `completed`); `LalamoveTracking` and `EmailSendLog` are side tables for the ops page timeline and the courier poll.
 - There is no local order, customer, conversation, or audit table. `delivery.reschedule_history` on the order is the only reschedule audit trail.
 
 ---
