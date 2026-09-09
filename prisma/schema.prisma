@@ -181,3 +181,21 @@ model DeliveryScheduleConfig {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 }
+
+// Idempotency reservation for POST /api/agent/orders/draft. Work bookkeeping
+// only: the draft and the order live in Shopify. The key is claimed with a
+// unique insert before any Shopify write, so a concurrent retry of the same
+// tool call cannot create a second draft.
+model AgentOrderRequest {
+  idempotencyKey String   @id
+  shop           String
+  paymentMode    String
+  status         String   @default("pending") // pending | drafted | completed | failed
+  draftId        String?
+  orderId        String?
+  lockedAt       DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([shop, status])
+}
