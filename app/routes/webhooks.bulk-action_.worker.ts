@@ -1,12 +1,12 @@
 import type { ActionFunctionArgs } from "react-router";
 
-import { verifyMetaWebhookSignature } from "../lib/verify-meta-signature.server";
+import { verifyHmacSha256Signature } from "../lib/verify-hmac-signature.server";
 import { processBulkActionJobChunk } from "../services/bulk-action-jobs.server";
 import {
-  MESSENGER_WORKER_SIGNATURE_HEADER,
+  OPS_WORKER_SIGNATURE_HEADER,
   enqueueBulkActionTask,
   resolveOpsWorkerSecret,
-} from "../services/messenger-queue.server";
+} from "../services/ops-queue.server";
 
 // Cloud Tasks worker for /app/orders bulk-action jobs (ADR-22 Phase B).
 // Same signature scheme and status contract as the delivery-sync worker:
@@ -35,8 +35,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response(null, { status: 401 });
   }
 
-  const signature = request.headers.get(MESSENGER_WORKER_SIGNATURE_HEADER);
-  if (!verifyMetaWebhookSignature(rawBody, signature, workerSecret)) {
+  const signature = request.headers.get(OPS_WORKER_SIGNATURE_HEADER);
+  if (!verifyHmacSha256Signature(rawBody, signature, workerSecret)) {
     console.warn("[bulk-action-worker] rejected task with missing/invalid signature");
     return new Response(null, { status: 401 });
   }

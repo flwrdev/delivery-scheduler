@@ -24,6 +24,7 @@ import {
   getRescheduleTimelineEvents,
 } from "../../lib/order-utils";
 import { MAX_ORDER_TAG_LENGTH } from "../../lib/order-tags";
+import { buildMessengerInboxUrl, getMessengerPsid } from "../../lib/messenger-conversation";
 import { polarisBadgeTone } from "./panel/badge-tone";
 import { DeliverySection } from "./panel/DeliverySection";
 import { DeliveryTimeline } from "./panel/DeliveryTimeline";
@@ -47,6 +48,8 @@ export interface OrderDetailsPanelProps {
   onSendEmail?: () => void;
   // Edit details: opens the shipping-address edit modal for this order.
   onEditDetails?: () => void;
+  /** Meta Page ID for the "Open Messenger conversation" action; "" hides it. */
+  metaPageId?: string;
 }
 
 /**
@@ -64,6 +67,7 @@ export function OrderDetailsPanel({
   onReschedule,
   onSendEmail,
   onEditDetails,
+  metaPageId = "",
 }: OrderDetailsPanelProps) {
   const tagFetcher = useFetcher<{
     ok: boolean;
@@ -122,6 +126,9 @@ export function OrderDetailsPanel({
 
   const adminUrl = `shopify://admin/orders/${orderId}`;
   const statusPageUrl = order.statusPageUrl ?? null;
+  const messengerPsid = getMessengerPsid(order);
+  const messengerUrl =
+    metaPageId && messengerPsid ? buildMessengerInboxUrl(metaPageId, messengerPsid) : null;
   const actionItems = [
     {
       content: "Update delivery slot",
@@ -174,6 +181,15 @@ export function OrderDetailsPanel({
     {
       content: "Open in Shopify Admin",
       url: adminUrl,
+      onAction: () => setActionsOpen(false),
+    },
+    {
+      content: "Open Messenger conversation",
+      // Business Suite inbox deep link; needs the Meta Page ID and the
+      // customer's PSID stored on the order by the agent draft endpoint.
+      disabled: !messengerUrl,
+      url: messengerUrl ?? undefined,
+      external: true,
       onAction: () => setActionsOpen(false),
     },
   ];

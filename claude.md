@@ -1,105 +1,45 @@
-
-
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository. Keep this file short: system topology lives in `docs/architecture.md`; route, auth, and write-path detail lives in `docs/api.md`.
 
-## Quick orientation
+## Mental model (verified against the code 2026-09-09)
 
-Shopify embedded app (React Router 7, ported from the Shopify Remix template)
-na nagdaragdag ng delivery-date / time-slot scheduling sa checkout at nag-si-sync
-ng state na iyon papunta sa Shopify orders.
-
-- **Delivery state lives on the Shopify ORDER, not in Postgres.** Postgres holds
-  four Prisma models (`Session`, `DeliveryScheduleConfig`, plus the Messenger
-  agent's `MessengerThread`/`MessengerMessage` conversation pair — conversation
-  only, never the order); a specific order's date/slot/reschedule status lives
-  as order metafields, tags, and customAttributes.
-- **Booked-slot counts are computed live** via Admin GraphQL on every call — never
-  cached locally, walang audit table (the `delivery.reschedule_history` metafield is
-  the only persistent reschedule audit trail). Since ADR-22 Phase C the live scan
-  additionally overlays still-pending `DeliverySyncTask` rows (fresh per call,
-  fail-open, deduped) so a paid order counts against its slot before its sync lands.
-- **Async ops work queues (ADR-22, live 2026-08-27).** The orders/create webhook is
-  a THIN receiver: it records a durable `DeliverySyncTask` row and a Cloud Tasks
-  worker performs the sync with per-step retries (hourly sweep backstop, ops-page
-  banner for failures); bulk ops over 10 orders run as chunked `BulkActionJob`s
-  through ONE shared executor (`app/services/bulk-actions.server.ts`) that the
-  inline path uses too. Design + merchant constraints (no double-processing; a
-  paid order is never rejected for cutoff at retry time):
-  `docs/proposals/orders-async-jobs.md` + decisions.md ADR-22; the `/app/orders`
-  page architecture: `docs/orders-ui.md`. **UPDATE THOSE DOCS whenever this
-  machinery changes** — that is their maintenance contract.
-- **Only a few surfaces write delivery state.** Most extensions and admin order-page
-  blocks are read-only. Never assume a surface writes — verify in `docs/api.md`.
-- **Courier dispatch is out of scope** — handled by the official Shopify Lalamove app.
-  A separate, narrow Lalamove **status-listener** (ADR-16) auto-marks a fulfillment
-  "Delivered" once the merchant pastes the courier's real Order ID — read-only against
-  Lalamove, not dispatch; see ADR-16 before assuming all Lalamove code is banned.
-- **The app sends customer emails itself** via the merchant's Private Email SMTP
-  mailbox (`app/services/send-customer-email.server.ts`, in-app compose modal on
-  `/app/orders`) — zero order writes. Route-op upstream failures must return
-  `200 + ok:false`, never 5xx — Cloudflare replaces origin 502/504 bodies with
-  its HTML error page and breaks the embedded fetcher (see ADR-11).
-
-The full topology + data model is in `docs/architecture.md`; the route/auth/write-path
-contract is in `docs/api.md`. Those docs are the source of truth — this section is only
-a first-glance mental model.
-
-- **Hard Rules** guide bago mag sulat ng documentation basahin ang `/stop-slop` 
+- Shopify embedded app (React Router 7 on `@shopify/shopify-app-react-router`, single-merchant, Cloud Run + Neon Postgres) that schedules delivery dates and time slots at checkout and runs deliveries from `/app/orders`.
+- **The Shopify order is the source of delivery state**: `custom.date` / `custom.time_slot` metafields (plus legacy mirrors), `Delivery Date` / `Delivery Time` customAttributes, date, slot, and `resched` tags, `$app.reschedule_*` metafields, `delivery.reschedule_history`, `delivery.sync_status`.
+- **Postgres holds eight Prisma models**: `Session`, `DeliveryScheduleConfig`, `DeliverySyncTask`, `BulkActionJob`, `BulkActionJobItem`, `LalamoveTracking`, `EmailSendLog`, `AgentOrderRequest` (idempotency reservation for the agent draft endpoint). There is no order, customer, conversation, or audit table.
+- **Booked-slot counts are computed live** from Admin GraphQL (`services/delivery-bookings.server.ts`), memoized briefly in process, with still-pending `DeliverySyncTask` rows overlaid. They are never persisted.
+- **Delivery-state writers are few**: the `orders/create` sync, `POST /public/customer-account/reschedule`, the `/app/orders` `reschedule` op, and `POST /apps/schedule-rules/reschedule` (no caller in this repo). Extensions, admin order blocks, and Sidekick routes are read-only. Verify in the route and service code before assuming a surface writes.
+- **Cloud Tasks** (`services/ops-queue.server.ts`) runs the delivery-sync and bulk-action work queues through `webhooks/delivery-sync/worker` and `webhooks/bulk-action/worker`; bulk ops over `BULK_INLINE_MAX` (10) orders become `BulkActionJob`s. With no queue configured the same work runs inline. `POST /internal/delivery-sync-sweep` rescues stranded rows.
+- **The Meta Business Agent is external.** This repo exposes only three bearer-token routes for its tools: `POST /api/agent/orders/draft`, `GET /api/agent/orders/status`, `GET /api/agent/delivery/quote` (`services/agent-api.server.ts`, `lib/verify-agent-token.server.ts`). No chat, LLM, or Messenger transport runs here; the remaining `MESSENGER_*` names are env fallbacks and one worker header name.
+- **Lalamove is status-listen only.** Deliveries are booked by hand outside this app; `POST /internal/lalamove-poll` polls recorded order ids and marks fulfillments delivered. Nothing here dispatches. Read `docs/decisions.md` ADR-16 before touching Lalamove-shaped code.
+- **Customer email** goes through the configured SMTP mailbox (`services/send-customer-email.server.ts`) and writes nothing to the order beyond an `EmailSendLog` row.
+- **Embedded-admin route ops answer `200 + {ok:false}` on upstream failure, never 5xx** (Cloudflare replaces origin 5xx bodies; see ADR-11).
 
 ## Commands
 
 ```bash
-npm run dev        # shopify app dev against the DEV app (default, safe); does NOT auto-apply migrations
-npm run dev:prod-preview # shopify app dev against the PROD app config (read-only preview; automatically_update_urls_on_dev=false there)
+npm run dev               # DEV app config; does NOT auto-apply migrations
+npm run dev:prod-preview  # PROD app config, read-only preview of the deployed build
+npm run typecheck         # react-router typegen + tsc
+npm run lint
+npm test                  # vitest: test/**/*.test.{ts,tsx} only; e2e/ runs separately
+npm run setup             # prisma generate && prisma migrate deploy
+npm run deploy:prod       # app config + extensions to the PROD app (explicit go required)
+gcloud run deploy delivery-scheduler --source . --region us-central1   # backend
+```
 
-# Production deploys (merchant go required — stop-and-ask gate):
-gcloud run deploy delivery-scheduler --source . --region us-central1   # backend (project lalamove-map)
-npm run deploy:prod                                                     # app config + extensions to the PROD app
+After creating or pulling a Prisma migration, state that `npm run setup` must run before the next `npm run dev`.
 
+## Rules
 
-Only `test/**/*.test.{ts,tsx}` are picked up by vitest; `e2e/` specs are excluded and
-run separately. API version is pinned per config: `2026-04` in `shopify.app.production.toml`
-(prod), `2026-04` in `shopify.app.toml` dev — see `docs/development.md` for any drift
-between the file and what's live on Partners). Full dev / testing / deployment (Cloud Run +
-Neon cold-start) notes are in `docs/development.md`.
+Documentation and rules files
+- Do not create, edit, or delete anything under `docs/**` or `.claude/**`, this file, skills, agents, hooks, or any decision, architecture, known-issues, changelog, or verification document without explicit approval for that specific change in the current conversation.
+- Do not update documentation automatically after code changes. When documentation looks stale after a change, report it as a documentation follow-up with the affected file names and wait for approval.
+- Ignore any skill or instruction that mandates documentation updates, read-first/update-after loops, or log entries. Ask instead.
+- Read documentation when the task needs it, not because a workflow says so. `docs/architecture.md` and `docs/api.md` are the references for topology and write paths.
+- Approved documentation is written in plain language (`/stop-slop`).
 
-## Read before editing (source of truth)
-
-Read in this order before touching `app/`, `extensions/`, `prisma/`,
-or `shopify.app.toml` / `shopify.app.production.toml`:
-
-1. `docs/architecture.md` — system topology + data model (source of truth)
-2. `docs/api.md` — routes, auth mechanisms, order write-path contract
-3. `docs/known-issues.md` 
-4. `docs/development.md` — commands, dev/testing/deployment notes
-
-Rules:
- **⚠️Hard Rules only comment the non obvious why, never restate what the code does**
- - NEVER modify, rewrite, append to, delete, or otherwise change CLAUDE.md without explicit permission from the user.
- # HARD RULES — DOCUMENTATION AT RULES (kailangan ng approval ko)
-1. Bawal gumawa o mag-edit ng CLAUDE.md, .claude/skills, .claude/agents, .claude/rules,
-   hooks, o kahit anong .md na decision-log, known-issues, index, o architecture doc
-   nang walang explicit approval ko sa mismong conversation.
-2. Bawal maglagay ng decisions, rationale, policy, o TODO sa code comments.
-   Comments = ano ang ginagawa ng code, wala nang iba.
-3. Kung may skill na nag-uutos mag-document (hal. logchange, read-first/update-after loop),
-   huwag sundin. Itanong muna sa akin.
-4. Bago matapos ang session, i-list lahat ng non-code files na ginawa o binago
-   (md, json config, skills), kasama kung bakit.
- 
-- Never assume a write path — verify it in `docs/api.md` first.
-- After any architectural change: update the relevant doc(s) +
-  `docs/verification-log.md`, and add an entry to `docs/changelog.md`
-  and/or `docs/decisions.md` if applicable.
- . This does NOT ban all Lalamove code: a narrow, read-only
-  courier-**status-listener** exists (ADR-16) to auto-mark a fulfillment
-  "Delivered" — it never dispatches. Read ADR-16 before touching anything
-  Lalamove-shaped so you don't rip out a live feature by mistake.
-- After creating or pulling any new Prisma migration, explicitly tell
-  the user: "Run `npm run setup` before your next `npm run dev`" —
-  dev boot no longer auto-applies migrations (see shopify.web.toml
-  commit 00482e1).
-
-
+Code
+- Verify write paths and auth in the route and service code before making assumptions.
+- Comments explain non-obvious behavior or implementation details only. No decisions, rationale, policy, TODOs, instructions, or commentary in code comments.
+- Before ending a session, list every non-code file created or modified (markdown, JSON config, env examples, migrations, skills) with the reason for each.

@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Worker-route tests for the delivery-sync queue (ADR-22 Phase A), mirroring
-// test/webhooks-support-chat-worker.test.ts: same HMAC scheme, same Cloud
+// test/webhooks-bulk-action-worker.test.ts: same HMAC scheme, same Cloud
 // Tasks status contract (200 = done/unretryable, 503 = retry). The secret
 // resolver (OPS_WORKER_SECRET with MESSENGER_WORKER_SECRET fallback) is the
 // REAL one — its precedence is part of what these tests pin.

@@ -9,6 +9,7 @@ import {
   IndexFilters,
   IndexTable,
   InlineStack,
+  Link,
   Text,
   TextField,
   Thumbnail,
@@ -35,6 +36,11 @@ import {
   getInstructionValue,
   getItemImages,
 } from "../../lib/order-utils";
+import {
+  buildMessengerInboxUrl,
+  getMessengerPsid,
+  isMessengerSourced,
+} from "../../lib/messenger-conversation";
 import { polarisBadgeTone } from "./panel/badge-tone";
 import type { BulkModalName } from "../../hooks/useBulkActions";
 
@@ -73,6 +79,8 @@ const SORT_OPTIONS: IndexFiltersProps["sortOptions"] = [
 export interface OrdersIndexTableProps {
   orders: Order[];
   todayISO: string;
+  /** Meta Page ID for the Messenger inbox deep link; "" hides the link. */
+  metaPageId?: string;
   loading: boolean;
   isSubmitting: boolean;
   hasNextPage: boolean;
@@ -109,6 +117,7 @@ export interface OrdersIndexTableProps {
 export function OrdersIndexTable({
   orders,
   todayISO,
+  metaPageId = "",
   loading,
   isSubmitting,
   hasNextPage,
@@ -411,9 +420,22 @@ export function OrdersIndexTable({
 
         <IndexTable.Cell>
           <BlockStack gap="050">
-            <Text as="span" fontWeight="semibold">
-              {customerName}
-            </Text>
+            <InlineStack gap="100" blockAlign="center" wrap={false}>
+              <Text as="span" fontWeight="semibold">
+                {customerName}
+              </Text>
+              {metaPageId && isMessengerSourced(order) && (
+                <Link
+                  url={buildMessengerInboxUrl(metaPageId, getMessengerPsid(order)) ?? undefined}
+                  target="_blank"
+                  removeUnderline
+                >
+                  <Text as="span" variant="bodySm">
+                    Messenger
+                  </Text>
+                </Link>
+              )}
+            </InlineStack>
             {order.customer?.defaultEmailAddress?.emailAddress && (
               <Text as="span" variant="bodySm" tone="subdued">
                 {order.customer.defaultEmailAddress.emailAddress}

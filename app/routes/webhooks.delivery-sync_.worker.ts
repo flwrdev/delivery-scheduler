@@ -1,15 +1,15 @@
 import type { ActionFunctionArgs } from "react-router";
 
-import { verifyMetaWebhookSignature } from "../lib/verify-meta-signature.server";
+import { verifyHmacSha256Signature } from "../lib/verify-hmac-signature.server";
 import { processDeliverySyncTask } from "../services/delivery-sync-task.server";
 import {
-  MESSENGER_WORKER_SIGNATURE_HEADER,
+  OPS_WORKER_SIGNATURE_HEADER,
   resolveOpsWorkerSecret,
-} from "../services/messenger-queue.server";
+} from "../services/ops-queue.server";
 
 // Cloud Tasks worker for the orders/create delivery sync (ADR-22, Phase A).
-// Mirrors webhooks.support-chat_.worker.ts exactly — same signature scheme,
-// same status contract with Cloud Tasks (it retries on any non-2xx):
+// Same signature scheme as webhooks.bulk-action_.worker.ts and the same
+// status contract with Cloud Tasks (it retries on any non-2xx):
 //   200 — done, or retrying can never help (terminal row, unknown task,
 //         another worker holds the lease, permanent failure)
 //   503 — transient failure; retry with backoff
@@ -38,8 +38,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response(null, { status: 401 });
   }
 
-  const signature = request.headers.get(MESSENGER_WORKER_SIGNATURE_HEADER);
-  if (!verifyMetaWebhookSignature(rawBody, signature, workerSecret)) {
+  const signature = request.headers.get(OPS_WORKER_SIGNATURE_HEADER);
+  if (!verifyHmacSha256Signature(rawBody, signature, workerSecret)) {
     console.warn("[delivery-sync-worker] rejected task with missing/invalid signature");
     return new Response(null, { status: 401 });
   }

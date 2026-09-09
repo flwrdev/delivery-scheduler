@@ -33,77 +33,6 @@ model Session {
   refreshTokenExpires DateTime?
 }
 
-// FlowerCart Messenger agent (phase 3+): Neon holds the CONVERSATION, never
-// the order — Shopify is the order ledger (master doc, locked decision #1).
-model MessengerThread {
-  psid              String             @id
-  humanControl      Boolean            @default(false)
-  humanControlAt    DateTime?
-  lastCustomerAt    DateTime?
-  disclosedBot      Boolean            @default(false)
-  state             String             @default("idle")
-  shopifyCustomerId String?
-  // Phase 6 slot-filling state machine: the fields collected so far for the
-  // in-progress order (JSON, see MessengerOrderState). Conversation state
-  // only — the order itself lives in Shopify (locked decision #1).
-  orderStateJson    String?
-  // Phase 6 idempotency guard: UUID written here BEFORE draftOrderCreate and
-  // carried on the draft order as both a custom attribute and a tag
-  // (mo-key-<uuid>). Check-before-create searches drafts by that tag.
-  conversationOrderKey String?
-  // SUPERSEDED (2026-08-21): the anti-guessing lockout moved to the
-  // channel-agnostic LookupAttempt model below, because this column pair is
-  // keyed by psid and the web channels (customer-account/storefront) never
-  // create a MessengerThread row. Left in place — dropping columns is
-  // destructive — but no longer read or written by order-lookup.server.ts.
-  lookupFailures    Int                @default(0)
-  lookupLockedAt    DateTime?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  messages          MessengerMessage[]
-}
-
-// Channel-agnostic order-lookup anti-guessing guard (2026-08-21 addendum —
-// see order-lookup.server.ts). Keyed by the resolved agent thread key (psid
-// on Messenger, customer GID or anonymous conversation id on the web
-// surfaces) so the lockout works the same regardless of which channel the
-// customer is guessing from, and does not depend on a MessengerThread row
-// existing for that key.
-model LookupAttempt {
-  key       String    @id
-  failures  Int       @default(0)
-  lockedAt  DateTime?
-  updatedAt DateTime  @updatedAt
-}
-
-// Turn-volume rate limiting for LLM-backed agent channels (storefront widget,
-// 2026-08-22) — distinct from LookupAttempt, which only throttles the
-// order-lookup TOOL. This throttles general message/turn volume per caller.
-// key is "conv:<conversationId>" or "ip:<address>" — opaque, no
-// server-verified identity required. See agent-rate-limit.server.ts.
-model AgentRateLimit {
-  key         String   @id
-  windowStart DateTime
-  count       Int      @default(0)
-  updatedAt   DateTime @updatedAt
-}
-
-model MessengerMessage {
-  id        String          @id @default(cuid())
-  psid      String
-  role      String // "customer" | "bot" | "operator" (phase 7: human echoes from Business Suite)
-  bodyJson  String // JSON: { text } for now; richer shapes in later phases
-  mid       String          @unique // webhook dedupe (Meta redelivers on non-200)
-  // Set once the worker has successfully replied to this inbound message —
-  // a Cloud Tasks retry that finds repliedAt set must NOT send again.
-  repliedAt DateTime?
-  replyMid  String?
-  createdAt DateTime        @default(now())
-  thread    MessengerThread @relation(fields: [psid], references: [psid])
-
-  @@index([psid, createdAt])
-}
-
 // Lalamove courier-status listener (NOT dispatch — see ADR-16). Correlates a
 // Lalamove delivery, booked manually by the merchant outside Shopify, to the
 // Shopify order/fulfillment it belongs to, so a Lalamove COMPLETE status can
@@ -144,57 +73,6 @@ model EmailSendLog {
   sentAt         DateTime @default(now())
 
   @@index([shop, shopifyOrderId])
-}
-
-// Support chat (customer-account + storefront widget, agent-core phase 2/3):
-// enqueue-then-poll job records for a chat turn. Neon holds the CONVERSATION
-// + JOB STATUS only — same posture as MessengerThread/MessengerMessage
-// (never the order; order state lives on the Shopify order).
-// id is the customerGid for customer-account threads (one thread per
-// signed-in customer); a "storefront:<uuid>" conversation id for the
-// anonymous storefront widget (customerGid null there). `channel` is what
-// runSupportChatTurn reads to reconstruct the right AgentChannel per job —
-// see support-chat-turn.server.ts.
-model SupportChatThread {
-  id          String   @id
-  shop        String
-  customerGid String?
-  channel     String   @default("customer-account") // "customer-account" | "storefront"
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  messages SupportChatMessage[]
-  jobs     SupportChatJob[]
-}
-
-model SupportChatMessage {
-  id        String   @id @default(cuid())
-  threadId  String
-  role      String // "customer" | "assistant"
-  bodyJson  String // JSON: { text } for a customer turn, { blocks } for an assistant turn
-  createdAt DateTime @default(now())
-
-  thread SupportChatThread @relation(fields: [threadId], references: [id])
-
-  @@index([threadId, createdAt])
-}
-
-// One row per POST /api/support-chat call. The extension polls this by id
-// (never by threadId) so a different customer's jobId cannot be guessed into
-// leaking someone else's conversation — the poll route ALSO re-checks the
-// caller's own verified customerGid against the job's thread before answering.
-model SupportChatJob {
-  id         String   @id // jobId returned to the client, crypto.randomUUID()
-  threadId   String
-  status     String   @default("pending") // "pending" | "done" | "failed"
-  blocksJson String?
-  error      String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  thread SupportChatThread @relation(fields: [threadId], references: [id])
-
-  @@index([threadId, createdAt])
 }
 
 // Durable work record for the orders/create delivery sync (ADR-22, Phase A of
@@ -304,40 +182,20 @@ model DeliveryScheduleConfig {
   updatedAt         DateTime @updatedAt
 }
 
-// Merchant-editable storefront chat widget copy/colors, set from the app's
-// Messenger admin page (merchant chose to fold widget settings into that
-// page rather than a dedicated nav item, 2026-08-23). Null column = use the
-// built-in default in widget-config.server.ts. Read by
-// apps.schedule-rules.widget-config.ts (App Proxy) on every storefront page
-// load, so widget-config.server.ts caches this in-process; the Theme Editor
-// block settings in app-embed.liquid are NOT removed — they stay as the
-// fallback if this row doesn't exist yet or the fetch fails.
-model WidgetConfig {
-  shop         String   @id
-  greeting     String?
-  bubbleColor  String?
-  supportPhone String?
-  trackLabel   String?
-  chip2Label   String?
-  chip2Message String?
-  chip3Label   String?
-  chip3Message String?
-  chip4Label   String?
-  chip4Message String?
-  // Colors/layout/behavior (2026-08-23 addendum) -- same null=default
-  // convention as the fields above. position/panelSize are validated
-  // against a fixed string set at the app layer (see app.messenger-orders.tsx),
-  // not a Prisma enum, to match how bubbleColor is already hex-validated
-  // there rather than DB-constrained.
-  panelBg        String?
-  textColor      String?
-  mutedColor     String?
-  borderColor    String?
-  panelSize      String? // "compact" | "standard" | "large"
-  cornerRadius   Int?
-  position       String? // "left" | "right"
-  disclaimerText String?
-  showDisclaimer Boolean?
-  autoHideBubble Boolean?
+// Idempotency reservation for POST /api/agent/orders/draft. Work bookkeeping
+// only: the draft and the order live in Shopify. The key is claimed with a
+// unique insert before any Shopify write, so a concurrent retry of the same
+// tool call cannot create a second draft.
+model AgentOrderRequest {
+  idempotencyKey String   @id
+  shop           String
+  paymentMode    String
+  status         String   @default("pending") // pending | drafted | completed | failed
+  draftId        String?
+  orderId        String?
+  lockedAt       DateTime @default(now())
+  createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  @@index([shop, status])
 }

@@ -95,7 +95,7 @@ import {
   createBulkActionJob,
   runBulkJobToCompletion,
 } from "../services/bulk-action-jobs.server";
-import { enqueueBulkActionTask } from "../services/messenger-queue.server";
+import { enqueueBulkActionTask } from "../services/ops-queue.server";
 import prisma from "../db.server";
 import {
   getScheduleRules,
@@ -425,6 +425,8 @@ type LoaderData = {
   pageSize: number;
   /** Google Maps key for the Edit-details address search; "" hides the field. */
   mapsApiKey: string;
+  /** Meta Page ID for the Messenger inbox deep link; "" hides the link. */
+  metaPageId: string;
   /** Delivery-sync tasks stuck/failed for this shop (ADR-22) — drives the ops banner; degrades to zero on DB trouble. */
   syncIssues: DeliverySyncIssueSummary;
   /** Customer reschedules from the last 48 h not yet marked Seen — the "Rescheduled today" banner; degrades to empty. */
@@ -667,6 +669,7 @@ export const loader = async ({
       // the key itself must be locked down in the Google Cloud console:
       // HTTP-referrer restriction + Places API only.
       mapsApiKey: process.env.GOOGLE_MAPS_API_KEY ?? "",
+      metaPageId: (process.env.META_PAGE_ID ?? process.env.MESSENGER_PAGE_ID ?? "").trim(),
     } satisfies LoaderData,
     { headers: { "Cache-Control": "no-store" } },
   );
@@ -2092,6 +2095,7 @@ function Extension() {
           <OrdersIndexTable
             orders={displayedOrders}
             todayISO={dateRefs.todayISO}
+            metaPageId={loaderData.metaPageId}
             loading={loading}
             isSubmitting={isSubmitting}
             hasNextPage={pageInfo?.hasNextPage || false}
@@ -2237,6 +2241,7 @@ function Extension() {
           <OrderDetailsPanel
             order={selectedOrder}
             todayISO={dateRefs.todayISO}
+            metaPageId={loaderData.metaPageId}
             notInView={selectedOrderNotInView}
             escDisabled={anyModalOpen}
             onClose={handleCloseDrawer}
