@@ -17,6 +17,9 @@ jobs:
       SHOPIFY_API_KEY: ci-placeholder
       SHOPIFY_API_SECRET: ci-placeholder
       SCOPES: read_orders
+      # prisma.config.ts resolves these at load time; prisma generate never connects.
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      DIRECT_DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
