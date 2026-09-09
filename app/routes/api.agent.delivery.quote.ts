@@ -16,6 +16,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const result = await getAgentDeliveryQuote({
       city: url.searchParams.get("city") ?? url.searchParams.get("q") ?? undefined,
       zip: url.searchParams.get("zip") ?? undefined,
+      province: url.searchParams.get("province") ?? undefined,
       date: url.searchParams.get("date") ?? undefined,
     });
     return agentJsonResponse(result);
