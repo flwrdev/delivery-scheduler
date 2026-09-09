@@ -4,7 +4,9 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 COPY . .
-RUN npx prisma generate
+# Codegen only: prisma.config.ts resolves DIRECT_DATABASE_URL at load time and the
+# build context has no .env, so give it a placeholder. No connection is made.
+RUN DIRECT_DATABASE_URL=postgresql://build:build@localhost:5432/build \n    DATABASE_URL=postgresql://build:build@localhost:5432/build \n    npx prisma generate
 RUN npm run build
 
 FROM node:22-alpine
