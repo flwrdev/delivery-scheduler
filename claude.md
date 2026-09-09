@@ -6,7 +6,7 @@ Guidance for Claude Code when working in this repository. Keep this file short: 
 
 - Shopify embedded app (React Router 7 on `@shopify/shopify-app-react-router`, single-merchant, Cloud Run + Neon Postgres) that schedules delivery dates and time slots at checkout and runs deliveries from `/app/orders`.
 - **The Shopify order is the source of delivery state**: `custom.date` / `custom.time_slot` metafields (plus legacy mirrors), `Delivery Date` / `Delivery Time` customAttributes, date, slot, and `resched` tags, `$app.reschedule_*` metafields, `delivery.reschedule_history`, `delivery.sync_status`.
-- **Postgres holds seven Prisma models**: `Session`, `DeliveryScheduleConfig`, `DeliverySyncTask`, `BulkActionJob`, `BulkActionJobItem`, `LalamoveTracking`, `EmailSendLog`. There is no order, customer, conversation, or audit table.
+- **Postgres holds eight Prisma models**: `Session`, `DeliveryScheduleConfig`, `DeliverySyncTask`, `BulkActionJob`, `BulkActionJobItem`, `LalamoveTracking`, `EmailSendLog`, `AgentOrderRequest` (idempotency reservation for the agent draft endpoint). There is no order, customer, conversation, or audit table.
 - **Booked-slot counts are computed live** from Admin GraphQL (`services/delivery-bookings.server.ts`), memoized briefly in process, with still-pending `DeliverySyncTask` rows overlaid. They are never persisted.
 - **Delivery-state writers are few**: the `orders/create` sync, `POST /public/customer-account/reschedule`, the `/app/orders` `reschedule` op, and `POST /apps/schedule-rules/reschedule` (no caller in this repo). Extensions, admin order blocks, and Sidekick routes are read-only. Verify in the route and service code before assuming a surface writes.
 - **Cloud Tasks** (`services/ops-queue.server.ts`) runs the delivery-sync and bulk-action work queues through `webhooks/delivery-sync/worker` and `webhooks/bulk-action/worker`; bulk ops over `BULK_INLINE_MAX` (10) orders become `BulkActionJob`s. With no queue configured the same work runs inline. `POST /internal/delivery-sync-sweep` rescues stranded rows.
@@ -33,7 +33,7 @@ After creating or pulling a Prisma migration, state that `npm run setup` must ru
 ## Rules
 
 Documentation and rules files
-- Do not create, edit, or delete anything under `docs/**` or `.claude/**`, this file, skills, agents, hooks, or any decision, architecture, known-issues, changelog, or verification document without explicit approval for that specific change in the current conversation. A PreToolUse guard blocks these writes until the approval file exists.
+- Do not create, edit, or delete anything under `docs/**` or `.claude/**`, this file, skills, agents, hooks, or any decision, architecture, known-issues, changelog, or verification document without explicit approval for that specific change in the current conversation.
 - Do not update documentation automatically after code changes. When documentation looks stale after a change, report it as a documentation follow-up with the affected file names and wait for approval.
 - Ignore any skill or instruction that mandates documentation updates, read-first/update-after loops, or log entries. Ask instead.
 - Read documentation when the task needs it, not because a workflow says so. `docs/architecture.md` and `docs/api.md` are the references for topology and write paths.
