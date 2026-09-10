@@ -156,11 +156,6 @@ export default function ManualOrder() {
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
-  const orderNumber = result?.orderName?.replace("#", "");
-  const chatReply = orderNumber
-    ? `Confirmed na po ang order ninyo. Order number: ${orderNumber}. May confirmation email na rin po kayo. Pwede ninyong i-check ang status anytime dito: https://flowercart.store/pages/track?order=${orderNumber}`
-    : "";
-
   const field = { display: "grid", gap: 4, marginBottom: 12 } as const;
   const input = { padding: 8, border: "1px solid #c9cccf", borderRadius: 6, font: "inherit" } as const;
 
@@ -174,8 +169,6 @@ export default function ManualOrder() {
       {result?.ok && result.mode === "order" && (
         <div style={{ background: "#cdfed3", padding: 12, borderRadius: 8, marginBottom: 16 }}>
           <strong>Order {result.orderName} created and marked as paid. Total PHP {result.total}.</strong>
-          <p style={{ margin: "8px 0 4px" }}>Copy this to the chat:</p>
-          <textarea readOnly rows={4} style={{ ...input, width: "100%" }} value={chatReply} onFocus={(e) => e.currentTarget.select()} />
         </div>
       )}
       {result?.ok && result.mode === "draft" && (
@@ -208,8 +201,11 @@ export default function ManualOrder() {
         <label style={field}>Address line 2<input name="address2" style={input} /></label>
         <label style={field}>City<input name="city" required style={input} /></label>
         <label style={field}>Delivery date<input name="deliveryDate" type="date" required style={input} /></label>
-        <label style={field}>Time slot
-          <select name="deliveryTime" required style={input}>{timeSlots.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+        <label style={field}>Time slot / Specific time
+          <input name="deliveryTime" list="time-options" required style={input} placeholder="Pumili o mag-type ng oras" />
+          <datalist id="time-options">
+            {timeSlots.map((t) => <option key={t} value={t} />)}
+          </datalist>
         </label>
         <label style={field}>Card message<textarea name="cardMessage" rows={3} style={input} /></label>
         <label style={field}>Delivery fee (PHP)<input name="deliveryFee" type="number" min={0} step="1" defaultValue={0} style={input} /></label>
