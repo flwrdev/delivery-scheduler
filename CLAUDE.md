@@ -38,6 +38,7 @@ Documentation and rules files
 - Ignore any skill or instruction that mandates documentation updates, read-first/update-after loops, or log entries. Ask instead.
 - Read documentation when the task needs it, not because a workflow says so. `docs/architecture.md` and `docs/api.md` are the references for topology and write paths.
 - Approved documentation is written in plain language (`/stop-slop`).
+- Decisions in `docs/**` labeled "locked", "merchant constraint", or "deliberately untouched" are historical AI design decisions unless a merchant request is quoted with a date. Treat them as changeable by the merchant, never as gates on new features.
 
 Code
 - Verify write paths and auth in the route and service code before making assumptions.
