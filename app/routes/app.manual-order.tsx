@@ -1,6 +1,8 @@
+import { useMemo, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
+import { looksLikeSummary, parseOrderSummary } from "../lib/parse-order-summary";
 
 const TIME_SLOTS = ["9AM-12PM", "12PM-3PM", "3PM-6PM", "6PM-11PM"];
 const SOURCES = ["messenger", "instagram"];
@@ -102,6 +104,7 @@ export async function action({ request }: ActionFunctionArgs) {
       address1: s("address1"),
       address2: s("address2") || undefined,
       city: s("city"),
+      province: s("province") || undefined,
       phone: s("recipientPhone") || phone || undefined,
       countryCode: "PH",
     },
@@ -150,14 +153,61 @@ export async function action({ request }: ActionFunctionArgs) {
   });
 }
 
+const EMPTY_FORM: Record<string, string> = { source: "messenger", quantity: "1", deliveryFee: "0" };
+
 export default function ManualOrder() {
   const { variants, timeSlots } = useLoaderData() as { variants: VariantOption[]; timeSlots: string[] };
   const result = useActionData() as ActionResult | undefined;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
 
+  const [values, setValues] = useState<Record<string, string>>(EMPTY_FORM);
+  const [summary, setSummary] = useState("");
+  const [pastedTotal, setPastedTotal] = useState<number | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+
+  const bind = (name: string) => ({
+    name,
+    value: values[name] ?? "",
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
+      setValues((prev) => ({ ...prev, [name]: e.target.value })),
+  });
+
+  // Fills only the fields present in the pasted text; everything else is kept as-is.
+  const applySummary = (text: string) => {
+    const parsed = parseOrderSummary(text, variants);
+    setValues((prev) => ({ ...prev, ...parsed.values }));
+    setPastedTotal(parsed.pastedTotal);
+    setWarnings(parsed.warnings);
+  };
+
+  const onSummaryChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setSummary(e.target.value);
+    applySummary(e.target.value);
+  };
+
+  // A "Label: value" paste into any single input is routed through the parser instead of landing raw.
+  const onFieldPaste = (e: React.ClipboardEvent<HTMLElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (!looksLikeSummary(text)) return;
+    e.preventDefault();
+    applySummary(text);
+  };
+
+  const computedTotal = useMemo(() => {
+    const variant = variants.find((v) => v.id === values.variantId);
+    if (!variant) return null;
+    const qty = Math.max(1, parseInt(values.quantity || "1", 10) || 1);
+    const fee = parseFloat(values.deliveryFee || "0") || 0;
+    return parseFloat(variant.price) * qty + fee;
+  }, [variants, values.variantId, values.quantity, values.deliveryFee]);
+
+  const totalMismatch =
+    pastedTotal !== null && computedTotal !== null && Math.abs(pastedTotal - computedTotal) > 0.005;
+
   const field = { display: "grid", gap: 4, marginBottom: 12 } as const;
   const input = { padding: 8, border: "1px solid #c9cccf", borderRadius: 6, font: "inherit" } as const;
+  const peso = (n: number) => `PHP ${n.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto", padding: 24, font: "14px system-ui, sans-serif" }}>
@@ -181,36 +231,63 @@ export default function ManualOrder() {
         </div>
       )}
 
-      <Form method="post">
+      <label style={{ ...field, marginBottom: 20 }}>
+        <span>Paste order summary (Messenger / Instagram)</span>
+        <textarea
+          value={summary}
+          onChange={onSummaryChange}
+          rows={8}
+          style={{ ...input, fontFamily: "ui-monospace, monospace" }}
+          placeholder={"Product: **Autumn Morning**\nRecipient: **Maria Santos**\nContact: **0912 345 6789**\n..."}
+        />
+        <span style={{ color: "#6d7175" }}>
+          Auto-fill ang form mula sa pasted summary. Pwede ring i-paste ang isang linya (hal. Address: ...) diretso sa kahit anong field.
+        </span>
+      </label>
+
+      {warnings.length > 0 && (
+        <div style={{ background: "#ffea8a", padding: 12, borderRadius: 8, marginBottom: 16 }}>
+          {warnings.map((w) => <div key={w}>{w}</div>)}
+        </div>
+      )}
+      {pastedTotal !== null && computedTotal !== null && (
+        <div style={{ background: totalMismatch ? "#ffea8a" : "#e0f0ff", padding: 12, borderRadius: 8, marginBottom: 16 }}>
+          Total sa summary: <strong>{peso(pastedTotal)}</strong> · Computed (product × qty + fee): <strong>{peso(computedTotal)}</strong>
+          {totalMismatch && <div>Hindi tugma ang total. I-check ang product, quantity, o delivery fee bago i-create.</div>}
+        </div>
+      )}
+
+      <Form method="post" onPaste={onFieldPaste}>
         <label style={field}>Source
-          <select name="source" style={input}>{SOURCES.map((x) => <option key={x} value={x}>{x}</option>)}</select>
+          <select {...bind("source")} style={input}>{SOURCES.map((x) => <option key={x} value={x}>{x}</option>)}</select>
         </label>
         <label style={field}>Product
-          <select name="variantId" required style={input}>
+          <select {...bind("variantId")} required style={input}>
             <option value="">Pumili ng bouquet</option>
             {variants.map((v) => <option key={v.id} value={v.id}>{v.label} (PHP {v.price})</option>)}
           </select>
         </label>
-        <label style={field}>Quantity<input name="quantity" type="number" min={1} defaultValue={1} style={input} /></label>
-        <label style={field}>Customer name (nag-order)<input name="customerName" style={input} /></label>
-        <label style={field}>Customer email<input name="email" type="email" style={input} /></label>
-        <label style={field}>Customer phone<input name="phone" style={input} /></label>
-        <label style={field}>Recipient name<input name="recipientName" required style={input} /></label>
-        <label style={field}>Recipient phone<input name="recipientPhone" style={input} /></label>
-        <label style={field}>Address line 1<input name="address1" required style={input} /></label>
-        <label style={field}>Address line 2<input name="address2" style={input} /></label>
-        <label style={field}>City<input name="city" required style={input} /></label>
-        <label style={field}>Delivery date<input name="deliveryDate" type="date" required style={input} /></label>
+        <label style={field}>Quantity<input {...bind("quantity")} type="number" min={1} style={input} /></label>
+        <label style={field}>Customer name (nag-order)<input {...bind("customerName")} style={input} /></label>
+        <label style={field}>Customer email<input {...bind("email")} type="email" style={input} /></label>
+        <label style={field}>Customer phone<input {...bind("phone")} style={input} /></label>
+        <label style={field}>Recipient name<input {...bind("recipientName")} required style={input} /></label>
+        <label style={field}>Recipient phone<input {...bind("recipientPhone")} style={input} /></label>
+        <label style={field}>Address line 1<input {...bind("address1")} required style={input} /></label>
+        <label style={field}>Address line 2<input {...bind("address2")} style={input} /></label>
+        <label style={field}>City<input {...bind("city")} required style={input} /></label>
+        <label style={field}>Province<input {...bind("province")} style={input} /></label>
+        <label style={field}>Delivery date<input {...bind("deliveryDate")} type="date" required style={input} /></label>
         <label style={field}>Time slot / Specific time
-          <input name="deliveryTime" list="time-options" required style={input} placeholder="Pumili o mag-type ng oras" />
+          <input {...bind("deliveryTime")} list="time-options" required style={input} placeholder="Pumili o mag-type ng oras" />
           <datalist id="time-options">
             {timeSlots.map((t) => <option key={t} value={t} />)}
           </datalist>
         </label>
-        <label style={field}>Card message<textarea name="cardMessage" rows={3} style={input} /></label>
-        <label style={field}>Delivery fee (PHP)<input name="deliveryFee" type="number" min={0} step="1" defaultValue={0} style={input} /></label>
-        <label style={field}>GCash reference number<input name="gcashRef" style={input} /></label>
-        <label style={field}>Internal note<textarea name="note" rows={2} style={input} /></label>
+        <label style={field}>Card message<textarea {...bind("cardMessage")} rows={3} style={input} /></label>
+        <label style={field}>Delivery fee (PHP)<input {...bind("deliveryFee")} type="number" min={0} step="1" style={input} /></label>
+        <label style={field}>GCash reference number<input {...bind("gcashRef")} style={input} /></label>
+        <label style={field}>Internal note<textarea {...bind("note")} rows={2} style={input} /></label>
         <label style={{ ...field, gridTemplateColumns: "auto 1fr", alignItems: "center" }}>
           <input name="paid" type="checkbox" /> Bayad na at na-verify ang GCash (gagawing paid order agad)
         </label>
