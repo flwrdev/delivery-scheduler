@@ -1296,10 +1296,9 @@ function Extension() {
   // Right-side panel state — URL-driven via ?order=<numeric id> (REC-7) so the
   // open panel deep-links, survives refresh, and persists across revalidation.
   // The panel still derives its order from fresh loader data by ID.
-  // Sidekick's app-action deep link may hand us a full GID
-  // (gid://shopify/Order/123) instead of the numeric legacy id the panel keys
-  // off. Normalise to the trailing segment — a plain numeric param is
-  // unchanged by this.
+  // `?order=` accepts either a full GID (gid://shopify/Order/123) or the
+  // numeric legacy id the panel keys off. Normalise to the trailing segment —
+  // a plain numeric param is unchanged by this.
   const rawSelectedOrderParam = searchParams.get("order");
   const selectedOrderParam = rawSelectedOrderParam
     ? rawSelectedOrderParam.split("/").pop() || rawSelectedOrderParam

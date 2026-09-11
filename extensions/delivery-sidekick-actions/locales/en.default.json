@@ -1,4 +1,0 @@
-{
-  "name": "Delivery reschedule opener",
-  "description": "Open an order's delivery panel in the Delivery Scheduler to reschedule its delivery date or time slot. Navigation only - the merchant makes the change on the page."
-}
