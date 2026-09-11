@@ -194,20 +194,35 @@ export default function ManualOrder() {
     applySummary(text);
   };
 
-  const computedTotal = useMemo(() => {
-    const variant = variants.find((v) => v.id === values.variantId);
-    if (!variant) return null;
-    const qty = Math.max(1, parseInt(values.quantity || "1", 10) || 1);
-    const fee = parseFloat(values.deliveryFee || "0") || 0;
-    return parseFloat(variant.price) * qty + fee;
-  }, [variants, values.variantId, values.quantity, values.deliveryFee]);
+  const selectedVariant = variants.find((v) => v.id === values.variantId) ?? null;
+  const qty = Math.max(1, parseInt(values.quantity || "1", 10) || 1);
+  const fee = parseFloat(values.deliveryFee || "0") || 0;
+  const unitPrice = selectedVariant ? parseFloat(selectedVariant.price) : null;
+  const computedTotal = unitPrice === null ? null : unitPrice * qty + fee;
 
   const totalMismatch =
     pastedTotal !== null && computedTotal !== null && Math.abs(pastedTotal - computedTotal) > 0.005;
+  const difference = totalMismatch && pastedTotal !== null && computedTotal !== null ? pastedTotal - computedTotal : 0;
+
+  // Values that would make product × qty + fee equal the pasted total, offered as hints.
+  const matchHints = useMemo(() => {
+    if (!totalMismatch || pastedTotal === null || unitPrice === null) return [];
+    const hints: string[] = [];
+    const feeThatMatches = pastedTotal - unitPrice * qty;
+    if (feeThatMatches >= 0) hints.push(`delivery fee na PHP ${feeThatMatches.toFixed(2)} (sa halip na PHP ${fee.toFixed(2)})`);
+    const qtyThatMatches = (pastedTotal - fee) / unitPrice;
+    if (Number.isInteger(qtyThatMatches) && qtyThatMatches >= 1 && qtyThatMatches !== qty) hints.push(`quantity na ${qtyThatMatches} (sa halip na ${qty})`);
+    const variantsThatMatch = variants.filter(
+      (v) => v.id !== values.variantId && Math.abs(parseFloat(v.price) * qty + fee - pastedTotal) < 0.005,
+    );
+    for (const v of variantsThatMatch.slice(0, 3)) hints.push(`product na "${v.label}" (PHP ${v.price})`);
+    return hints;
+  }, [totalMismatch, pastedTotal, unitPrice, qty, fee, variants, values.variantId]);
 
   const field = { display: "grid", gap: 4, marginBottom: 12 } as const;
   const input = { padding: 8, border: "1px solid #c9cccf", borderRadius: 6, font: "inherit" } as const;
   const peso = (n: number) => `PHP ${n.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`;
+  const flag = totalMismatch ? <span style={{ color: "#d72c0d", fontWeight: 700 }} title="Kasama sa total na hindi tugma"> *</span> : null;
 
   return (
     <div style={{ maxWidth: 640, margin: "0 auto", padding: 24, font: "14px system-ui, sans-serif" }}>
@@ -250,10 +265,32 @@ export default function ManualOrder() {
           {warnings.map((w) => <div key={w}>{w}</div>)}
         </div>
       )}
-      {pastedTotal !== null && computedTotal !== null && (
-        <div style={{ background: totalMismatch ? "#ffea8a" : "#e0f0ff", padding: 12, borderRadius: 8, marginBottom: 16 }}>
-          Total sa summary: <strong>{peso(pastedTotal)}</strong> · Computed (product × qty + fee): <strong>{peso(computedTotal)}</strong>
-          {totalMismatch && <div>Hindi tugma ang total. I-check ang product, quantity, o delivery fee bago i-create.</div>}
+      {pastedTotal !== null && computedTotal !== null && unitPrice !== null && (
+        <div style={{ background: totalMismatch ? "#ffea8a" : "#cdfed3", padding: 12, borderRadius: 8, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "2px 16px", justifyContent: "start" }}>
+            <span>Product{flag}</span><span>{peso(unitPrice)} × {qty}{flag} = {peso(unitPrice * qty)}</span>
+            <span>Delivery fee{flag}</span><span>{peso(fee)}</span>
+            <span>Computed total</span><strong>{peso(computedTotal)}</strong>
+            <span>Total sa summary</span><strong>{peso(pastedTotal)}</strong>
+            {totalMismatch && (
+              <>
+                <span style={{ color: "#d72c0d", fontWeight: 700 }}>Diperensya</span>
+                <strong style={{ color: "#d72c0d" }}>{difference > 0 ? "+" : "−"}{peso(Math.abs(difference))}</strong>
+              </>
+            )}
+          </div>
+          {totalMismatch ? (
+            <div style={{ marginTop: 8 }}>
+              Hindi tugma ang total. Ang mga may <span style={{ color: "#d72c0d", fontWeight: 700 }}>*</span> ang pwedeng mali.
+              {matchHints.length > 0 && (
+                <div style={{ marginTop: 4 }}>
+                  Magtutugma kung: {matchHints.join("; o ")}.
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ marginTop: 8 }}>Tugma ang total sa summary.</div>
+          )}
         </div>
       )}
 
@@ -261,13 +298,13 @@ export default function ManualOrder() {
         <label style={field}>Source
           <select {...bind("source")} style={input}>{SOURCES.map((x) => <option key={x} value={x}>{x}</option>)}</select>
         </label>
-        <label style={field}>Product
+        <label style={field}><span>Product{flag}</span>
           <select {...bind("variantId")} required style={input}>
             <option value="">Pumili ng bouquet</option>
             {variants.map((v) => <option key={v.id} value={v.id}>{v.label} (PHP {v.price})</option>)}
           </select>
         </label>
-        <label style={field}>Quantity<input {...bind("quantity")} type="number" min={1} style={input} /></label>
+        <label style={field}><span>Quantity{flag}</span><input {...bind("quantity")} type="number" min={1} style={input} /></label>
         <label style={field}>Customer name (nag-order)<input {...bind("customerName")} style={input} /></label>
         <label style={field}>Customer email<input {...bind("email")} type="email" style={input} /></label>
         <label style={field}>Customer phone<input {...bind("phone")} style={input} /></label>
@@ -285,7 +322,7 @@ export default function ManualOrder() {
           </datalist>
         </label>
         <label style={field}>Card message<textarea {...bind("cardMessage")} rows={3} style={input} /></label>
-        <label style={field}>Delivery fee (PHP)<input {...bind("deliveryFee")} type="number" min={0} step="1" style={input} /></label>
+        <label style={field}><span>Delivery fee (PHP){flag}</span><input {...bind("deliveryFee")} type="number" min={0} step="1" style={input} /></label>
         <label style={field}>GCash reference number<input {...bind("gcashRef")} style={input} /></label>
         <label style={field}>Internal note<textarea {...bind("note")} rows={2} style={input} /></label>
         <label style={{ ...field, gridTemplateColumns: "auto 1fr", alignItems: "center" }}>
