@@ -17,7 +17,7 @@ import {
   RELEASIT_FEE_KEY,
   RELEASIT_FEE_NAMESPACE,
   toReleasitCentavos,
-} from "../app/routes/app.cod-settings";
+} from "../app/lib/cod-fee-mirrors";
 
 describe("toReleasitCentavos", () => {
   // ₱70 is the live value; Releasit had exactly "7000" on prod before this.
