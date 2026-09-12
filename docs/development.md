@@ -21,6 +21,29 @@ npx prisma studio          # inspect Postgres data locally
 
 > **Dev boot no longer auto-applies migrations** (commit `00482e1`): `shopify app dev` now runs only `react-router dev` (its `predev` still runs `prisma generate`, which is codegen-only — no DB connection). After creating or pulling a new Prisma migration, run `npm run setup` before your next `npm run dev`, or local dev runs against an un-migrated database. Production is unaffected — the Dockerfile's `docker-start` still runs `npm run setup`.
 
+## Database: production branch vs dev branch (since 2026-09-13)
+
+The Neon project `delivery-scheduler` has two branches:
+
+| Branch | Host | Who uses it | Shops |
+|---|---|---|---|
+| `production` | `ep-super-glade-a4ahn2da` | Cloud Run only (Secret Manager `delivery-scheduler-database-url` / `-direct-database-url`) | `hsrwva-nr` only |
+| `dev` | `ep-sweet-sea-a4pth8b6` | local `.env` (`DATABASE_URL` pooled, `DIRECT_DATABASE_URL` direct) | `flowercart-dev` + a copy of prod data as of 2026-09-12 |
+
+Local `npm run setup`, `prisma studio`, and every test now hit the `dev` branch
+and cannot reach production. The `flowercart-dev` rows were removed from the
+`production` branch on 2026-09-13; the dev store re-authenticates on the `dev`
+branch on its next `npm run dev`. The two customer-account extensions that
+hard-code the prod Cloud Run URL no longer work on the dev store — expected.
+
+Neon Auth and the Data API were removed on 2026-09-13. Nothing in this repo
+used them. The `auth` schema, the `anonymous` / `authenticated` /
+`authenticator` roles, and the `pg_session_jwt` extension are leftovers Neon
+does not clean up; they are inert.
+
+Compute: keep scale-to-zero on. The autoscaling ceiling is a merchant setting
+in the Neon console; the app needs well under 1 CU.
+
 ## Rule: no fake or mock values in what gets pushed to GitHub
 
 Merchant rule (2026-09-12). Do not push code, tests, fixtures, or workflow

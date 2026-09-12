@@ -31,6 +31,8 @@ gcloud run deploy delivery-scheduler --source . --region us-central1   # backend
 
 After creating or pulling a Prisma migration, state that `npm run setup` must run before the next `npm run dev`.
 
+Local `.env` points at the Neon `dev` branch; only Cloud Run reaches `production`. The `BulkActionJob` path is kept on purpose for peak days (Valentine's, Mother's Day) even though it has not been used yet.
+
 ## Rules
 
 Documentation and rules files
@@ -44,3 +46,9 @@ Code
 - Verify write paths and auth in the route and service code before making assumptions.
 - Comments explain non-obvious behavior or implementation details only. No decisions, rationale, policy, TODOs, instructions, or commentary in code comments.
 - Before ending a session, list every non-code file created or modified (markdown, JSON config, env examples, migrations, skills) with the reason for each.
+
+Database
+- No session connects to any Neon branch (`production` or `dev`) — not with `pg`, `psql`, `prisma studio`, `prisma db execute`, a script, or an MCP tool — without the merchant's permission in the current conversation AND a stated purpose for that specific access. "Explore", "audit", or "verify" on its own is not a purpose and not a standing grant; a session with no current purpose does not open the database.
+- When granted, the default is read-only (`SET default_transaction_read_only = on`). A write (`INSERT`/`UPDATE`/`DELETE`/`DROP`/`TRUNCATE`) needs the exact SQL shown first and a separate "go" for that statement.
+- Never read, copy, or create a file that holds `production` credentials inside the repo folder (`.env.bak*`, `.env.prod*`, scripts with a connection string). Production URLs live only in Cloud Run Secret Manager.
+- `npm run setup` and `prisma migrate deploy` against `dev` are allowed for a migration the merchant asked for; against `production` they run only on Cloud Run boot, never from a session.

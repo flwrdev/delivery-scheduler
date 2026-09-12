@@ -16,10 +16,15 @@ This is the recommended low-cost hosted path for this app if you want a stable b
 
 ## 1. Create a Neon database
 
-1. Create a Neon project.
-2. Copy the pooled connection string into `DATABASE_URL`.
-3. Copy the direct connection string into `DIRECT_DATABASE_URL`.
-4. Make sure both URLs include `sslmode=require`.
+1. Create a Neon project. Use the default `production` branch for Cloud Run
+   and create a `dev` branch from it for local work.
+2. Cloud Run: put the `production` pooled string in the
+   `delivery-scheduler-database-url` secret and the direct string in
+   `delivery-scheduler-direct-database-url`.
+3. Local `.env`: copy the `dev` branch pooled string into `DATABASE_URL` and
+   the direct (non-`-pooler`) string into `DIRECT_DATABASE_URL`.
+4. Make sure every URL includes `sslmode=require`.
+5. Do not enable Neon Auth or the Data API; the app does not use them.
 
 ## 2. Configure local environment
 
