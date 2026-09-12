@@ -21,6 +21,20 @@ npx prisma studio          # inspect Postgres data locally
 
 > **Dev boot no longer auto-applies migrations** (commit `00482e1`): `shopify app dev` now runs only `react-router dev` (its `predev` still runs `prisma generate`, which is codegen-only — no DB connection). After creating or pulling a new Prisma migration, run `npm run setup` before your next `npm run dev`, or local dev runs against an un-migrated database. Production is unaffected — the Dockerfile's `docker-start` still runs `npm run setup`.
 
+## Rule: no fake or mock values in what gets pushed to GitHub
+
+Merchant rule (2026-09-12). Do not push code, tests, fixtures, or workflow
+changes that rely on fake, mock, or placeholder data to make a check pass.
+A test that passes only because of a made-up value is not evidence that
+the feature works. Push only what was verified against the real app
+(`npm run typecheck`, `npm run lint`, `npm test`, `npm run build` on the
+exact tree being pushed).
+
+The CI workflow (`.github/workflows/ci.yml`) is the one exception and is
+codegen-only: its `SHOPIFY_*` and `DATABASE_URL` values are placeholders
+so `prisma generate` and the import-time app object can load. It never
+connects to Neon or Shopify. Do not add steps to CI that need real values.
+
 ## Testing notes
 
 > ⚠️ **`npm run dev` (default, no flags) now runs against the separate DEV
