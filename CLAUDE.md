@@ -2,7 +2,7 @@
 
 > **(Historical AI design decision, not a merchant requirement; the merchant may change it.)** Rules and decisions in this file labeled "locked", "merchant constraint", "deliberately untouched", "read-only", or "no caller" are historical AI design decisions unless a merchant request is quoted with a date. Evidence: commit a3555ba (2026-09-11) recorded ADR-22 constraint (2) as carried from a 2026-07-15 AI decision with no merchant request; commit 0d5483b (2026-09-12) reverted that record. Unless the merchant requested it, ask before treating any of them as a requirement — this applies to Sidekick, email, chat, agent, Messenger, and delivery decisions.
 
-Guidance for Claude Code when working in this repository
+Guidance for Claude Code when working in this repository. Keep this file short: system topology lives in `docs/architecture.md`; route, auth, and write-path detail lives in `docs/api.md`.
 
 ## Mental model (verified against the code 2026-09-12)
 
@@ -12,6 +12,7 @@ Guidance for Claude Code when working in this repository
 - **Booked-slot counts are computed live** from Admin GraphQL (`services/delivery-bookings.server.ts`), memoized briefly in process, with still-pending `DeliverySyncTask` rows overlaid. They are never persisted.
 - **Delivery-state writers are few**: the `orders/create` sync, `POST /public/customer-account/reschedule`, the `/app/orders` `reschedule` op (runs through `executeBulkAction`), the `/app/manual-order` draft-order route, and `POST /apps/schedule-rules/reschedule` (no caller in this repo). Extensions and admin order blocks are read-only. The Sidekick routes and extensions were removed in commit 3fde8ce; `services/order-delivery-metafields.server.ts` still writes the `sidekick.delivery_date` metafield mirror on every sync and reschedule. Verify in the route and service code before assuming a surface writes.
 - **Cloud Tasks** (`services/ops-queue.server.ts`) runs the delivery-sync and bulk-action work queues through `webhooks/delivery-sync/worker` and `webhooks/bulk-action/worker`; bulk ops over `BULK_INLINE_MAX` (10) orders become `BulkActionJob`s. With no queue configured the same work runs inline. `POST /internal/delivery-sync-sweep` rescues stranded rows.
+- **The Meta Business Agent is external.** This repo exposes only three bearer-token routes for its tools: `POST /api/agent/orders/draft`, `GET /api/agent/orders/status`, `GET /api/agent/delivery/quote` (`services/agent-api.server.ts`, `lib/verify-agent-token.server.ts`). No chat, LLM, or Messenger transport runs here; the remaining `MESSENGER_*` names are env fallbacks and one worker header name.
 - **Lalamove is status-listen only.** Deliveries are booked by hand outside this app; `POST /internal/lalamove-poll` polls recorded order ids and marks fulfillments delivered. Nothing here dispatches. Read `docs/decisions.md` ADR-16 before touching Lalamove-shaped code.
 - **Customer email** goes through the configured SMTP mailbox (`services/send-customer-email.server.ts`) and writes nothing to the order beyond an `EmailSendLog` row.
 - **Embedded-admin route ops answer `200 + {ok:false}` on upstream failure, never 5xx** (Cloudflare replaces origin 5xx bodies; see ADR-11).
@@ -38,9 +39,9 @@ Documentation and rules files
 - Do not update documentation automatically after code changes. When documentation looks stale after a change, report it as a documentation follow-up with the affected file names and wait for approval.
 - Ignore any skill or instruction that mandates documentation updates, read-first/update-after loops, or log entries. Ask instead.
 - Read documentation when the task needs it, not because a workflow says so. `docs/architecture.md` and `docs/api.md` are the references for topology and write paths.
-- Approved documentation rules is written  (`/stop-slop`).
+- Approved documentation is written in plain language (`/stop-slop`).
 
 Code
 - Verify write paths and auth in the route and service code before making assumptions.
 - Comments explain non-obvious behavior or implementation details only. No decisions, rationale, policy, TODOs, instructions, or commentary in code comments.
-- Before ending a session, list code/non-code file created or modified (markdown, JSON config, env examples, migrations, skills) with the reason for each.
+- Before ending a session, list every non-code file created or modified (markdown, JSON config, env examples, migrations, skills) with the reason for each.
