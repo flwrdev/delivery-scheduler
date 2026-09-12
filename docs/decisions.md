@@ -1,5 +1,7 @@
 # Architecture Decision Records (ADRs)
 
+> **(Historical AI design decision, not a merchant requirement; the merchant may change it.)** Rules and decisions in this file labeled "locked", "merchant constraint", "deliberately untouched", "read-only", or "no caller" are historical AI design decisions unless a merchant request is quoted with a date. Evidence: commit a3555ba (2026-09-11) recorded ADR-22 constraint (2) as carried from a 2026-07-15 AI decision with no merchant request; commit 0d5483b (2026-09-12) reverted that record. Unless the merchant requested it, ask before treating any of them as a requirement — this applies to Sidekick, email, chat, agent, Messenger, and delivery decisions.
+
 > Part of the docs set. Source of truth: [architecture.md](./architecture.md).
 
 Why things are the way they are: deliberate tradeoffs distilled from the [verification log](./verification-log.md). Each ADR cites its source verification-log date. For current-state topology see [architecture.md](./architecture.md); for the route/write-path contract see [api.md](./api.md).
