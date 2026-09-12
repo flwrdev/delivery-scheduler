@@ -3,9 +3,13 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import { looksLikeSummary, parseOrderSummary } from "../lib/parse-order-summary";
+import { normalizeCustomTimeValue, resolveConfiguredSlotValue } from "../lib/slot-value";
+import { getScheduleRules } from "../services/schedule-rules.server";
+import { findCodFeeVariant } from "../services/cod-fee.server";
 
-const TIME_SLOTS = ["9AM-12PM", "12PM-3PM", "3PM-6PM", "6PM-11PM"];
 const SOURCES = ["messenger", "instagram"];
+const PAYMENTS = ["gcash_pending", "gcash_paid", "cod"] as const;
+type Payment = (typeof PAYMENTS)[number];
 
 type VariantOption = { id: string; label: string; price: string };
 type UserError = { field: string[] | null; message: string };
@@ -13,6 +17,7 @@ type ActionResult = {
   error?: string;
   ok?: true;
   mode?: "draft" | "order";
+  payment?: Payment;
   draftName?: string;
   orderName?: string;
   orderId?: string;
@@ -39,8 +44,8 @@ const DRAFT_CREATE = `#graphql
 `;
 
 const DRAFT_COMPLETE = `#graphql
-  mutation CompleteMessengerDraft($id: ID!, $source: String) {
-    draftOrderComplete(id: $id, sourceName: $source) {
+  mutation CompleteMessengerDraft($id: ID!, $source: String, $paymentPending: Boolean) {
+    draftOrderComplete(id: $id, sourceName: $source, paymentPending: $paymentPending) {
       draftOrder { order { id name } }
       userErrors { field message }
     }
@@ -48,7 +53,7 @@ const DRAFT_COMPLETE = `#graphql
 `;
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const variants: VariantOption[] = [];
   let after: string | null = null;
   do {
@@ -61,25 +66,41 @@ export async function loader({ request }: LoaderFunctionArgs) {
     after = data.pageInfo.hasNextPage ? data.pageInfo.endCursor : null;
   } while (after);
   variants.sort((a, b) => a.label.localeCompare(b.label));
-  return Response.json({ variants, timeSlots: TIME_SLOTS });
+  const [rules, codFee] = await Promise.all([getScheduleRules(session.shop), findCodFeeVariant(admin)]);
+  return Response.json({
+    variants,
+    timeSlots: rules.slots.map((slot) => slot.value),
+    codFeePrice: codFee.variant ? parseFloat(codFee.variant.price) || 0 : null,
+  });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const f = await request.formData();
   const s = (k: string) => (f.get(k) as string | null)?.trim() ?? "";
 
   const variantId = s("variantId");
   const quantity = Math.max(1, parseInt(s("quantity") || "1", 10));
   const deliveryDate = s("deliveryDate");
-  const deliveryTime = s("deliveryTime");
+  const deliveryTimeInput = s("deliveryTime");
   const source = SOURCES.includes(s("source")) ? s("source") : "messenger";
-  const paid = s("paid") === "on";
+  const payment: Payment = (PAYMENTS as readonly string[]).includes(s("payment"))
+    ? (s("payment") as Payment)
+    : "gcash_pending";
   const email = s("email");
   const phone = s("phone");
 
-  if (!variantId || !deliveryDate || !deliveryTime || !s("recipientName") || !s("address1") || !s("city")) {
+  if (!variantId || !deliveryDate || !deliveryTimeInput || !s("recipientName") || !s("address1") || !s("city")) {
     return Response.json({ error: "Kulang ang required fields: product, delivery date, time slot, recipient name, address, city." }, { status: 400 });
+  }
+  // A configured slot is written as configured; anything else must be a time
+  // ("8PM", "8PM-9PM") and is written in the same canonical form the
+  // reschedule path uses, so the tag and metafield match later moves.
+  const rules = await getScheduleRules(session.shop);
+  const deliveryTime =
+    resolveConfiguredSlotValue(rules, deliveryTimeInput) ?? normalizeCustomTimeValue(deliveryTimeInput);
+  if (!deliveryTime) {
+    return Response.json({ error: `Hindi mabasa ang oras "${deliveryTimeInput}". Pumili ng slot o mag-type ng oras gaya ng 8PM o 8PM-9PM.` }, { status: 400 });
   }
   if (!email && !phone) {
     return Response.json({ error: "Kailangan ng email o phone para may confirmation at para magamit ang tracking page." }, { status: 400 });
@@ -87,15 +108,24 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const [firstName, ...rest] = s("recipientName").split(" ");
   const deliveryFee = parseFloat(s("deliveryFee") || "0");
+  const lineItems: Array<{ variantId: string; quantity: number }> = [{ variantId, quantity }];
+  if (payment === "cod") {
+    const codFee = await findCodFeeVariant(admin);
+    if (!codFee.variant) {
+      return Response.json({ error: `Walang COD Fee product (SKU COD-FEE) sa store. ${codFee.errors.join("; ")}`.trim() }, { status: 400 });
+    }
+    lineItems.push({ variantId: codFee.variant.id, quantity: 1 });
+  }
   const noteLines = [
     `Source: ${source}`,
+    payment === "cod" ? "Payment: Cash on Delivery" : null,
     s("customerName") ? `Ordered by: ${s("customerName")}` : null,
     s("gcashRef") ? `GCash ref: ${s("gcashRef")}` : null,
     s("note") ? `Notes: ${s("note")}` : null,
   ].filter(Boolean);
 
   const input = {
-    lineItems: [{ variantId, quantity }],
+    lineItems,
     email: email || undefined,
     phone: phone || undefined,
     shippingAddress: {
@@ -129,17 +159,20 @@ export async function action({ request }: ActionFunctionArgs) {
   }
   const draft = create.draftOrder;
 
-  if (!paid) {
+  if (payment === "gcash_pending") {
     return Response.json({
       ok: true,
       mode: "draft",
+      payment,
       draftName: draft.name,
       total: draft.totalPriceSet.shopMoney.amount,
       invoiceUrl: draft.invoiceUrl,
     });
   }
 
-  const completeRes = await admin.graphql(DRAFT_COMPLETE, { variables: { id: draft.id, source } });
+  const completeRes = await admin.graphql(DRAFT_COMPLETE, {
+    variables: { id: draft.id, source, paymentPending: payment === "cod" },
+  });
   const complete = (await completeRes.json()).data.draftOrderComplete;
   if (complete.userErrors.length) {
     return Response.json({ error: complete.userErrors.map((e: UserError) => e.message).join("; ") }, { status: 400 });
@@ -147,16 +180,27 @@ export async function action({ request }: ActionFunctionArgs) {
   return Response.json({
     ok: true,
     mode: "order",
+    payment,
     orderName: complete.draftOrder.order.name,
     orderId: complete.draftOrder.order.id,
     total: draft.totalPriceSet.shopMoney.amount,
   });
 }
 
-const EMPTY_FORM: Record<string, string> = { source: "messenger", quantity: "1", deliveryFee: "0" };
+const EMPTY_FORM: Record<string, string> = { source: "messenger", quantity: "1", deliveryFee: "0", payment: "gcash_pending" };
+
+const PAYMENT_LABELS: Record<Payment, string> = {
+  gcash_pending: "GCash - hinihintay pa ang bayad (draft + invoice link)",
+  gcash_paid: "GCash - bayad na at na-verify (paid order agad)",
+  cod: "Cash on Delivery - order agad, may COD fee, babayaran sa rider",
+};
 
 export default function ManualOrder() {
-  const { variants, timeSlots } = useLoaderData() as { variants: VariantOption[]; timeSlots: string[] };
+  const { variants, timeSlots, codFeePrice } = useLoaderData() as {
+    variants: VariantOption[];
+    timeSlots: string[];
+    codFeePrice: number | null;
+  };
   const result = useActionData() as ActionResult | undefined;
   const nav = useNavigation();
   const busy = nav.state !== "idle";
@@ -197,8 +241,10 @@ export default function ManualOrder() {
   const selectedVariant = variants.find((v) => v.id === values.variantId) ?? null;
   const qty = Math.max(1, parseInt(values.quantity || "1", 10) || 1);
   const fee = parseFloat(values.deliveryFee || "0") || 0;
+  const isCod = values.payment === "cod";
+  const codFee = isCod ? (codFeePrice ?? 0) : 0;
   const unitPrice = selectedVariant ? parseFloat(selectedVariant.price) : null;
-  const computedTotal = unitPrice === null ? null : unitPrice * qty + fee;
+  const computedTotal = unitPrice === null ? null : unitPrice * qty + fee + codFee;
 
   const totalMismatch =
     pastedTotal !== null && computedTotal !== null && Math.abs(pastedTotal - computedTotal) > 0.005;
@@ -208,16 +254,16 @@ export default function ManualOrder() {
   const matchHints = useMemo(() => {
     if (!totalMismatch || pastedTotal === null || unitPrice === null) return [];
     const hints: string[] = [];
-    const feeThatMatches = pastedTotal - unitPrice * qty;
+    const feeThatMatches = pastedTotal - unitPrice * qty - codFee;
     if (feeThatMatches >= 0) hints.push(`delivery fee na PHP ${feeThatMatches.toFixed(2)} (sa halip na PHP ${fee.toFixed(2)})`);
-    const qtyThatMatches = (pastedTotal - fee) / unitPrice;
+    const qtyThatMatches = (pastedTotal - fee - codFee) / unitPrice;
     if (Number.isInteger(qtyThatMatches) && qtyThatMatches >= 1 && qtyThatMatches !== qty) hints.push(`quantity na ${qtyThatMatches} (sa halip na ${qty})`);
     const variantsThatMatch = variants.filter(
-      (v) => v.id !== values.variantId && Math.abs(parseFloat(v.price) * qty + fee - pastedTotal) < 0.005,
+      (v) => v.id !== values.variantId && Math.abs(parseFloat(v.price) * qty + fee + codFee - pastedTotal) < 0.005,
     );
     for (const v of variantsThatMatch.slice(0, 3)) hints.push(`product na "${v.label}" (PHP ${v.price})`);
     return hints;
-  }, [totalMismatch, pastedTotal, unitPrice, qty, fee, variants, values.variantId]);
+  }, [totalMismatch, pastedTotal, unitPrice, qty, fee, codFee, variants, values.variantId]);
 
   const field = { display: "grid", gap: 4, marginBottom: 12 } as const;
   const input = { padding: 8, border: "1px solid #c9cccf", borderRadius: 6, font: "inherit" } as const;
@@ -233,7 +279,9 @@ export default function ManualOrder() {
       )}
       {result?.ok && result.mode === "order" && (
         <div style={{ background: "#cdfed3", padding: 12, borderRadius: 8, marginBottom: 16 }}>
-          <strong>Order {result.orderName} created and marked as paid. Total PHP {result.total}.</strong>
+          <strong>
+            Order {result.orderName} created{result.payment === "cod" ? " - Cash on Delivery, payment pending" : " and marked as paid"}. Total PHP {result.total}.
+          </strong>
         </div>
       )}
       {result?.ok && result.mode === "draft" && (
@@ -270,6 +318,7 @@ export default function ManualOrder() {
           <div style={{ display: "grid", gridTemplateColumns: "auto auto", gap: "2px 16px", justifyContent: "start" }}>
             <span>Product{flag}</span><span>{peso(unitPrice)} × {qty}{flag} = {peso(unitPrice * qty)}</span>
             <span>Delivery fee{flag}</span><span>{peso(fee)}</span>
+            {isCod && (<><span>COD fee{flag}</span><span>{peso(codFee)}</span></>)}
             <span>Computed total</span><strong>{peso(computedTotal)}</strong>
             <span>Total sa summary</span><strong>{peso(pastedTotal)}</strong>
             {totalMismatch && (
@@ -316,7 +365,7 @@ export default function ManualOrder() {
         <label style={field}>Province<input {...bind("province")} style={input} /></label>
         <label style={field}>Delivery date<input {...bind("deliveryDate")} type="date" required style={input} /></label>
         <label style={field}>Time slot / Specific time
-          <input {...bind("deliveryTime")} list="time-options" required style={input} placeholder="Pumili o mag-type ng oras" />
+          <input {...bind("deliveryTime")} list="time-options" required style={input} placeholder="Pumili ng slot o mag-type ng oras (8PM, 8PM-9PM)" />
           <datalist id="time-options">
             {timeSlots.map((t) => <option key={t} value={t} />)}
           </datalist>
@@ -325,8 +374,16 @@ export default function ManualOrder() {
         <label style={field}><span>Delivery fee (PHP){flag}</span><input {...bind("deliveryFee")} type="number" min={0} step="1" style={input} /></label>
         <label style={field}>GCash reference number<input {...bind("gcashRef")} style={input} /></label>
         <label style={field}>Internal note<textarea {...bind("note")} rows={2} style={input} /></label>
-        <label style={{ ...field, gridTemplateColumns: "auto 1fr", alignItems: "center" }}>
-          <input name="paid" type="checkbox" /> Bayad na at na-verify ang GCash (gagawing paid order agad)
+        <label style={field}>Payment
+          <select {...bind("payment")} style={input}>
+            {PAYMENTS.map((p) => <option key={p} value={p}>{PAYMENT_LABELS[p]}</option>)}
+          </select>
+          {isCod && codFeePrice === null && (
+            <span style={{ color: "#d72c0d" }}>Walang COD Fee product (SKU COD-FEE) sa store - hindi makakagawa ng COD order.</span>
+          )}
+          {isCod && codFeePrice !== null && (
+            <span style={{ color: "#6d7175" }}>Idadagdag ang COD Fee line item (PHP {codFeePrice}) at gagawing order agad na may payment pending.</span>
+          )}
         </label>
         <button type="submit" disabled={busy} style={{ ...input, background: "#303030", color: "#fff", cursor: "pointer" }}>
           {busy ? "Saving..." : "Create order"}

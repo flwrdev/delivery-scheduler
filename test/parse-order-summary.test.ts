@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseDeliveryDateTime, parseOrderSummary, splitAddress } from "../app/lib/parse-order-summary";
+import {
+  parseDeliveryDateTime,
+  parseOrderSummary,
+  parseTotalBreakdown,
+  splitAddress,
+} from "../app/lib/parse-order-summary";
 
 const VARIANTS = [
   { id: "gid://shopify/ProductVariant/1", label: "Autumn Morning" },
@@ -35,6 +40,7 @@ describe("parseOrderSummary", () => {
       province: "Rizal",
       deliveryDate: "2026-09-10",
       deliveryTime: "3:00 PM - 4:00 PM",
+      payment: "gcash_pending",
       cardMessage: "",
       deliveryFee: "150",
       note: "Payment: GCash",
@@ -94,5 +100,52 @@ describe("splitAddress", () => {
   it("handles short addresses", () => {
     expect(splitAddress("Unit 5 Tower A, Makati")).toEqual({ address1: "Unit 5 Tower A", city: "Makati" });
     expect(splitAddress("Makati")).toEqual({ address1: "Makati" });
+  });
+});
+
+const COD_SUMMARY = `Sige po, updated na to **8:00 PM** yung delivery time bukas, Sept 8.
+Eto po yung final summary para sa order niyo, Sir Shayne:
+- **Majestic Bouquet** (2-dozen red and pink roses)
+- **Email:** shayne.ochoco@nice.com
+- **Phone:** 09491347551
+- **Address:** SMDC Light Residences (Ground floor pick up)
+- **Delivery Date:** Sept 8, 2026
+- **Delivery Time:** 8:00 PM
+- **Total:** **₱1,628** (₱1,399 bouquet + ₱159 delivery + ₱70 COD fee)`;
+
+describe("parseTotalBreakdown", () => {
+  it("splits total, delivery fee, and COD fee out of the parenthetical", () => {
+    expect(parseTotalBreakdown("₱1,628 (₱1,399 bouquet + ₱159 delivery + ₱70 COD fee)")).toEqual({
+      total: 1628,
+      productTotal: 1399,
+      deliveryFee: 159,
+      codFee: 70,
+    });
+  });
+
+  it("returns only the total when there is no breakdown", () => {
+    expect(parseTotalBreakdown("₱1,031.00")).toEqual({
+      total: 1031,
+      productTotal: null,
+      deliveryFee: null,
+      codFee: null,
+    });
+  });
+});
+
+describe("parseOrderSummary — COD summary with a custom time", () => {
+  it("reads the breakdown into delivery fee + COD payment and keeps the typed time", () => {
+    const parsed = parseOrderSummary(COD_SUMMARY, VARIANTS, new Date("2026-09-07T00:00:00+08:00"));
+    expect(parsed.pastedTotal).toBe(1628);
+    expect(parsed.values.deliveryFee).toBe("159");
+    expect(parsed.values.payment).toBe("cod");
+    expect(parsed.values.deliveryDate).toBe("2026-09-08");
+    expect(parsed.values.deliveryTime).toBe("8:00 PM");
+    expect(parsed.values.email).toBe("shayne.ochoco@nice.com");
+    expect(parsed.values.phone).toBe("09491347551");
+  });
+
+  it("maps a GCash payment line to the pending-GCash mode", () => {
+    expect(parseOrderSummary(SUMMARY, VARIANTS).values.payment).toBe("gcash_pending");
   });
 });

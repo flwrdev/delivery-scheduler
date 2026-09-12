@@ -5,6 +5,13 @@ export type ParsedOrderSummary = {
   warnings: string[];
 };
 
+export type ParsedTotalBreakdown = {
+  total: number | null;
+  productTotal: number | null;
+  deliveryFee: number | null;
+  codFee: number | null;
+};
+
 type VariantLike = { id: string; label: string };
 
 const MONTHS: Record<string, number> = {
@@ -12,7 +19,7 @@ const MONTHS: Record<string, number> = {
   jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
 };
 
-const LINE_RE = /^\s*\**\s*([^:*]+?)\s*\**\s*:\s*(.+?)\s*$/;
+const LINE_RE = /^\s*[-•]?\s*\**\s*([^:*]+?)\s*\**\s*:\s*(.+?)\s*$/;
 
 function clean(value: string): string {
   return value.replace(/\*\*/g, "").trim();
@@ -21,6 +28,26 @@ function clean(value: string): string {
 function parseMoney(value: string): number | null {
   const n = parseFloat(value.replace(/[^\d.]/g, ""));
   return isNaN(n) ? null : n;
+}
+
+// "PHP 1,628 (PHP 1,399 bouquet + PHP 159 delivery + PHP 70 COD fee)": the
+// amount before the parenthesis is the total; each "+"-separated part inside
+// is classified by its label. Parts with no recognized label are ignored.
+export function parseTotalBreakdown(value: string): ParsedTotalBreakdown {
+  const open = value.indexOf("(");
+  const totalPart = open === -1 ? value : value.slice(0, open);
+  const out: ParsedTotalBreakdown = { total: parseMoney(totalPart), productTotal: null, deliveryFee: null, codFee: null };
+  if (open === -1) return out;
+  const inner = value.slice(open + 1, value.lastIndexOf(")") === -1 ? undefined : value.lastIndexOf(")"));
+  for (const part of inner.split(/\s*\+\s*/)) {
+    const amount = parseMoney(part);
+    if (amount === null) continue;
+    const label = part.toLowerCase();
+    if (/\bcod\b|cash on delivery/.test(label)) out.codFee = amount;
+    else if (/deliver|shipping|lalamove/.test(label)) out.deliveryFee = amount;
+    else if (/bouquet|product|item|flower/.test(label)) out.productTotal = amount;
+  }
+  return out;
 }
 
 function pad(n: number): string {
@@ -150,13 +177,18 @@ export function parseOrderSummary(text: string, variants: VariantLike[], now = n
       values.cardMessage = /^(none|n\/a|wala|-)$/i.test(value) ? "" : value;
     } else if (key === "payment" || key === "payment method" || key === "mode of payment") {
       noteParts.push(`Payment: ${value}`);
+      if (/\bcod\b|cash on delivery/i.test(value)) values.payment = "cod";
+      else if (/gcash/i.test(value)) values.payment = "gcash_pending";
     } else if (key === "gcash ref" || key === "gcash reference" || key === "reference" || key === "ref no") {
       values.gcashRef = value;
     } else if (key === "delivery fee" || key === "shipping fee" || key === "fee") {
       const fee = parseMoney(value);
       if (fee !== null) values.deliveryFee = String(fee);
     } else if (key === "total" || key === "grand total" || key === "total amount") {
-      pastedTotal = parseMoney(value);
+      const breakdown = parseTotalBreakdown(value);
+      pastedTotal = breakdown.total;
+      if (breakdown.deliveryFee !== null) values.deliveryFee = String(breakdown.deliveryFee);
+      if (breakdown.codFee !== null) values.payment = "cod";
     } else if (key === "note" || key === "notes" || key === "remarks") {
       noteParts.push(value);
     }

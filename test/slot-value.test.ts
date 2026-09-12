@@ -5,6 +5,8 @@ import {
   type DeliveryScheduleRules,
 } from "../app/lib/delivery-availability";
 import {
+  isCustomTimeValue,
+  normalizeCustomTimeValue,
   normalizeSlotValueForMatch,
   resolveConfiguredSlotValue,
   slotValuesMatch,
@@ -80,5 +82,22 @@ describe("resolveConfiguredSlotValue", () => {
     expect(resolveConfiguredSlotValue(rules, "morning")).toBeNull();
     expect(resolveConfiguredSlotValue(rules, "")).toBeNull();
     expect(resolveConfiguredSlotValue(rules, undefined)).toBeNull();
+  });
+});
+
+describe("normalizeCustomTimeValue / isCustomTimeValue", () => {
+  it("canonicalizes single times and ranges", () => {
+    expect(normalizeCustomTimeValue("8:00 PM")).toBe("8PM");
+    expect(normalizeCustomTimeValue("8pm")).toBe("8PM");
+    expect(normalizeCustomTimeValue("8:30pm")).toBe("8:30PM");
+    expect(normalizeCustomTimeValue("8 pm – 9 pm")).toBe("8PM-9PM");
+    expect(normalizeCustomTimeValue("09:00AM-10:00AM")).toBe("9AM-10AM");
+  });
+
+  it("returns null for anything that is not a time", () => {
+    for (const bad of ["", "evening", "8", "13PM", "8PM-9PM-10PM", null, undefined]) {
+      expect(normalizeCustomTimeValue(bad)).toBeNull();
+      expect(isCustomTimeValue(bad)).toBe(false);
+    }
   });
 });
