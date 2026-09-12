@@ -29,8 +29,3 @@ redirect_urls = [ "https://example.com/api/auth" ]
 
 [build]
 automatically_update_urls_on_dev = true
-
-[app_proxy]
-url = "https://delivery-scheduler-tiqsag3epa-uc.a.run.app/proxy"
-subpath = "track"
-prefix = "apps"
