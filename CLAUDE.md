@@ -4,13 +4,13 @@
 
 Guidance for Claude Code when working in this repository
 
-## Mental model (verified against the code 2026-09-09)
+## Mental model (verified against the code 2026-09-12)
 
 - Shopify embedded app (React Router 7 on `@shopify/shopify-app-react-router`, single-merchant, Cloud Run + Neon Postgres) that schedules delivery dates and time slots at checkout and runs deliveries from `/app/orders`.
 - **The Shopify order is the source of delivery state**: `custom.date` / `custom.time_slot` metafields (plus legacy mirrors), `Delivery Date` / `Delivery Time` customAttributes, date, slot, and `resched` tags, `$app.reschedule_*` metafields, `delivery.reschedule_history`, `delivery.sync_status`.
-- **Postgres holds eight Prisma models**: `Session`, `DeliveryScheduleConfig`, `DeliverySyncTask`, `BulkActionJob`, `BulkActionJobItem`, `LalamoveTracking`, `EmailSendLog`, `AgentOrderRequest` (idempotency reservation for the agent draft endpoint). There is no order, customer, conversation, or audit table.
+- **Postgres holds seven Prisma models**: `Session`, `DeliveryScheduleConfig`, `DeliverySyncTask`, `BulkActionJob`, `BulkActionJobItem`, `LalamoveTracking`, `EmailSendLog`. `AgentOrderRequest` was dropped in migration `20260912000000_drop_agent_order_request`. There is no order, customer, conversation, or audit table.
 - **Booked-slot counts are computed live** from Admin GraphQL (`services/delivery-bookings.server.ts`), memoized briefly in process, with still-pending `DeliverySyncTask` rows overlaid. They are never persisted.
-- **Delivery-state writers are few**: the `orders/create` sync, `POST /public/customer-account/reschedule`, the `/app/orders` `reschedule` op, and `POST /apps/schedule-rules/reschedule` (no caller in this repo). Extensions, admin order blocks, and Sidekick routes are read-only. Verify in the route and service code before assuming a surface writes.
+- **Delivery-state writers are few**: the `orders/create` sync, `POST /public/customer-account/reschedule`, the `/app/orders` `reschedule` op (runs through `executeBulkAction`), the `/app/manual-order` draft-order route, and `POST /apps/schedule-rules/reschedule` (no caller in this repo). Extensions and admin order blocks are read-only. The Sidekick routes and extensions were removed in commit 3fde8ce; `services/order-delivery-metafields.server.ts` still writes the `sidekick.delivery_date` metafield mirror on every sync and reschedule. Verify in the route and service code before assuming a surface writes.
 - **Cloud Tasks** (`services/ops-queue.server.ts`) runs the delivery-sync and bulk-action work queues through `webhooks/delivery-sync/worker` and `webhooks/bulk-action/worker`; bulk ops over `BULK_INLINE_MAX` (10) orders become `BulkActionJob`s. With no queue configured the same work runs inline. `POST /internal/delivery-sync-sweep` rescues stranded rows.
 - **Lalamove is status-listen only.** Deliveries are booked by hand outside this app; `POST /internal/lalamove-poll` polls recorded order ids and marks fulfillments delivered. Nothing here dispatches. Read `docs/decisions.md` ADR-16 before touching Lalamove-shaped code.
 - **Customer email** goes through the configured SMTP mailbox (`services/send-customer-email.server.ts`) and writes nothing to the order beyond an `EmailSendLog` row.
