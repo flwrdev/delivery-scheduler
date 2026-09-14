@@ -128,10 +128,6 @@ export function parseOrderSummary(text: string, variants: VariantLike[], now = n
   let productName: string | null = null;
 
   const lines = text.split(/\r?\n/);
-  const greeting = lines.find((l) => l.trim())?.match(/([A-Za-z][\w'.-]*)!/);
-  if (greeting) values.customerName = greeting[1];
-
-  const noteParts: string[] = [];
 
   for (const line of lines) {
     const m = line.match(LINE_RE);
@@ -152,14 +148,10 @@ export function parseOrderSummary(text: string, variants: VariantLike[], now = n
       values.quantity = String(Math.max(1, parseInt(value, 10) || 1));
     } else if (key === "recipient" || key === "recipient name") {
       values.recipientName = value;
-    } else if (key === "recipient contact" || key === "recipient phone") {
-      values.recipientPhone = value;
-    } else if (key === "contact" || key === "phone" || key === "contact number" || key === "mobile") {
+    } else if (key === "recipient contact" || key === "recipient phone" || key === "contact" || key === "phone" || key === "contact number" || key === "mobile") {
       values.phone = value;
     } else if (key === "email") {
       values.email = value.toLowerCase();
-    } else if (key === "customer" || key === "customer name" || key === "ordered by") {
-      values.customerName = value;
     } else if (key === "address" || key === "delivery address") {
       Object.assign(values, splitAddress(value));
     } else if (key === "delivery date & time" || key === "delivery date and time" || key === "delivery" || key === "schedule") {
@@ -179,11 +171,7 @@ export function parseOrderSummary(text: string, variants: VariantLike[], now = n
     } else if (key === "card message" || key === "message") {
       values.cardMessage = /^(none|n\/a|wala|-)$/i.test(value) ? "" : value;
     } else if (key === "payment" || key === "payment method" || key === "mode of payment") {
-      noteParts.push(`Payment: ${value}`);
-      if (/\bcod\b|cash on delivery/i.test(value)) values.payment = "cod";
-      else if (/gcash/i.test(value)) values.payment = "gcash_pending";
-    } else if (key === "gcash ref" || key === "gcash reference" || key === "reference" || key === "ref no") {
-      values.gcashRef = value;
+      values.payment = /\bcod\b|cash on delivery/i.test(value) ? "cod" : "paid";
     } else if (key === "delivery fee" || key === "shipping fee" || key === "fee") {
       const fee = parseMoney(value);
       if (fee !== null) values.deliveryFee = String(fee);
@@ -192,12 +180,8 @@ export function parseOrderSummary(text: string, variants: VariantLike[], now = n
       pastedTotal = breakdown.total;
       if (breakdown.deliveryFee !== null) values.deliveryFee = String(breakdown.deliveryFee);
       if (breakdown.codFee !== null) values.payment = "cod";
-    } else if (key === "note" || key === "notes" || key === "remarks") {
-      noteParts.push(value);
     }
   }
-
-  if (noteParts.length) values.note = noteParts.join("\n");
 
   return { values, pastedTotal, productName, warnings };
 }
