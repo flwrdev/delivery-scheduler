@@ -141,10 +141,13 @@ export function parseOrderSummary(text: string, variants: VariantLike[], now = n
     if (!value) continue;
 
     if (key === "product" || key === "item" || key === "bouquet") {
-      productName = value;
-      const hit = matchVariant(value, variants);
+      const qtyMatch = value.match(/^(.*?)\s*[x×]\s*(\d+)\s*$/i);
+      const name = qtyMatch ? qtyMatch[1].trim() : value;
+      productName = name;
+      if (qtyMatch) values.quantity = String(Math.max(1, parseInt(qtyMatch[2], 10) || 1));
+      const hit = matchVariant(name, variants);
       if (hit) values.variantId = hit.id;
-      else warnings.push(`Walang product na tumugma sa "${value}". Pumili sa dropdown.`);
+      else warnings.push(`Walang product na tumugma sa "${name}". Pumili sa dropdown.`);
     } else if (key === "quantity" || key === "qty") {
       values.quantity = String(Math.max(1, parseInt(value, 10) || 1));
     } else if (key === "recipient" || key === "recipient name") {

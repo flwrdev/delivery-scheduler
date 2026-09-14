@@ -2,13 +2,11 @@ import { useMemo, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
-import { looksLikeSummary, parseOrderSummary } from "../lib/parse-order-summary";
-import { normalizeCustomTimeValue, resolveConfiguredSlotValue } from "../lib/slot-value";
-import { getScheduleRules } from "../services/schedule-rules.server";
+import { looksLikeSummary, parseOrderSummary, splitAddress } from "../lib/parse-order-summary";
 import { findCodFeeVariant } from "../services/cod-fee.server";
 
-const SOURCES = ["messenger", "instagram"];
-const PAYMENTS = ["gcash_pending", "gcash_paid", "cod"] as const;
+const SOURCE = "messenger";
+const PAYMENTS = ["paid", "cod"] as const;
 type Payment = (typeof PAYMENTS)[number];
 
 type VariantOption = { id: string; label: string; price: string };
@@ -16,13 +14,10 @@ type UserError = { field: string[] | null; message: string };
 type ActionResult = {
   error?: string;
   ok?: true;
-  mode?: "draft" | "order";
   payment?: Payment;
-  draftName?: string;
   orderName?: string;
   orderId?: string;
   total?: string;
-  invoiceUrl?: string;
 };
 
 const VARIANTS_QUERY = `#graphql
@@ -53,7 +48,7 @@ const DRAFT_COMPLETE = `#graphql
 `;
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   const variants: VariantOption[] = [];
   let after: string | null = null;
   do {
@@ -66,41 +61,32 @@ export async function loader({ request }: LoaderFunctionArgs) {
     after = data.pageInfo.hasNextPage ? data.pageInfo.endCursor : null;
   } while (after);
   variants.sort((a, b) => a.label.localeCompare(b.label));
-  const [rules, codFee] = await Promise.all([getScheduleRules(session.shop), findCodFeeVariant(admin)]);
+  const codFee = await findCodFeeVariant(admin);
   return Response.json({
     variants,
-    timeSlots: rules.slots.map((slot) => slot.value),
     codFeePrice: codFee.variant ? parseFloat(codFee.variant.price) || 0 : null,
   });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
   const f = await request.formData();
   const s = (k: string) => (f.get(k) as string | null)?.trim() ?? "";
 
   const variantId = s("variantId");
   const quantity = Math.max(1, parseInt(s("quantity") || "1", 10));
   const deliveryDate = s("deliveryDate");
-  const deliveryTimeInput = s("deliveryTime");
-  const source = SOURCES.includes(s("source")) ? s("source") : "messenger";
+  const deliveryTime = s("deliveryTime");
+  const source = SOURCE;
   const payment: Payment = (PAYMENTS as readonly string[]).includes(s("payment"))
     ? (s("payment") as Payment)
-    : "gcash_pending";
+    : "paid";
   const email = s("email");
   const phone = s("phone");
+  const address = splitAddress(s("address"));
 
-  if (!variantId || !deliveryDate || !deliveryTimeInput || !s("recipientName") || !s("address1") || !s("city")) {
-    return Response.json({ error: "Kulang ang required fields: product, delivery date, time slot, recipient name, address, city." }, { status: 400 });
-  }
-  // A configured slot is written as configured; anything else must be a time
-  // ("8PM", "8PM-9PM") and is written in the same canonical form the
-  // reschedule path uses, so the tag and metafield match later moves.
-  const rules = await getScheduleRules(session.shop);
-  const deliveryTime =
-    resolveConfiguredSlotValue(rules, deliveryTimeInput) ?? normalizeCustomTimeValue(deliveryTimeInput);
-  if (!deliveryTime) {
-    return Response.json({ error: `Hindi mabasa ang oras "${deliveryTimeInput}". Pumili ng slot o mag-type ng oras gaya ng 8PM o 8PM-9PM.` }, { status: 400 });
+  if (!variantId || !deliveryDate || !deliveryTime || !s("recipientName") || !address.address1 || !address.city) {
+    return Response.json({ error: "Kulang ang required fields: product, delivery date, time, recipient name, address (kasama ang city)." }, { status: 400 });
   }
   if (!email && !phone) {
     return Response.json({ error: "Kailangan ng email o phone para may confirmation at para magamit ang tracking page." }, { status: 400 });
@@ -119,9 +105,6 @@ export async function action({ request }: ActionFunctionArgs) {
   const noteLines = [
     `Source: ${source}`,
     payment === "cod" ? "Payment: Cash on Delivery" : null,
-    s("customerName") ? `Ordered by: ${s("customerName")}` : null,
-    s("gcashRef") ? `GCash ref: ${s("gcashRef")}` : null,
-    s("note") ? `Notes: ${s("note")}` : null,
   ].filter(Boolean);
 
   const input = {
@@ -131,11 +114,11 @@ export async function action({ request }: ActionFunctionArgs) {
     shippingAddress: {
       firstName,
       lastName: rest.join(" ") || undefined,
-      address1: s("address1"),
-      address2: s("address2") || undefined,
-      city: s("city"),
-      province: s("province") || undefined,
-      phone: s("recipientPhone") || phone || undefined,
+      address1: address.address1,
+      address2: address.address2 || undefined,
+      city: address.city,
+      province: address.province || undefined,
+      phone: phone || undefined,
       countryCode: "PH",
     },
     customAttributes: [
@@ -159,17 +142,6 @@ export async function action({ request }: ActionFunctionArgs) {
   }
   const draft = create.draftOrder;
 
-  if (payment === "gcash_pending") {
-    return Response.json({
-      ok: true,
-      mode: "draft",
-      payment,
-      draftName: draft.name,
-      total: draft.totalPriceSet.shopMoney.amount,
-      invoiceUrl: draft.invoiceUrl,
-    });
-  }
-
   const completeRes = await admin.graphql(DRAFT_COMPLETE, {
     variables: { id: draft.id, source, paymentPending: payment === "cod" },
   });
@@ -179,7 +151,6 @@ export async function action({ request }: ActionFunctionArgs) {
   }
   return Response.json({
     ok: true,
-    mode: "order",
     payment,
     orderName: complete.draftOrder.order.name,
     orderId: complete.draftOrder.order.id,
@@ -187,18 +158,16 @@ export async function action({ request }: ActionFunctionArgs) {
   });
 }
 
-const EMPTY_FORM: Record<string, string> = { source: "messenger", quantity: "1", deliveryFee: "0", payment: "gcash_pending" };
+const EMPTY_FORM: Record<string, string> = { quantity: "1", deliveryFee: "0", payment: "paid" };
 
 const PAYMENT_LABELS: Record<Payment, string> = {
-  gcash_pending: "GCash - hinihintay pa ang bayad (draft + invoice link)",
-  gcash_paid: "GCash - bayad na at na-verify (paid order agad)",
-  cod: "Cash on Delivery - order agad, may COD fee, babayaran sa rider",
+  paid: "Paid",
+  cod: "Cash on Delivery",
 };
 
 export default function ManualOrder() {
-  const { variants, timeSlots, codFeePrice } = useLoaderData() as {
+  const { variants, codFeePrice } = useLoaderData() as {
     variants: VariantOption[];
-    timeSlots: string[];
     codFeePrice: number | null;
   };
   const result = useActionData() as ActionResult | undefined;
@@ -277,20 +246,11 @@ export default function ManualOrder() {
       {result?.error && (
         <div style={{ background: "#fed3d1", padding: 12, borderRadius: 8, marginBottom: 16 }}>{result.error}</div>
       )}
-      {result?.ok && result.mode === "order" && (
+      {result?.ok && (
         <div style={{ background: "#cdfed3", padding: 12, borderRadius: 8, marginBottom: 16 }}>
           <strong>
             Order {result.orderName} created{result.payment === "cod" ? " - Cash on Delivery, payment pending" : " and marked as paid"}. Total PHP {result.total}.
           </strong>
-        </div>
-      )}
-      {result?.ok && result.mode === "draft" && (
-        <div style={{ background: "#e0f0ff", padding: 12, borderRadius: 8, marginBottom: 16 }}>
-          <strong>Draft {result.draftName} saved. Total PHP {result.total}.</strong>
-          <p style={{ margin: "8px 0 0" }}>
-            Hindi pa marked as paid. Kapag na-verify ang GCash, buksan ang draft sa Shopify admin at i-click ang Mark as paid,
-            o i-send ang invoice link: <a href={result.invoiceUrl} target="_blank" rel="noreferrer">{result.invoiceUrl}</a>
-          </p>
         </div>
       )}
 
@@ -344,9 +304,6 @@ export default function ManualOrder() {
       )}
 
       <Form method="post" onPaste={onFieldPaste}>
-        <label style={field}>Source
-          <select {...bind("source")} style={input}>{SOURCES.map((x) => <option key={x} value={x}>{x}</option>)}</select>
-        </label>
         <label style={field}><span>Product{flag}</span>
           <select {...bind("variantId")} required style={input}>
             <option value="">Pumili ng bouquet</option>
@@ -354,26 +311,14 @@ export default function ManualOrder() {
           </select>
         </label>
         <label style={field}><span>Quantity{flag}</span><input {...bind("quantity")} type="number" min={1} style={input} /></label>
-        <label style={field}>Customer name (nag-order)<input {...bind("customerName")} style={input} /></label>
-        <label style={field}>Customer email<input {...bind("email")} type="email" style={input} /></label>
-        <label style={field}>Customer phone<input {...bind("phone")} style={input} /></label>
         <label style={field}>Recipient name<input {...bind("recipientName")} required style={input} /></label>
-        <label style={field}>Recipient phone<input {...bind("recipientPhone")} style={input} /></label>
-        <label style={field}>Address line 1<input {...bind("address1")} required style={input} /></label>
-        <label style={field}>Address line 2<input {...bind("address2")} style={input} /></label>
-        <label style={field}>City<input {...bind("city")} required style={input} /></label>
-        <label style={field}>Province<input {...bind("province")} style={input} /></label>
+        <label style={field}>Contact<input {...bind("phone")} style={input} /></label>
+        <label style={field}>Email<input {...bind("email")} type="email" style={input} /></label>
+        <label style={field}>Address<textarea {...bind("address")} rows={2} required style={input} /></label>
         <label style={field}>Delivery date<input {...bind("deliveryDate")} type="date" required style={input} /></label>
-        <label style={field}>Time slot / Specific time
-          <input {...bind("deliveryTime")} list="time-options" required style={input} placeholder="Pumili ng slot o mag-type ng oras (8PM, 8PM-9PM)" />
-          <datalist id="time-options">
-            {timeSlots.map((t) => <option key={t} value={t} />)}
-          </datalist>
-        </label>
+        <label style={field}>Delivery time<input {...bind("deliveryTime")} required style={input} placeholder="hal. 3:00 PM - 4:00 PM" /></label>
         <label style={field}>Card message<textarea {...bind("cardMessage")} rows={3} style={input} /></label>
         <label style={field}><span>Delivery fee (PHP){flag}</span><input {...bind("deliveryFee")} type="number" min={0} step="1" style={input} /></label>
-        <label style={field}>GCash reference number<input {...bind("gcashRef")} style={input} /></label>
-        <label style={field}>Internal note<textarea {...bind("note")} rows={2} style={input} /></label>
         <label style={field}>Payment
           <select {...bind("payment")} style={input}>
             {PAYMENTS.map((p) => <option key={p} value={p}>{PAYMENT_LABELS[p]}</option>)}
