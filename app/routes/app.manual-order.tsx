@@ -1,13 +1,31 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
-import { looksLikeSummary, parseOrderSummary, splitAddress } from "../lib/parse-order-summary";
+import { looksLikeSummary, parseOrderSummary } from "../lib/parse-order-summary";
 import { findCodFeeVariant } from "../services/cod-fee.server";
+import {
+  createSessionToken,
+  fetchAddressSuggestions,
+  loadPlacesLibrary,
+  resolvePlace,
+  type AddressSuggestion,
+} from "../lib/google-places.client";
 
 const SOURCE = "messenger";
 const PAYMENTS = ["paid", "cod"] as const;
 type Payment = (typeof PAYMENTS)[number];
+
+// PH mobile numbers reach this form as 09xx, 9xx (no leading 0), 639xx, or
+// already +639xx — Shopify's customer-record phone requires the +63 form.
+function normalizePhPhone(raw: string): string {
+  const digits = raw.replace(/[^\d+]/g, "");
+  if (digits.startsWith("+63")) return digits;
+  if (digits.startsWith("63")) return `+${digits}`;
+  if (digits.startsWith("0")) return `+63${digits.slice(1)}`;
+  if (digits.startsWith("9")) return `+63${digits}`;
+  return digits;
+}
 
 type VariantOption = { id: string; label: string; price: string };
 type UserError = { field: string[] | null; message: string };
@@ -65,6 +83,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return Response.json({
     variants,
     codFeePrice: codFee.variant ? parseFloat(codFee.variant.price) || 0 : null,
+    mapsApiKey: process.env.GOOGLE_MAPS_API_KEY ?? "",
   });
 }
 
@@ -82,11 +101,15 @@ export async function action({ request }: ActionFunctionArgs) {
     ? (s("payment") as Payment)
     : "paid";
   const email = s("email");
-  const phone = s("phone");
-  const address = splitAddress(s("address"));
+  const phone = s("phone") ? normalizePhPhone(s("phone")) : "";
+  const address1 = s("address1");
+  const address2 = s("address2");
+  const city = s("city");
+  const province = s("province");
+  const zip = s("zip");
 
-  if (!variantId || !deliveryDate || !deliveryTime || !s("recipientName") || !address.address1 || !address.city) {
-    return Response.json({ error: "Kulang ang required fields: product, delivery date, time, recipient name, address (kasama ang city)." }, { status: 400 });
+  if (!variantId || !deliveryDate || !deliveryTime || !s("recipientName") || !address1 || !city || !zip) {
+    return Response.json({ error: "Kulang ang required fields: product, delivery date, time, recipient name, address, city, zip." }, { status: 400 });
   }
   if (!email && !phone) {
     return Response.json({ error: "Kailangan ng email o phone para may confirmation at para magamit ang tracking page." }, { status: 400 });
@@ -114,10 +137,11 @@ export async function action({ request }: ActionFunctionArgs) {
     shippingAddress: {
       firstName,
       lastName: rest.join(" ") || undefined,
-      address1: address.address1,
-      address2: address.address2 || undefined,
-      city: address.city,
-      province: address.province || undefined,
+      address1,
+      address2: address2 || undefined,
+      city,
+      province: province || undefined,
+      zip,
       phone: phone || undefined,
       countryCode: "PH",
     },
@@ -166,9 +190,10 @@ const PAYMENT_LABELS: Record<Payment, string> = {
 };
 
 export default function ManualOrder() {
-  const { variants, codFeePrice } = useLoaderData() as {
+  const { variants, codFeePrice, mapsApiKey } = useLoaderData() as {
     variants: VariantOption[];
     codFeePrice: number | null;
+    mapsApiKey: string;
   };
   const result = useActionData() as ActionResult | undefined;
   const nav = useNavigation();
@@ -178,6 +203,71 @@ export default function ManualOrder() {
   const [summary, setSummary] = useState("");
   const [pastedTotal, setPastedTotal] = useState<number | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+
+  // Address search (Google Places) — same pattern as the orders page's Edit
+  // details modal. Hidden entirely when there is no key or the SDK fails.
+  const [placesReady, setPlacesReady] = useState(false);
+  const [searchValue, setSearchValue] = useState("");
+  const [searchOptions, setSearchOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const suggestionsRef = useRef<AddressSuggestion[]>([]);
+  const sessionTokenRef = useRef<object | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchSeqRef = useRef(0);
+
+  useEffect(() => {
+    if (!mapsApiKey || placesReady) return;
+    let cancelled = false;
+    loadPlacesLibrary(mapsApiKey)
+      .then(() => { if (!cancelled) setPlacesReady(true); })
+      .catch(() => { if (!cancelled) setPlacesReady(false); });
+    return () => { cancelled = true; };
+  }, [mapsApiKey, placesReady]);
+
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
+
+  const runSearch = async (query: string) => {
+    const seq = ++searchSeqRef.current;
+    try {
+      if (!sessionTokenRef.current) sessionTokenRef.current = await createSessionToken(mapsApiKey);
+      const results = await fetchAddressSuggestions(mapsApiKey, query, sessionTokenRef.current);
+      if (seq !== searchSeqRef.current) return;
+      suggestionsRef.current = results;
+      setSearchOptions(results.map((r) => ({ value: r.placeId, label: r.label })));
+    } catch {
+      if (seq === searchSeqRef.current) setSearchOptions([]);
+    }
+  };
+
+  const handleSearchChange = (value: string) => {
+    setSearchValue(value);
+    setSearchError(null);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const query = value.trim();
+    if (query.length < 3) { setSearchOptions([]); return; }
+    debounceRef.current = setTimeout(() => { void runSearch(query); }, 300);
+  };
+
+  const handleSearchSelect = async (placeId: string) => {
+    const item = suggestionsRef.current.find((s) => s.placeId === placeId);
+    if (!item) return;
+    setSearchOptions([]);
+    setSearchValue(item.label);
+    try {
+      const mapped = await resolvePlace(item);
+      setValues((prev) => ({
+        ...prev,
+        address1: mapped.address1,
+        ...(mapped.address2 ? { address2: mapped.address2 } : {}),
+        ...(mapped.city ? { city: mapped.city } : {}),
+        ...(mapped.zip ? { zip: mapped.zip } : {}),
+      }));
+    } catch {
+      setSearchError("Hindi makuha ang address na iyan — punan na lang ng manual sa baba.");
+    } finally {
+      sessionTokenRef.current = null;
+    }
+  };
 
   const bind = (name: string) => ({
     name,
@@ -314,7 +404,33 @@ export default function ManualOrder() {
         <label style={field}>Recipient name<input {...bind("recipientName")} required style={input} /></label>
         <label style={field}>Contact<input {...bind("phone")} style={input} /></label>
         <label style={field}>Email<input {...bind("email")} type="email" style={input} /></label>
-        <label style={field}>Address<textarea {...bind("address")} rows={2} required style={input} /></label>
+
+        {placesReady && (
+          <label style={{ ...field, position: "relative" }}>
+            Search address
+            <input
+              value={searchValue}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              placeholder="hal. 11 Kalayaan Ave, Quezon City"
+              autoComplete="off"
+              style={input}
+            />
+            {searchOptions.length > 0 && (
+              <ul style={{ listStyle: "none", margin: 0, padding: 4, border: "1px solid #c9cccf", borderRadius: 6, background: "#fff" }}>
+                {searchOptions.map((o) => (
+                  <li key={o.value} onClick={() => handleSearchSelect(o.value)} style={{ padding: 6, cursor: "pointer" }}>{o.label}</li>
+                ))}
+              </ul>
+            )}
+            {searchError && <span style={{ color: "#d72c0d" }}>{searchError}</span>}
+            <span style={{ color: "#6d7175" }}>Pumili para awtomatikong mapunan ang address, city, at zip sa baba.</span>
+          </label>
+        )}
+        <label style={field}>Street address<input {...bind("address1")} required style={input} /></label>
+        <label style={field}>Apartment / unit<input {...bind("address2")} style={input} /></label>
+        <label style={field}>City<input {...bind("city")} required style={input} /></label>
+        <label style={field}>Province<input {...bind("province")} style={input} /></label>
+        <label style={field}>Zip / postal code<input {...bind("zip")} required style={input} /></label>
         <label style={field}>Delivery date<input {...bind("deliveryDate")} type="date" required style={input} /></label>
         <label style={field}>Delivery time<input {...bind("deliveryTime")} required style={input} placeholder="hal. 3:00 PM - 4:00 PM" /></label>
         <label style={field}>Card message<textarea {...bind("cardMessage")} rows={3} style={input} /></label>
