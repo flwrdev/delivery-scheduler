@@ -1,16 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import { looksLikeSummary, parseOrderSummary } from "../lib/parse-order-summary";
 import { findCodFeeVariant } from "../services/cod-fee.server";
-import {
-  createSessionToken,
-  fetchAddressSuggestions,
-  loadPlacesLibrary,
-  resolvePlace,
-  type AddressSuggestion,
-} from "../lib/google-places.client";
+import { NCR_ZIP_ENTRIES } from "../data/ncr-zipcodes";
+
+type AreaOption = { area: string; zip: string; city: string };
+const AREAS: AreaOption[] = NCR_ZIP_ENTRIES.filter((e) => e.zip).map((e) => ({
+  area: e.area,
+  zip: e.zip,
+  city: e.city,
+}));
 
 const SOURCE = "messenger";
 const PAYMENTS = ["paid", "cod"] as const;
@@ -83,7 +84,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return Response.json({
     variants,
     codFeePrice: codFee.variant ? parseFloat(codFee.variant.price) || 0 : null,
-    mapsApiKey: process.env.GOOGLE_MAPS_API_KEY ?? "",
   });
 }
 
@@ -190,10 +190,9 @@ const PAYMENT_LABELS: Record<Payment, string> = {
 };
 
 export default function ManualOrder() {
-  const { variants, codFeePrice, mapsApiKey } = useLoaderData() as {
+  const { variants, codFeePrice } = useLoaderData() as {
     variants: VariantOption[];
     codFeePrice: number | null;
-    mapsApiKey: string;
   };
   const result = useActionData() as ActionResult | undefined;
   const nav = useNavigation();
@@ -204,69 +203,22 @@ export default function ManualOrder() {
   const [pastedTotal, setPastedTotal] = useState<number | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
-  // Address search (Google Places) — same pattern as the orders page's Edit
-  // details modal. Hidden entirely when there is no key or the SDK fails.
-  const [placesReady, setPlacesReady] = useState(false);
-  const [searchValue, setSearchValue] = useState("");
-  const [searchOptions, setSearchOptions] = useState<Array<{ value: string; label: string }>>([]);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const suggestionsRef = useRef<AddressSuggestion[]>([]);
-  const sessionTokenRef = useRef<object | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const searchSeqRef = useRef(0);
+  // Area/barangay lookup — merchant's own zip code list (app/data/ncr-zipcodes.ts),
+  // no external API. Selecting an area fills City + Zip.
+  const [areaQuery, setAreaQuery] = useState("");
+  const [areaOptions, setAreaOptions] = useState<AreaOption[]>([]);
 
-  useEffect(() => {
-    if (!mapsApiKey || placesReady) return;
-    let cancelled = false;
-    loadPlacesLibrary(mapsApiKey)
-      .then(() => { if (!cancelled) setPlacesReady(true); })
-      .catch(() => { if (!cancelled) setPlacesReady(false); });
-    return () => { cancelled = true; };
-  }, [mapsApiKey, placesReady]);
-
-  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
-
-  const runSearch = async (query: string) => {
-    const seq = ++searchSeqRef.current;
-    try {
-      if (!sessionTokenRef.current) sessionTokenRef.current = await createSessionToken(mapsApiKey);
-      const results = await fetchAddressSuggestions(mapsApiKey, query, sessionTokenRef.current);
-      if (seq !== searchSeqRef.current) return;
-      suggestionsRef.current = results;
-      setSearchOptions(results.map((r) => ({ value: r.placeId, label: r.label })));
-    } catch {
-      if (seq === searchSeqRef.current) setSearchOptions([]);
-    }
+  const handleAreaChange = (value: string) => {
+    setAreaQuery(value);
+    const q = value.trim().toLowerCase();
+    if (q.length < 2) { setAreaOptions([]); return; }
+    setAreaOptions(AREAS.filter((a) => a.area.toLowerCase().includes(q)).slice(0, 8));
   };
 
-  const handleSearchChange = (value: string) => {
-    setSearchValue(value);
-    setSearchError(null);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    const query = value.trim();
-    if (query.length < 3) { setSearchOptions([]); return; }
-    debounceRef.current = setTimeout(() => { void runSearch(query); }, 300);
-  };
-
-  const handleSearchSelect = async (placeId: string) => {
-    const item = suggestionsRef.current.find((s) => s.placeId === placeId);
-    if (!item) return;
-    setSearchOptions([]);
-    setSearchValue(item.label);
-    try {
-      const mapped = await resolvePlace(item);
-      setValues((prev) => ({
-        ...prev,
-        address1: mapped.address1,
-        ...(mapped.address2 ? { address2: mapped.address2 } : {}),
-        ...(mapped.city ? { city: mapped.city } : {}),
-        ...(mapped.zip ? { zip: mapped.zip } : {}),
-      }));
-    } catch {
-      setSearchError("Hindi makuha ang address na iyan — punan na lang ng manual sa baba.");
-    } finally {
-      sessionTokenRef.current = null;
-    }
+  const handleAreaSelect = (entry: AreaOption) => {
+    setAreaQuery(entry.area);
+    setAreaOptions([]);
+    setValues((prev) => ({ ...prev, city: entry.city, zip: entry.zip }));
   };
 
   const bind = (name: string) => ({
@@ -405,27 +357,24 @@ export default function ManualOrder() {
         <label style={field}>Contact<input {...bind("phone")} style={input} /></label>
         <label style={field}>Email<input {...bind("email")} type="email" style={input} /></label>
 
-        {placesReady && (
-          <label style={{ ...field, position: "relative" }}>
-            Search address
-            <input
-              value={searchValue}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              placeholder="hal. 11 Kalayaan Ave, Quezon City"
-              autoComplete="off"
-              style={input}
-            />
-            {searchOptions.length > 0 && (
-              <ul style={{ listStyle: "none", margin: 0, padding: 4, border: "1px solid #c9cccf", borderRadius: 6, background: "#fff" }}>
-                {searchOptions.map((o) => (
-                  <li key={o.value} onClick={() => handleSearchSelect(o.value)} style={{ padding: 6, cursor: "pointer" }}>{o.label}</li>
-                ))}
-              </ul>
-            )}
-            {searchError && <span style={{ color: "#d72c0d" }}>{searchError}</span>}
-            <span style={{ color: "#6d7175" }}>Pumili para awtomatikong mapunan ang address, city, at zip sa baba.</span>
-          </label>
-        )}
+        <label style={{ ...field, position: "relative" }}>
+          Area / Barangay
+          <input
+            value={areaQuery}
+            onChange={(e) => handleAreaChange(e.target.value)}
+            placeholder="hal. Taytay, BGC, Cainta"
+            autoComplete="off"
+            style={input}
+          />
+          {areaOptions.length > 0 && (
+            <ul style={{ listStyle: "none", margin: 0, padding: 4, border: "1px solid #c9cccf", borderRadius: 6, background: "#fff" }}>
+              {areaOptions.map((a) => (
+                <li key={`${a.area}-${a.zip}`} onClick={() => handleAreaSelect(a)} style={{ padding: 6, cursor: "pointer" }}>{a.area} — {a.city} ({a.zip})</li>
+              ))}
+            </ul>
+          )}
+          <span style={{ color: "#6d7175" }}>Pumili para awtomatikong mapunan ang City at Zip sa baba.</span>
+        </label>
         <label style={field}>Street address<input {...bind("address1")} required style={input} /></label>
         <label style={field}>Apartment / unit<input {...bind("address2")} style={input} /></label>
         <label style={field}>City<input {...bind("city")} required style={input} /></label>
