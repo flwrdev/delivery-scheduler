@@ -589,7 +589,7 @@ export const loader = async ({
   const orders =
     body.data?.orders?.edges?.map((edge: { node: Order }) => edge.node) ?? [];
 
-  // Email-sent history (E-5 revisit, docs/customer-email-design.md) lives in
+  // Email-sent history (E-5 revisit, ) lives in
   // Postgres, never on the Shopify order — one lookup keyed by this page's
   // order ids, grouped and attached below. Panel-timeline garnish, not
   // page-critical: a Neon cold-start rejection here must degrade to an empty

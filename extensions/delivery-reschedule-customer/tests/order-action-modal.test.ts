@@ -2,7 +2,7 @@
 // delivery-reschedule-customer — the customer reschedule modal.
 //
 // This is the ONLY extension in the app that writes delivery state
-// (docs/architecture.md; docs/api.md section 2, row 3): it posts to
+// (; docs/api.md section 2, row 3): it posts to
 // /public/customer-account/reschedule, the single live customer write path.
 // Everything else in extensions/ is read-only, so this suite is the one that
 // has to hold.

@@ -59,7 +59,7 @@ model LalamoveTracking {
   @@index([shop, deliveredAt])
 }
 
-// Customer Email send log (E-5 revisit, docs/customer-email-design.md): logs
+// Customer Email send log (E-5 revisit, ): logs
 // that a merchant sent a customer email via the in-app compose modal, purely
 // for the order panel's DeliveryTimeline display. Same side-table posture as
 // LalamoveTracking above — an app-side log row, never Shopify delivery state,
