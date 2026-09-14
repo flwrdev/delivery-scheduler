@@ -16,11 +16,11 @@ state lives on the Shopify order itself).
 
 | Doc | What it covers |
 | --- | -------------- |
-| [docs/architecture.md](docs/architecture.md) | System topology + data model — **source of truth** |
+| []() | System topology + data model — **source of truth** |
 | [docs/api.md](docs/api.md) | Routes, auth mechanisms, order write-path contract |
 | [docs/development.md](docs/development.md) | Commands, dev/testing workflow, deployment notes |
 | [docs/known-issues.md](docs/known-issues.md) | Open issues / in-flight fixes |
-| [docs/changelog.md](docs/changelog.md) | Newest-first history; details in [docs/verification-log.md](docs/verification-log.md) |
+| []() | Newest-first history; details in [docs/](docs/) |
 | [docs/decisions.md](docs/decisions.md) | ADRs (architecture decisions) |
 | [docs/cloud-run-neon.md](docs/cloud-run-neon.md) | Hosting + secrets runbook |
 

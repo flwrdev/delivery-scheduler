@@ -1,5 +1,5 @@
 // PreToolUse guard (Bash) — technical safeguard for the 2026-08-01 Neon
-// incident (docs/known-issues.md, docs/verification-log.md). This repo
+// incident (docs/known-issues.md, docs/). This repo
 // shares ONE Neon database between dev and prod (confirmed via forensic
 // audit 2026-08-17), so any `--shadow-database-url` use here is inherently
 // unsafe — there is no throwaway DB to point it at. `prisma migrate dev`
