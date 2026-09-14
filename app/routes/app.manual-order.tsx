@@ -1,17 +1,9 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import { looksLikeSummary, parseOrderSummary } from "../lib/parse-order-summary";
 import { findCodFeeVariant } from "../services/cod-fee.server";
-import { NCR_ZIP_ENTRIES } from "../data/ncr-zipcodes";
-
-type AreaOption = { area: string; zip: string; city: string };
-const AREAS: AreaOption[] = NCR_ZIP_ENTRIES.filter((e) => e.zip).map((e) => ({
-  area: e.area,
-  zip: e.zip,
-  city: e.city,
-}));
 
 const SOURCE = "messenger";
 const PAYMENTS = ["paid", "cod"] as const;
@@ -203,35 +195,6 @@ export default function ManualOrder() {
   const [pastedTotal, setPastedTotal] = useState<number | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
-  // Area/barangay lookup — merchant's own zip code list (app/data/ncr-zipcodes.ts),
-  // no external API. Selecting an area fills City + Zip.
-  const [areaQuery, setAreaQuery] = useState("");
-  const [areaOptions, setAreaOptions] = useState<AreaOption[]>([]);
-  const areaInputRef = useRef<HTMLInputElement>(null);
-  const address1Ref = useRef<HTMLInputElement>(null);
-
-  const searchAreas = (q: string) => AREAS.filter((a) => a.area.toLowerCase().includes(q.toLowerCase())).slice(0, 8);
-
-  const handleAreaChange = (value: string) => {
-    setAreaQuery(value);
-    setAreaOptions(value.trim().length < 2 ? [] : searchAreas(value.trim()));
-  };
-
-  const handleAreaSelect = (entry: AreaOption) => {
-    setAreaQuery(entry.area);
-    setAreaOptions([]);
-    setValues((prev) => ({ ...prev, city: entry.city, zip: entry.zip }));
-    address1Ref.current?.focus();
-  };
-
-  // Enter picks the top suggestion — no mouse needed for the common case.
-  const handleAreaKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && areaOptions.length > 0) {
-      e.preventDefault();
-      handleAreaSelect(areaOptions[0]);
-    }
-  };
-
   const bind = (name: string) => ({
     name,
     value: values[name] ?? "",
@@ -240,21 +203,11 @@ export default function ManualOrder() {
   });
 
   // Fills only the fields present in the pasted text; everything else is kept as-is.
-  // The paste never resolves a zip on its own — when it leaves one missing, prime the
-  // area search with the parsed city/barangay and jump focus there for a fast pick.
   const applySummary = (text: string) => {
     const parsed = parseOrderSummary(text, variants);
     setValues((prev) => ({ ...prev, ...parsed.values }));
     setPastedTotal(parsed.pastedTotal);
     setWarnings(parsed.warnings);
-    if (!parsed.values.zip) {
-      const q = parsed.values.city || parsed.values.address2 || "";
-      if (q) {
-        setAreaQuery(q);
-        setAreaOptions(searchAreas(q));
-        setTimeout(() => areaInputRef.current?.focus(), 0);
-      }
-    }
   };
 
   const onSummaryChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -377,28 +330,7 @@ export default function ManualOrder() {
         <label style={field}>Recipient name<input {...bind("recipientName")} required style={input} /></label>
         <label style={field}>Contact<input {...bind("phone")} style={input} /></label>
         <label style={field}>Email<input {...bind("email")} type="email" style={input} /></label>
-
-        <label style={{ ...field, position: "relative" }}>
-          Area / Barangay
-          <input
-            ref={areaInputRef}
-            value={areaQuery}
-            onChange={(e) => handleAreaChange(e.target.value)}
-            onKeyDown={handleAreaKeyDown}
-            placeholder="hal. Taytay, BGC, Cainta"
-            autoComplete="off"
-            style={input}
-          />
-          {areaOptions.length > 0 && (
-            <ul style={{ listStyle: "none", margin: 0, padding: 4, border: "1px solid #c9cccf", borderRadius: 6, background: "#fff" }}>
-              {areaOptions.map((a) => (
-                <li key={`${a.area}-${a.zip}`} onClick={() => handleAreaSelect(a)} style={{ padding: 6, cursor: "pointer" }}>{a.area} — {a.city} ({a.zip})</li>
-              ))}
-            </ul>
-          )}
-          <span style={{ color: "#6d7175" }}>Pumili (o pindutin ang Enter) para awtomatikong mapunan ang City at Zip sa baba. Kung wala sa listahan, i-type na lang mano-mano ang Zip.</span>
-        </label>
-        <label style={field}>Street address<input ref={address1Ref} {...bind("address1")} required style={input} /></label>
+        <label style={field}>Street address<input {...bind("address1")} required style={input} /></label>
         <label style={field}>Apartment / unit<input {...bind("address2")} style={input} /></label>
         <label style={field}>City<input {...bind("city")} required style={input} /></label>
         <label style={field}>Province<input {...bind("province")} style={input} /></label>
