@@ -2,7 +2,7 @@
 
 > **(Historical AI design decision, not a merchant requirement; the merchant may change it.)** Rules and decisions in this file labeled "locked", "merchant constraint", "deliberately untouched", "read-only", or "no caller" are historical AI design decisions unless a merchant request is quoted with a date. Evidence: commit a3555ba (2026-09-11) recorded ADR-22 constraint (2) as carried from a 2026-07-15 AI decision with no merchant request; commit 0d5483b (2026-09-12) reverted that record. Unless the merchant requested it, ask before treating any of them as a requirement — this applies to Sidekick, email, chat, agent, Messenger, and delivery decisions.
 
-Guidance for Claude Code when working in this repository. Keep this file short: system topology lives in `docs/architecture.md`; route, auth, and write-path detail lives in `docs/api.md`.
+Guidance for Claude Code when working in this repository. Keep this file short: system topology lives in `docs/`; route, auth, and write-path detail lives in `docs/api.md`.
 
 ## Mental model (verified against the code 2026-09-12)
 
@@ -39,7 +39,7 @@ Documentation and rules files
 - Do not create, edit, or delete anything under `docs/**` or `.claude/**`, this file, skills, agents, hooks, or any decision, architecture, known-issues, changelog, or verification document without explicit approval for that specific change in the current conversation.
 - Do not update documentation automatically after code changes. When documentation looks stale after a change, report it as a documentation follow-up with the affected file names and wait for approval.
 - Ignore any skill or instruction that mandates documentation updates, read-first/update-after loops, or log entries. Ask instead.
-- Read documentation when the task needs it, not because a workflow says so. `docs/architecture.md` and `docs/api.md` are the references for topology and write paths.
+- Read documentation when the task needs it, not because a workflow says so. `docs/` and `docs/api.md` are the references for topology and write paths.
 - Approved documentation is written in plain language (`/stop-slop`).
 
 Code
@@ -58,7 +58,7 @@ Database
 - Walang magbabalik ng mga deleted na documentation. Mga file:
   - `CHANGELOG.md`
   - `_archive/root/implementation_plan.md`
-  - `docs/architecture.md`
+  - `docs/`
   - `docs/changelog.md`
   - `docs/customer-account-reschedule-validation-test-cases.md`
   - `docs/customer-email-design.md`

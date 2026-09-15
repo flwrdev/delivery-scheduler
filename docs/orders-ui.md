@@ -1,6 +1,6 @@
 # Orders Operations — `/app/orders` page architecture
 
-> Part of the docs set. System topology: [architecture.md](./architecture.md).
+> Part of the docs set. System topology: [](./).
 > Write-path contract (the route `action`'s ops): [api.md §2](./api.md) — that
 > section stays the source of truth for what mutates what; this doc never
 > copies it, only points at it.
