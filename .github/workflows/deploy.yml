@@ -1,0 +1,42 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  PROJECT_ID: lalamove-map
+  REGION: us-central1
+  SERVICE: delivery-scheduler
+  IMAGE: us-central1-docker.pkg.dev/lalamove-map/cloud-run-source-deploy/delivery-scheduler
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/299861709433/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-deployer@lalamove-map.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - run: docker build -t "${IMAGE}:${{ github.sha }}" -t "${IMAGE}:latest" .
+
+      - run: docker push "${IMAGE}" --all-tags
+
+      - run: |
+          gcloud run deploy "${SERVICE}" \
+            --image "${IMAGE}:${{ github.sha }}" \
+            --region "${REGION}" \
+            --project "${PROJECT_ID}" \
+            --quiet
