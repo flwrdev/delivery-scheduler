@@ -48,6 +48,7 @@ import {
 import { CancelModal } from "../components/orders/CancelModal";
 import { ArchiveModal } from "../components/orders/ArchiveModal";
 import { UnarchiveModal } from "../components/orders/UnarchiveModal";
+import { MarkAsPaidModal } from "../components/orders/MarkAsPaidModal";
 import { AddTagsModal } from "../components/orders/AddTagsModal";
 import { RemoveTagsModal } from "../components/orders/RemoveTagsModal";
 import { SharedTagsModal } from "../components/orders/SharedTagsModal";
@@ -818,6 +819,8 @@ export const action = async ({
   let opParams: BulkOpParams;
   if (op === "archive" || op === "unarchive") {
     opParams = { op };
+  } else if (op === "markAsPaid") {
+    opParams = { op: "markAsPaid" };
   } else if (op === "cancel") {
     const validReasons = new Set([
       "CUSTOMER",
@@ -1189,6 +1192,7 @@ function Extension() {
     setFulfillLalamoveOrderId,
     handleArchiveConfirm,
     handleUnarchiveConfirm,
+    handleMarkAsPaidConfirm,
     handleCancelConfirm,
     handleAddTags,
     handleRemoveTags,
@@ -2158,6 +2162,13 @@ function Extension() {
         selectedCount={selectedCount}
         isSubmitting={isSubmitting}
         onConfirm={handleUnarchiveConfirm}
+      />
+      <MarkAsPaidModal
+        open={activeModal === "markAsPaid"}
+        onClose={closeModal}
+        selectedCount={selectedCount}
+        isSubmitting={isSubmitting}
+        onConfirm={handleMarkAsPaidConfirm}
       />
       <MarkFulfilledModal
         open={activeModal === "markFulfilled"}

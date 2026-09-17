@@ -18,6 +18,7 @@ export type BulkModalName =
   | "addTags"
   | "removeTags"
   | "markFulfilled"
+  | "markAsPaid"
   | "reschedule"
   | "sendEmail"
   | "editDetails";
@@ -29,6 +30,7 @@ const ACTION_LABEL: Record<BulkActionName, { verb: string; ing: string }> = {
   tagsAdd: { verb: "updated (tags added)", ing: "Add tags" },
   tagsRemove: { verb: "updated (tags removed)", ing: "Remove tags" },
   markFulfilled: { verb: "marked as fulfilled", ing: "Mark as fulfilled" },
+  markAsPaid: { verb: "marked as paid", ing: "Mark as paid" },
   reschedule: { verb: "rescheduled", ing: "Update delivery slot" },
 };
 
@@ -126,6 +128,7 @@ export function useBulkActions(
 
   const handleArchiveConfirm = () => submitBulk("archive");
   const handleUnarchiveConfirm = () => submitBulk("unarchive");
+  const handleMarkAsPaidConfirm = () => submitBulk("markAsPaid");
 
   const handleCancelConfirm = () => {
     submitBulk("cancel", {
@@ -413,6 +416,7 @@ export function useBulkActions(
     setFulfillLalamoveOrderId,
     handleArchiveConfirm,
     handleUnarchiveConfirm,
+    handleMarkAsPaidConfirm,
     handleCancelConfirm,
     handleAddTags,
     handleRemoveTags,

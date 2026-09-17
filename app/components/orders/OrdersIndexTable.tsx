@@ -229,6 +229,11 @@ export function OrdersIndexTable({
       disabled: isSubmitting,
     },
     {
+      content: "Mark as paid",
+      onAction: () => onOpenBulkModal("markAsPaid"),
+      disabled: isSubmitting,
+    },
+    {
       content: "Add tags",
       onAction: () => onOpenBulkModal("addTags"),
       disabled: isSubmitting,

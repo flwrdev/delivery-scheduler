@@ -15,6 +15,8 @@
 // - archive/unarchive/tagsAdd/tagsRemove: naturally idempotent at Shopify.
 // - cancel: an "already cancelled" userError on re-execution is reported as
 //   success, not failure.
+// - markAsPaid: a "cannot be marked as paid" userError on re-execution (order
+//   already fully paid) is reported as success, not failure.
 // - markFulfilled: the fulfillmentOrders re-check finds nothing fulfillable on
 //   a re-run; when the order's displayFulfillmentStatus is FULFILLED that is
 //   reported as success ("Already fulfilled"), not failure.
@@ -47,6 +49,7 @@ export type BulkActionName =
   | "tagsAdd"
   | "tagsRemove"
   | "markFulfilled"
+  | "markAsPaid"
   | "reschedule";
 
 export const BULK_ACTION_NAMES: readonly BulkActionName[] = [
@@ -56,6 +59,7 @@ export const BULK_ACTION_NAMES: readonly BulkActionName[] = [
   "tagsAdd",
   "tagsRemove",
   "markFulfilled",
+  "markAsPaid",
   "reschedule",
 ];
 
@@ -113,6 +117,7 @@ export type BulkOpParams =
     }
   | { op: "tagsAdd"; tags: string[] }
   | { op: "tagsRemove"; tags: string[] }
+  | { op: "markAsPaid" }
   | {
       op: "markFulfilled";
       trackingUrl: string;
@@ -172,6 +177,15 @@ const ORDER_CANCEL_MUTATION = `
     ) {
       job { id }
       orderCancelUserErrors { field message code }
+    }
+  }
+`;
+
+const ORDER_MARK_AS_PAID_MUTATION = `
+  mutation OrderMarkAsPaid($input: OrderMarkAsPaidInput!) {
+    orderMarkAsPaid(input: $input) {
+      order { id }
+      userErrors { field message }
     }
   }
 `;
@@ -417,6 +431,29 @@ export async function executeBulkAction(
         "orderOpen",
         "userErrors",
       );
+    }
+  } else if (params.op === "markAsPaid") {
+    for (const id of orderIds) {
+      const before = results.length;
+      await runOne(
+        id,
+        ORDER_MARK_AS_PAID_MUTATION,
+        { input: { id } },
+        "orderMarkAsPaid",
+        "userErrors",
+      );
+      // Retry idempotency: an order already fully paid answers with a
+      // "cannot be marked as paid" userError on re-execution — that is a
+      // success (end state is already correct), not a failure.
+      const r = results[results.length - 1];
+      if (
+        results.length > before &&
+        !r.success &&
+        /cannot be marked as paid/i.test(r.message ?? "")
+      ) {
+        r.success = true;
+        r.message = "Already paid.";
+      }
     }
   } else if (params.op === "cancel") {
     for (const id of orderIds) {
