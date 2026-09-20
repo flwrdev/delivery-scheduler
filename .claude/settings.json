@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "brand-voice-check \"$CLAUDE_TOOL_OUTPUT_FILE\"",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  }
+}

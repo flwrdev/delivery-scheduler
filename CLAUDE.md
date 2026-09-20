@@ -6,7 +6,7 @@
 
 ## Mental model (verified against the code 2026-09-12)
 
-
+No comments that describe what code does — only why (non-obvious invariants, workarounds)
 
 ## Commands
 
