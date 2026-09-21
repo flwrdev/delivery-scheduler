@@ -3,11 +3,10 @@
   "private": false,
   "scripts": {
     "build": "react-router build",
-    "dev": "shopify app dev --config shopify.app.toml",
-    "dev:prod-preview": "shopify app dev --config shopify.app.production.toml",
+    "dev": "shopify app dev --config shopify.app.production.toml",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
-    "deploy": "echo Specify npm run deploy:dev or npm run deploy:prod -- a bare deploy is disabled to prevent hitting the wrong app && exit 1",
+    "deploy": "echo Use npm run deploy:prod -- a bare deploy is disabled to prevent hitting the wrong app && exit 1",
     "deploy:prod": "shopify app deploy --config shopify.app.production.toml --allow-updates",
     "config:use": "shopify app config use",
     "env": "shopify app env",

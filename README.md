@@ -44,8 +44,8 @@ npm run deploy:prod                                                     # app co
 ```
 
 ⚠️ Never run the bare `shopify app deploy` / `npm run deploy` — always use
-`npm run deploy:dev` or `npm run deploy:prod` explicitly. `shopify.app.toml` is
-the DEV config (default), `shopify.app.production.toml` is PROD. Full runbook:
+`npm run deploy:prod` explicitly. `shopify.app.production.toml` is the only app
+config. Full runbook:
 [docs/cloud-run-neon.md](docs/cloud-run-neon.md).
 
 
