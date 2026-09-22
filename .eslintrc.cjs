@@ -25,7 +25,6 @@ module.exports = {
     "extensions/**/shopify.d.ts",
     "extensions/*/generated/**",
     "order-design-file/**",
-    "_archive/**",
   ],
 
   // Base config
