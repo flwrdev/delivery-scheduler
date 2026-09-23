@@ -516,7 +516,6 @@ export function OrdersIndexTable({
               ))}
               {extraTags > 0 && (
                 // Stop the click so the row's open-panel handler doesn't also fire.
-                // eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events
                 <span onClick={(e) => e.stopPropagation()}>
                   <Button variant="plain" onClick={() => onShowTags(order.id)}>
                     {`+${extraTags}`}
