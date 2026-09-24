@@ -6,7 +6,7 @@ import {
   validateDeliverySelection,
   type DeliveryScheduleRules,
 } from "../lib/delivery-availability";
-import { isCustomTimeValue, resolveConfiguredSlotValue } from "../lib/slot-value";
+import { resolveConfiguredSlotValue } from "../lib/slot-value";
 
 export interface AdminGraphQLClient {
   graphql(
@@ -403,13 +403,6 @@ export function evaluateDeliverySyncStatus(
     checkoutTime,
   );
   if (validation.ok) {
-    return "ok";
-  }
-
-  // A merchant-typed time ("8PM", "8PM-9PM") is not a configured slot, so the
-  // customer validator reports slot_unknown after the date checks passed. No
-  // customer surface can produce such a value, so it is not an attention case.
-  if (validation.code === "slot_unknown" && isCustomTimeValue(timeSlot)) {
     return "ok";
   }
 

@@ -53,37 +53,6 @@ export function normalizeSlotValueForMatch(value: string | null | undefined): st
   return compact;
 }
 
-/**
- * Canonical form of a merchant-typed custom time: a single time ("8PM",
- * "8:30PM") or a range ("8PM-9PM"). Returns null when the value is not a
- * time in either shape. Configured slots are matched by the caller before
- * this runs, so a custom value is by construction one no customer surface
- * can produce.
- */
-export function normalizeCustomTimeValue(
-  value: string | null | undefined,
-): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const compact = value.trim().toUpperCase().replace(/\s+/g, "").replace(/–/g, "-");
-  const parts = compact.split("-");
-  if (parts.length === 1) {
-    return canonicalTimePart(parts[0]);
-  }
-  if (parts.length === 2) {
-    const start = canonicalTimePart(parts[0]);
-    const end = canonicalTimePart(parts[1]);
-    return start && end ? `${start}-${end}` : null;
-  }
-  return null;
-}
-
-export function isCustomTimeValue(value: string | null | undefined): boolean {
-  return normalizeCustomTimeValue(value) !== null;
-}
-
 export function slotValuesMatch(
   a: string | null | undefined,
   b: string | null | undefined,

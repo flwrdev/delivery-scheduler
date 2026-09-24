@@ -1,8 +1,4 @@
-import {
-  findSlotOverrideKey,
-  normalizeCustomTimeValue,
-  resolveConfiguredSlotValue,
-} from "./slot-value";
+import { findSlotOverrideKey, resolveConfiguredSlotValue } from "./slot-value";
 
 export interface DeliveryScheduleSlot {
   display: string;
@@ -613,13 +609,9 @@ export function isSlotAvailable(
 export type MerchantRescheduleValidationResult =
   | {
       ok: true;
-      // The value to write: the configured slot value, or the canonical form
-      // of a merchant-typed custom time ("8PM", "8PM-9PM").
-      slotValue: string;
-      customTime: boolean;
       // Capacity is merchant ops policy, not a hard gate (REC-4): the caller
       // warns and lets the merchant explicitly override. null = no capacity
-      // configured for this date+slot, and always null for a custom time.
+      // configured for this date+slot.
       capacity: DeliveryScheduleCapacity | null;
     }
   | {
@@ -646,29 +638,22 @@ export function validateMerchantRescheduleSelection(
     };
   }
 
+  // Same §4.2 resolution as the customer validator: match tolerantly, then use
+  // the configured value for the blocked/capacity lookups below.
+  const slotValue = resolveConfiguredSlotValue(rules, rawSlotValue);
+  if (slotValue == null) {
+    return {
+      ok: false,
+      code: "slot_unknown",
+      message: "Selected time slot is not one of the configured slots.",
+    };
+  }
+
   if (isDateBlocked(rules, dateStr)) {
     return {
       ok: false,
       code: "date_blocked",
       message: "That date is blocked in the delivery settings.",
-    };
-  }
-
-  // Same §4.2 resolution as the customer validator: match tolerantly, then use
-  // the configured value for the blocked/capacity lookups below.
-  const slotValue = resolveConfiguredSlotValue(rules, rawSlotValue);
-  if (slotValue == null) {
-    // A time the merchant typed (Messenger / manual orders) that is not a
-    // configured slot. No per-slot block or capacity entry can exist for it.
-    const customTime = normalizeCustomTimeValue(rawSlotValue);
-    if (customTime != null) {
-      return { ok: true, slotValue: customTime, customTime: true, capacity: null };
-    }
-    return {
-      ok: false,
-      code: "slot_unknown",
-      message:
-        "Time slot must be one of the configured slots or a time like 8PM or 8PM-9PM.",
     };
   }
 
@@ -681,12 +666,7 @@ export function validateMerchantRescheduleSelection(
   }
 
   const capacity = getSlotCapacityEntry(rules, dateStr, slotValue);
-  return {
-    ok: true,
-    slotValue,
-    customTime: false,
-    capacity: capacity ? { ...capacity } : null,
-  };
+  return { ok: true, capacity: capacity ? { ...capacity } : null };
 }
 
 export function getTodayAvailabilityMessage(

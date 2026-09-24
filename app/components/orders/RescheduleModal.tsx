@@ -9,14 +9,8 @@ import {
   TextField,
 } from "@shopify/polaris";
 import type { RescheduleRulesData } from "../../routes/app.orders_.reschedule-rules";
-import {
-  findSlotOverrideKey,
-  isCustomTimeValue,
-  slotValuesMatch,
-} from "../../lib/slot-value";
+import { findSlotOverrideKey, slotValuesMatch } from "../../lib/slot-value";
 import { getShopLocalDate } from "../../lib/delivery-availability";
-
-const CUSTOM_SLOT = "__custom__";
 
 // "Update delivery slot" modal (Phase 4) — one date+slot applied to N target
 // orders. Serves both the bulk-actions bar (selection) and the details
@@ -67,9 +61,6 @@ export function RescheduleModal({
 }: RescheduleModalProps) {
   const [date, setDate] = useState("");
   const [slot, setSlot] = useState("");
-  // Merchant-typed time for Messenger orders ("8PM", "8PM-9PM"); used when
-  // the Select is on CUSTOM_SLOT.
-  const [customTime, setCustomTime] = useState("");
   // Default ON: a merchant-side move is the one schedule change the customer
   // did not make themselves, so silence is the surprising option.
   const [notifyCustomer, setNotifyCustomer] = useState(true);
@@ -87,24 +78,10 @@ export function RescheduleModal({
       const single = targets.length === 1 ? targets[0] : null;
       setDate(single?.currentDate ?? "");
       setSlot(single?.currentSlot ?? "");
-      setCustomTime("");
       setLastSubmitted(null);
     }
     wasOpenRef.current = open;
   }, [open, targets]);
-
-  // A prefilled slot that is not one of the configured slots is a custom time
-  // from a Messenger order: show it in the custom field instead of a blank Select.
-  useEffect(() => {
-    if (!rules || !slot || slot === CUSTOM_SLOT) return;
-    const configured = rules.slots.some((s) => slotValuesMatch(s.value, slot));
-    if (!configured) {
-      setCustomTime(slot);
-      setSlot(CUSTOM_SLOT);
-    }
-  }, [rules, slot]);
-
-  const effectiveSlot = slot === CUSTOM_SLOT ? customTime.trim() : slot;
 
   const dateBlocked = Boolean(
     rules && date && rules.disabledDates.includes(date),
@@ -133,11 +110,7 @@ export function RescheduleModal({
         disabled: blocked,
       };
     });
-    return [
-      { label: "Select a time slot", value: "", disabled: true },
-      ...options,
-      { label: "Custom time (Messenger orders)…", value: CUSTOM_SLOT },
-    ];
+    return [{ label: "Select a time slot", value: "", disabled: true }, ...options];
   }, [rules, date]);
 
   // Client-side projected load (REC-4): orders already in the target
@@ -147,11 +120,11 @@ export function RescheduleModal({
   const clientCapacity = useMemo<RescheduleCapacityInfo | null>(() => {
     const caps = rules?.slotCapacity?.[date];
     const capKey =
-      caps && effectiveSlot ? findSlotOverrideKey(Object.keys(caps), effectiveSlot) : null;
+      caps && slot ? findSlotOverrideKey(Object.keys(caps), slot) : null;
     const cap = capKey == null ? undefined : caps?.[capKey];
     if (!cap) return null;
     const moving = targets.filter(
-      (t) => t.currentDate !== date || !slotValuesMatch(t.currentSlot, effectiveSlot),
+      (t) => t.currentDate !== date || !slotValuesMatch(t.currentSlot, slot),
     ).length;
     return {
       capacity: Number(cap.capacity),
@@ -159,7 +132,7 @@ export function RescheduleModal({
       moving,
       projected: Number(cap.booked) + moving,
     };
-  }, [rules, date, effectiveSlot, targets]);
+  }, [rules, date, slot, targets]);
 
   // Administrative override deliberately allows any date (§5) — but a PAST
   // date is almost always a typo'd year, and the order would quietly leave
@@ -173,7 +146,7 @@ export function RescheduleModal({
     serverCapacity &&
       lastSubmitted &&
       lastSubmitted.date === date &&
-      lastSubmitted.slot === effectiveSlot,
+      lastSubmitted.slot === slot,
   );
   const capacityWarning = serverWarningActive
     ? serverCapacity
@@ -189,23 +162,20 @@ export function RescheduleModal({
       ? `order ${targets[0].name}`
       : `${targetCount} orders`;
   const slotBlocked = Boolean(
-    effectiveSlot &&
-      findSlotOverrideKey(rules?.disabledSlots?.[date] ?? [], effectiveSlot) != null,
+    slot && findSlotOverrideKey(rules?.disabledSlots?.[date] ?? [], slot) != null,
   );
-  const customTimeInvalid = slot === CUSTOM_SLOT && customTime.trim() !== "" && !isCustomTimeValue(customTime);
   const canSubmit =
     !isSubmitting &&
     targetCount > 0 &&
     /^\d{4}-\d{2}-\d{2}$/.test(date) &&
-    Boolean(effectiveSlot) &&
-    !customTimeInvalid &&
+    Boolean(slot) &&
     !dateBlocked &&
     !slotBlocked &&
     rules !== null;
 
   const handleConfirm = () => {
-    setLastSubmitted({ date, slot: effectiveSlot });
-    onConfirm(date, effectiveSlot, Boolean(capacityWarning), notifyCustomer);
+    setLastSubmitted({ date, slot });
+    onConfirm(date, slot, Boolean(capacityWarning), notifyCustomer);
   };
 
   return (
@@ -280,21 +250,10 @@ export function RescheduleModal({
                 : undefined
             }
           />
-          {slot === CUSTOM_SLOT && (
-            <TextField
-              label="Custom time"
-              value={customTime}
-              onChange={setCustomTime}
-              autoComplete="off"
-              placeholder="8PM or 8PM-9PM"
-              error={customTimeInvalid ? "Enter a time like 8PM, 8:30PM, or 8PM-9PM." : undefined}
-              helpText="For Messenger orders with a time outside the configured slots. Saved as typed, in the same format as the slot tags."
-            />
-          )}
           {capacityWarning && (
             <Banner tone="warning" title="This slot will exceed its capacity">
               <Text as="p">
-                {date} {effectiveSlot} is at {capacityWarning.booked}/
+                {date} {slot} is at {capacityWarning.booked}/
                 {capacityWarning.capacity}. Moving {capacityWarning.moving}{" "}
                 {capacityWarning.moving === 1 ? "order" : "orders"} puts it at{" "}
                 {capacityWarning.projected}/{capacityWarning.capacity}.

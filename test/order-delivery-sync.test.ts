@@ -94,21 +94,6 @@ describe("evaluateDeliverySyncStatus — checkout-time semantics (DEF-7)", () =>
     ).toBe("attention:slot_unknown");
   });
 
-  it("treats a merchant-typed custom time as ok once the date checks pass", () => {
-    expect(
-      evaluateDeliverySyncStatus(rules, "2026-07-20", "8PM", CHECKOUT),
-    ).toBe("ok");
-    expect(
-      evaluateDeliverySyncStatus(rules, "2026-07-20", "8:00 PM - 9:00 PM", CHECKOUT),
-    ).toBe("ok");
-  });
-
-  it("still flags a custom time on a blocked date", () => {
-    expect(
-      evaluateDeliverySyncStatus(rules, "2026-07-21", "8PM", CHECKOUT),
-    ).toBe("attention:date_blocked");
-  });
-
   it("flags an over-capacity slot as attention:capacity (advisory, §6.4)", () => {
     expect(
       evaluateDeliverySyncStatus(rules, "2026-07-19", "9AM-12PM", CHECKOUT),

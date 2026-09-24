@@ -887,18 +887,17 @@ export const action = async ({
     // (resched lock, ≥2-days, FULFILLED, cutoff/prep window) deliberately do
     // not. Capacity is warn + explicit confirm override (REC-4).
     const date = String(fd.get("date") || "").trim();
-    const timeSlotInput = String(fd.get("timeSlot") || "").trim();
+    const timeSlot = String(fd.get("timeSlot") || "").trim();
     const override = fd.get("capacityOverride") === "1";
 
     const rules = await getScheduleRulesWithBookedCounts(session.shop, admin);
-    const check = validateMerchantRescheduleSelection(rules, date, timeSlotInput);
+    const check = validateMerchantRescheduleSelection(rules, date, timeSlot);
     if (!check.ok) {
       return Response.json(
         { ...empty, message: check.message },
         { status: 400 },
       );
     }
-    const timeSlot = check.slotValue;
 
     if (check.capacity) {
       // Capacity projection needs current order state; the EXECUTOR re-reads

@@ -73,7 +73,7 @@ describe("validateMerchantRescheduleSelection — same tolerant resolution", () 
       "2026-07-19",
       "9:00AM - 12:00PM",
     );
-    expect(result).toMatchObject({ ok: true, customTime: false, capacity: { capacity: 1, booked: 1 } });
+    expect(result).toEqual({ ok: true, capacity: { capacity: 1, booked: 1 } });
   });
 
   it("blocks tolerant variants on a blocked slot date", () => {
@@ -139,7 +139,7 @@ describe("override keys that drift from the configured slot value", () => {
       "2026-07-19",
       "9AM-12PM",
     );
-    expect(result).toMatchObject({ ok: true, customTime: false, capacity: { capacity: 1, booked: 1 } });
+    expect(result).toEqual({ ok: true, capacity: { capacity: 1, booked: 1 } });
   });
 
   it("blocks the merchant path on a drifted blocked-slot key", () => {
@@ -164,6 +164,6 @@ describe("override keys that drift from the configured slot value", () => {
 
     expect(
       validateMerchantRescheduleSelection(bothSpellings, "2026-07-19", "9AM-12PM"),
-    ).toMatchObject({ ok: true, customTime: false, capacity: { capacity: 1, booked: 1 } });
+    ).toEqual({ ok: true, capacity: { capacity: 1, booked: 1 } });
   });
 });
