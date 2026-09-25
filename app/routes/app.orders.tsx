@@ -75,12 +75,6 @@ import { handleEditDetailsOp } from "../services/update-order-contact.server";
 import { handleMarkRescheduleSeenOp } from "../services/reschedule-seen.server";
 import type { AdminGraphQLClient } from "../services/order-delivery-metafields.server";
 import {
-  getDeliverySyncIssues,
-  retryDeliverySyncIssues,
-  type DeliverySyncIssueSummary,
-} from "../services/delivery-sync-task.server";
-import {
-  BULK_INLINE_MAX,
   MAX_SELECTED_ORDER_IDS,
   executeBulkAction,
   fetchRescheduleOrderStates,
@@ -92,11 +86,6 @@ import {
   type BulkActionResponse,
   type BulkOpParams,
 } from "../services/bulk-actions.server";
-import {
-  createBulkActionJob,
-  runBulkJobToCompletion,
-} from "../services/bulk-action-jobs.server";
-import { enqueueBulkActionTask } from "../services/ops-queue.server";
 import prisma from "../db.server";
 import {
   getScheduleRules,
@@ -428,8 +417,6 @@ type LoaderData = {
   mapsApiKey: string;
   /** Meta Page ID for the Messenger inbox deep link; "" hides the link. */
   metaPageId: string;
-  /** Delivery-sync tasks stuck/failed for this shop (ADR-22) — drives the ops banner; degrades to zero on DB trouble. */
-  syncIssues: DeliverySyncIssueSummary;
   /** Customer reschedules from the last 48 h not yet marked Seen — the "Rescheduled today" banner; degrades to empty. */
   recentReschedules: RecentRescheduleItem[];
   /** True when the page was server-scoped by a delivery-date tag (dated tab or date filter) — other tabs' counts are then unknowable. */
@@ -595,7 +582,7 @@ export const loader = async ({
   // order ids, grouped and attached below. Panel-timeline garnish, not
   // page-critical: a Neon cold-start rejection here must degrade to an empty
   // list, never 500 the whole ops page — and on the Today view this loader
-  // re-runs every 5 minutes, so the exposure is constant.
+  // re-runs every hour, so the exposure is constant.
   const orderIds = orders.map((o) => o.id);
   let emailLogRows: Array<{
     shopifyOrderId: string;
@@ -638,19 +625,6 @@ export const loader = async ({
     shopLocal,
   );
 
-  // Sync-issue banner count (ADR-22): same guarded posture as the enrichment
-  // above — banner garnish, never page-critical.
-  let syncIssues: DeliverySyncIssueSummary = { count: 0, orderNames: [] };
-  try {
-    syncIssues = await getDeliverySyncIssues(session.shop);
-  } catch (error) {
-    console.warn(
-      `[orders loader] sync-issue count skipped: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-
   return Response.json(
     {
       orders,
@@ -663,7 +637,6 @@ export const loader = async ({
       sortParam,
       todayISO,
       pageSize,
-      syncIssues,
       recentReschedules,
       dateScoped,
       // Client-exposed by design (Maps JS SDK requires it in the browser) —
@@ -742,37 +715,6 @@ export const action = async ({
     return handleEditDetailsOp(admin, fd, timezone);
   }
 
-  // Retry stuck delivery syncs (ADR-22): re-arms failed/stuck DeliverySyncTask
-  // rows and enqueues a worker task each. Carries no orderId selection, so it
-  // dispatches before the bulk machinery like sendEmail/editDetails.
-  if (opRaw === "retryDeliverySync") {
-    try {
-      const { retried } = await retryDeliverySyncIssues(session.shop);
-      return Response.json({
-        ok: true,
-        action: "retryDeliverySync",
-        message:
-          retried > 0
-            ? `Retrying delivery sync for ${retried} order${retried === 1 ? "" : "s"} in the background.`
-            : "Nothing left to retry.",
-        retried,
-      });
-    } catch (error) {
-      console.warn(
-        `[orders action] retryDeliverySync failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      // ADR-11: upstream trouble is 200 + ok:false, never a 5xx.
-      return Response.json({
-        ok: false,
-        action: "retryDeliverySync",
-        message: "Could not restart the delivery sync. Try again in a moment.",
-        retried: 0,
-      });
-    }
-  }
-
   const op = isBulkActionName(opRaw) ? opRaw : "";
   const orderIds = Array.from(
     new Set(
@@ -810,12 +752,9 @@ export const action = async ({
     );
   }
 
-  // ── Parse + validate op params (ADR-22 Phase B): validation happens BEFORE
-  //    the inline/job split, so a BulkOpParams is valid by construction
-  //    wherever it ends up — executed inline below, or snapshotted into a
-  //    BulkActionJob for the Cloud Tasks worker. The execution itself lives in
-  //    executeBulkAction (services/bulk-actions.server.ts), shared by both
-  //    paths so they cannot drift. ──────────────────────────────────────────
+  // ── Parse + validate op params: validation happens BEFORE execution, so a
+  //    BulkOpParams is valid by construction inside executeBulkAction
+  //    (services/bulk-actions.server.ts). ────────────────────────────────────
   let opParams: BulkOpParams;
   if (op === "archive" || op === "unarchive") {
     opParams = { op };
@@ -866,11 +805,6 @@ export const action = async ({
   } else if (op === "markFulfilled") {
     const trackingUrl = String(fd.get("trackingUrl") || "").trim();
     const notifyCustomer = fd.get("notifyCustomer") === "1";
-    // ADR-16: only meaningful for a single order — the modal only submits
-    // this when exactly one order is selected, but re-check server-side
-    // rather than trust the client.
-    const lalamoveOrderId =
-      orderIds.length === 1 ? String(fd.get("lalamoveOrderId") || "").trim() : "";
     if (trackingUrl && !isHttpTrackingUrl(trackingUrl)) {
       return Response.json(
         {
@@ -880,7 +814,7 @@ export const action = async ({
         { status: 400 },
       );
     }
-    opParams = { op: "markFulfilled", trackingUrl, notifyCustomer, lalamoveOrderId };
+    opParams = { op: "markFulfilled", trackingUrl, notifyCustomer };
   } else {
     // Merchant reschedule = administrative override (§5, ADR-10). Only the
     // data-integrity checks bind this path; the customer self-service gates
@@ -960,36 +894,6 @@ export const action = async ({
       requestedAt: new Date().toISOString(),
       shopTimezone: rules.timezone,
     };
-  }
-
-  // ── Inline vs job (ADR-22 Phase B; threshold = merchant decision
-  //    2026-08-26): small selections stay synchronous exactly as before,
-  //    large ones become a job the client polls — the response never again
-  //    outlives the embedded fetcher / Cloudflare window (S4). ─────────────
-  if (orderIds.length > BULK_INLINE_MAX) {
-    const { jobId } = await createBulkActionJob(session.shop, opParams, orderIds);
-    const enqueued = await enqueueBulkActionTask({ jobId });
-    if (!enqueued.ok) {
-      if (!enqueued.notConfigured) {
-        console.warn(
-          `[orders action] bulk-job enqueue failed (${enqueued.error}); running in-process.`,
-        );
-      }
-      // Local dev (no queue) or an enqueue hiccup: run in-process WITHOUT
-      // awaiting — the response must stay fast (the whole point of Phase B);
-      // the hourly sweep rescues the job if this process dies mid-run.
-      void runBulkJobToCompletion(jobId);
-    }
-    return Response.json({
-      ok: true,
-      action: op,
-      mode: "job",
-      jobId,
-      total: orderIds.length,
-      message: `Processing ${orderIds.length} orders in the background.`,
-      results: [],
-      summary: { ok: 0, failed: 0 },
-    } satisfies BulkActionResponse);
   }
 
   const results: BulkActionItemResult[] = await executeBulkAction(
@@ -1188,8 +1092,6 @@ function Extension() {
     setFulfillTrackingUrl,
     fulfillNotify,
     setFulfillNotify,
-    fulfillLalamoveOrderId,
-    setFulfillLalamoveOrderId,
     handleArchiveConfirm,
     handleUnarchiveConfirm,
     handleMarkAsPaidConfirm,
@@ -1197,8 +1099,6 @@ function Extension() {
     handleAddTags,
     handleRemoveTags,
     handleMarkFulfilled,
-    activeJob,
-    jobProgress,
   } = useBulkActions(selectedResources, clearSelection, removeSelectedResources);
 
   // Shared row-level tags modal + KPI items-to-prepare modal — plain React
@@ -1206,7 +1106,7 @@ function Extension() {
   const [tagsModalOrderId, setTagsModalOrderId] = useState<string | null>(null);
   const [kpiProductsOpen, setKpiProductsOpen] = useState(false);
 
-  // ── Smart auto-refresh (§6, Phase 3) — 30-min default / 5-min Today cadence
+  // ── Smart auto-refresh (§6, Phase 3) — 30-min default / 60-min Today cadence
   //    via useRevalidator (URL state preserved; the background refresh shows
   //    no loading bar — only the manual Refresh button spins). Paused while
   //    any modal is open or any action fetcher is in flight (useFetchers sees
@@ -1243,13 +1143,8 @@ function Extension() {
     dismiss: dismissOrdersDiff,
   } = useOrdersDiff(displayedOrders, ordersViewKey);
 
-  // ADR-22 sync-issue banner: dedicated fetcher — it counts into
-  // actionInFlight via useFetchers above, so the smart refresh pauses while a
-  // retry runs, and its completion revalidates the loader (banner updates).
-  const syncRetryFetcher = useFetcher<{ ok: boolean; message: string }>();
-
   // "Rescheduled today" banner: Seen goes through its own fetcher (it counts
-  // into actionInFlight like the retry above). The acknowledged row hides
+  // into actionInFlight). The acknowledged row hides
   // optimistically while the submit + revalidation run, then the loader stops
   // returning it — no client-side list surgery.
   const rescheduleSeenFetcher = useFetcher<{ ok: boolean; message: string }>();
@@ -1866,36 +1761,6 @@ function Extension() {
           </Banner>
         )}
 
-        {/* ── Delivery-sync issue banner (ADR-22): failed/stuck webhook syncs.
-            Not dismissible on purpose — it reports a real capacity-count gap
-            and disappears on its own once the sync completes. ───────────── */}
-        {loaderData.syncIssues.count > 0 && (
-          <Banner
-            tone="warning"
-            title={`Delivery info has not synced for ${loaderData.syncIssues.count} order${
-              loaderData.syncIssues.count === 1 ? "" : "s"
-            }`}
-            action={{
-              content: "Retry sync",
-              loading: syncRetryFetcher.state !== "idle",
-              onAction: () =>
-                syncRetryFetcher.submit(
-                  { _action: "retryDeliverySync" },
-                  { method: "post" },
-                ),
-            }}
-          >
-            <Text as="p">
-              {loaderData.syncIssues.orderNames.join(", ")}
-              {loaderData.syncIssues.count > loaderData.syncIssues.orderNames.length
-                ? " and more"
-                : ""}{" "}
-              — booked-slot counts may be undercounting these orders until the
-              sync completes. Retry runs in the background.
-            </Text>
-          </Banner>
-        )}
-
         {/* ── Recent customer reschedules (2026-09-04) — on EVERY tab, because
             the moved order has by definition just left the view being looked
             at. Rows clear on Seen or after 48 h; no dismiss on purpose. ──── */}
@@ -1924,26 +1789,6 @@ function Extension() {
               Found in All:{" "}
               {hiddenSearchMatches.map((m) => `${m.name} · ${m.when}`).join(", ")}
               {orders.length > hiddenSearchMatches.length ? " and more" : ""}.
-            </Text>
-          </Banner>
-        )}
-
-        {/* ── Background bulk-job progress (ADR-22 Phase B) — a large
-            selection runs server-side, chunk by chunk; this banner tracks the
-            poll until the completion toast fires ─────────────────────────── */}
-        {activeJob && (
-          <Banner
-            tone="info"
-            title={`Processing ${activeJob.total} order${
-              activeJob.total === 1 ? "" : "s"
-            } in the background`}
-          >
-            <Text as="p">
-              {jobProgress && jobProgress.done > 0
-                ? `${jobProgress.done} of ${jobProgress.total} processed…`
-                : "Starting…"}{" "}
-              The job continues on the server even if this page closes — the
-              result toast just needs the page open.
             </Text>
           </Banner>
         )}
@@ -2179,8 +2024,6 @@ function Extension() {
         setFulfillTrackingUrl={setFulfillTrackingUrl}
         fulfillNotify={fulfillNotify}
         setFulfillNotify={setFulfillNotify}
-        fulfillLalamoveOrderId={fulfillLalamoveOrderId}
-        setFulfillLalamoveOrderId={setFulfillLalamoveOrderId}
         onConfirm={handleMarkFulfilled}
       />
       <RescheduleModal

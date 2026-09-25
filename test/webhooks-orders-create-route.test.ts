@@ -1,37 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// ADR-22 Phase A: the orders/create webhook is now a THIN receiver — extract,
-// upsert the durable task row, enqueue, ack. These tests pin its failure
-// contract: the ONLY intentional non-200 is the task-row upsert failing
-// (Shopify's own redelivery is then the fallback); everything after the row
-// exists is best-effort. Payload extraction (attributes, COD detection,
-// checkout time) runs REAL — only the shopify/auth, task-service, and queue
-// seams are mocked.
+// Payload extraction (attributes, COD detection, checkout time) runs real;
+// only the Shopify auth and sync seams are mocked.
 
-const { webhookAuthMock, upsertMock, processMock, enqueueMock } = vi.hoisted(() => ({
+const { webhookAuthMock, syncMock } = vi.hoisted(() => ({
   webhookAuthMock: vi.fn(),
-  upsertMock: vi.fn(),
-  processMock: vi.fn(),
-  enqueueMock: vi.fn(),
+  syncMock: vi.fn(),
 }));
 
 vi.mock("../app/shopify.server", () => ({
   authenticate: { webhook: webhookAuthMock },
 }));
 
-vi.mock("../app/services/delivery-sync-task.server", () => ({
-  upsertDeliverySyncTask: upsertMock,
-  processDeliverySyncTask: processMock,
-}));
-
-vi.mock("../app/services/ops-queue.server", () => ({
-  enqueueDeliverySyncTask: enqueueMock,
+vi.mock("../app/services/order-delivery-sync.server", () => ({
+  syncOrderDelivery: syncMock,
 }));
 
 import { action } from "../app/routes/webhooks.orders.create";
 
 const SHOP = "flowercart-dev.myshopify.com";
 const ORDER_GID = "gid://shopify/Order/111";
+const admin = { graphql: vi.fn() };
 
 function deliveryPayload(overrides: Record<string, unknown> = {}) {
   return {
@@ -47,8 +36,11 @@ function deliveryPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function callAction(payload: Record<string, unknown>): Promise<Response> {
-  webhookAuthMock.mockResolvedValue({ payload, shop: SHOP });
+async function callAction(
+  payload: Record<string, unknown>,
+  context: Record<string, unknown> = { admin },
+): Promise<Response> {
+  webhookAuthMock.mockResolvedValue({ payload, shop: SHOP, ...context });
   const request = new Request("https://app.example.com/webhooks/orders/create", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -58,62 +50,50 @@ async function callAction(payload: Record<string, unknown>): Promise<Response> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  upsertMock.mockResolvedValue({ id: "task-1" });
-  enqueueMock.mockResolvedValue({ ok: true, taskName: "t" });
-  processMock.mockResolvedValue({ status: "done" });
+  syncMock.mockResolvedValue({ ok: true, errors: [] });
 });
 
-describe("webhooks.orders.create — thin receiver", () => {
-  it("acks without a row when there is nothing to sync (no attrs, not COD)", async () => {
+describe("webhooks.orders.create", () => {
+  it("acks without syncing when there is nothing to sync (no attrs, not COD)", async () => {
     const res = await callAction(
       deliveryPayload({ note_attributes: [], payment_gateway_names: ["shopify_payments"] }),
     );
     expect(res.status).toBe(200);
-    expect(upsertMock).not.toHaveBeenCalled();
-    expect(enqueueMock).not.toHaveBeenCalled();
+    expect(syncMock).not.toHaveBeenCalled();
   });
 
-  it("upserts the durable row with the FROZEN checkout clock, then enqueues", async () => {
+  it("syncs inline with the order's checkout time", async () => {
     const res = await callAction(deliveryPayload());
     expect(res.status).toBe(200);
-    expect(upsertMock).toHaveBeenCalledWith({
+    expect(syncMock).toHaveBeenCalledWith(admin, {
       shop: SHOP,
-      shopifyOrderId: ORDER_GID,
-      orderName: "#1046",
+      orderId: ORDER_GID,
       deliveryDate: "2026-08-27",
       timeSlot: "9AM-12PM",
       // 4:50 PM Manila — the order's created_at, never webhook processing time.
       checkoutTime: new Date("2026-08-26T08:50:00.000Z"),
       needsCodFee: true,
     });
-    expect(enqueueMock).toHaveBeenCalledWith({ taskId: "task-1" });
-    expect(processMock).not.toHaveBeenCalled(); // queue took it — no inline work
   });
 
-  it("records a COD-only order (no delivery attrs) as a fee-only task", async () => {
+  it("syncs a COD-only order (no delivery attrs) as fee-only", async () => {
     const res = await callAction(deliveryPayload({ note_attributes: [] }));
     expect(res.status).toBe(200);
-    expect(upsertMock).toHaveBeenCalledWith(
+    expect(syncMock).toHaveBeenCalledWith(
+      admin,
       expect.objectContaining({ deliveryDate: null, timeSlot: null, needsCodFee: true }),
     );
   });
 
-  it("processes inline when no queue is configured (dev fallback)", async () => {
-    enqueueMock.mockResolvedValue({ ok: false, error: "nc", notConfigured: true });
+  it("answers 500 when a step fails so Shopify redelivers", async () => {
+    syncMock.mockResolvedValue({ ok: false, errors: ["tags: network"] });
     const res = await callAction(deliveryPayload());
-    expect(res.status).toBe(200);
-    expect(processMock).toHaveBeenCalledWith("task-1");
+    expect(res.status).toBe(500);
   });
 
-  it("still acks 200 when the inline fallback throws — the sweep is the backstop", async () => {
-    enqueueMock.mockResolvedValue({ ok: false, error: "boom", notConfigured: false });
-    processMock.mockRejectedValue(new Error("neon dropped"));
-    const res = await callAction(deliveryPayload());
+  it("acks 200 without syncing when there is no offline session", async () => {
+    const res = await callAction(deliveryPayload(), { admin: undefined });
     expect(res.status).toBe(200);
-  });
-
-  it("throws when the task-row upsert fails — Shopify redelivery is the fallback", async () => {
-    upsertMock.mockRejectedValue(new Error("db down"));
-    await expect(callAction(deliveryPayload())).rejects.toThrow("db down");
+    expect(syncMock).not.toHaveBeenCalled();
   });
 });
