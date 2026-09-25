@@ -121,28 +121,4 @@ describe("syncOrderDelivery", () => {
     expect(rulesDetailedMock).not.toHaveBeenCalled();
     expect(syncTagMock).not.toHaveBeenCalled();
   });
-
-  it("shares one run between overlapping deliveries of the same order", async () => {
-    let release: () => void = () => {};
-    codFeeMock.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = () => resolve({ ok: true, skipped: false, errors: [] });
-        }),
-    );
-    const cod = input({ deliveryDate: null, timeSlot: null, needsCodFee: true });
-    const first = syncOrderDelivery(admin, cod);
-    const second = syncOrderDelivery(admin, cod);
-    await vi.waitFor(() => expect(codFeeMock).toHaveBeenCalledTimes(1));
-    release();
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      { ok: true, errors: [] },
-      { ok: true, errors: [] },
-    ]);
-    expect(codFeeMock).toHaveBeenCalledTimes(1);
-
-    codFeeMock.mockResolvedValue({ ok: true, skipped: true, errors: [] });
-    await syncOrderDelivery(admin, cod);
-    expect(codFeeMock).toHaveBeenCalledTimes(2);
-  });
 });

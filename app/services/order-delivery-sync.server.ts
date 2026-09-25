@@ -28,7 +28,7 @@ function errorMessage(error: unknown): string {
 // Every step is idempotent on the Shopify side (metafieldsSet overwrites,
 // tagsAdd skips existing tags, applyCodFeeToOrder scans for the fee SKU
 // before adding), so a Shopify webhook redelivery can safely re-run it.
-async function runOrderDeliverySync(
+export async function syncOrderDelivery(
   admin: AdminGraphQLClient,
   input: OrderDeliverySyncInput,
 ): Promise<OrderDeliverySyncResult> {
@@ -97,24 +97,4 @@ async function runOrderDeliverySync(
   }
 
   return { ok: errors.length === 0, errors };
-}
-
-// applyCodFeeToOrder is check-then-add, so two overlapping runs for the same
-// order could both add the fee. Overlapping deliveries that reach the same
-// instance share one run; this does not span Cloud Run instances.
-const inFlight = new Map<string, Promise<OrderDeliverySyncResult>>();
-
-export function syncOrderDelivery(
-  admin: AdminGraphQLClient,
-  input: OrderDeliverySyncInput,
-): Promise<OrderDeliverySyncResult> {
-  const key = `${input.shop}|${input.orderId}`;
-  const existing = inFlight.get(key);
-  if (existing) return existing;
-
-  const run = runOrderDeliverySync(admin, input).finally(() => {
-    inFlight.delete(key);
-  });
-  inFlight.set(key, run);
-  return run;
 }
