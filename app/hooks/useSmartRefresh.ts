@@ -7,7 +7,7 @@ import { useRevalidator } from "react-router";
 // is deliberately invisible (no loading bar; only the manual Refresh button
 // shows a spinner).
 //
-// Cadence: 30 min default, 5 min on the Today view. A tick is suppressed and
+// Cadence: 30 min default, 60 min on the Today view. A tick is suppressed and
 // QUEUED while the merchant is mid-task (`paused` — any modal open or an
 // action fetcher in flight) or the browser tab is hidden; the queued tick
 // fires once the blocker lifts. Any loader settle (navigation, React
@@ -16,7 +16,7 @@ import { useRevalidator } from "react-router";
 // already fresh at that point.
 
 const DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
-const TODAY_INTERVAL_MS = 5 * 60 * 1000;
+const TODAY_INTERVAL_MS = 60 * 60 * 1000;
 
 export interface UseSmartRefreshOptions {
   isTodayView: boolean;

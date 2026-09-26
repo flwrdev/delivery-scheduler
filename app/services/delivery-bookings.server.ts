@@ -9,21 +9,7 @@
 // DEF-15). The raw matched bookings are memoized in-process per shop for a
 // short TTL (never persisted), which also makes exclude-self-on-reschedule
 // free (audit DEF-14).
-//
-// PENDING-SYNC OVERLAY (ADR-22 Phase C, 2026-08-27): a paid order whose
-// orders/create sync has not landed yet has NO `custom.date` metafield, so the
-// scan alone undercounts it — the last piece of review finding M1. The overlay
-// adds each shop's still-pending DeliverySyncTask rows (only those whose
-// metafields step is NOT done — once metafields are written the scan sees the
-// order itself) as ordinary bookings, deduped against the scan by order id so
-// a task whose metafields landed mid-cache-window can never double-count.
-// ADDITIVE to the live scan, never a cache of it: the overlay is one cheap
-// Postgres read, fresh on every call, and fails OPEN (scan-only counts +
-// warn) so a Neon hiccup can never break rules loading. Overlay rows ride the
-// same DeliveryBooking shape, so deriveBookedCounts' excludeOrderId applies
-// to them for free.
 
-import prisma from "../db.server";
 import type { DeliveryScheduleRules } from "../lib/delivery-availability";
 import { normalizeSlotValueForMatch } from "../lib/slot-value";
 
@@ -338,78 +324,10 @@ async function fetchBookingsForDates(
 }
 
 /**
- * ADR-22 Phase C: pending delivery-sync tasks that will occupy a tracked
- * date+slot once their sync lands. Query-level filters carry the semantics:
- * `status: "pending"` (done tasks are on the order; failed tasks sit on the
- * ops banner, not in capacity) and `metafieldsDone: false` (once the metafield
- * step succeeded, the SCAN counts the order — counting the task too would
- * double-count). Fail-open: any Postgres trouble returns [] with a warn, so
- * counts degrade to the scan alone (the pre-Phase-C baseline), never break.
- */
-async function fetchPendingSyncBookings(
-  shop: string,
-  rules: DeliveryScheduleRules,
-  trackedDates: string[],
-): Promise<DeliveryBooking[]> {
-  try {
-    const rows = await prisma.deliverySyncTask.findMany({
-      where: {
-        shop,
-        status: "pending",
-        metafieldsDone: false,
-        deliveryDate: { in: trackedDates },
-      },
-      select: { shopifyOrderId: true, deliveryDate: true, timeSlot: true },
-    });
-    if (rows.length === 0) return [];
-
-    const capacityKeyIndex = buildCapacityKeyIndex(rules, trackedDates);
-    const bookings: DeliveryBooking[] = [];
-    for (const row of rows as Array<{
-      shopifyOrderId: string;
-      deliveryDate: string | null;
-      timeSlot: string | null;
-    }>) {
-      const date = row.deliveryDate?.trim() ?? "";
-      const keysByCanonical = capacityKeyIndex.get(date);
-      if (!keysByCanonical) continue;
-      const canonicalSlot = normalizeSlotValueForMatch(row.timeSlot);
-      const capacityKey = canonicalSlot
-        ? keysByCanonical.get(canonicalSlot)
-        : undefined;
-      if (!capacityKey) continue;
-      bookings.push({ orderId: row.shopifyOrderId, date, slotValue: capacityKey });
-    }
-    return bookings;
-  } catch (error) {
-    console.warn(
-      `Delivery booked counts: pending-sync overlay skipped (${
-        error instanceof Error ? error.message : String(error)
-      }); counts fall back to the Shopify scan alone.`,
-    );
-    return [];
-  }
-}
-
-/** Scan bookings + the pending-sync overlay, deduped by order id (scan wins). */
-function mergeWithPendingSyncBookings(
-  scanBookings: DeliveryBooking[],
-  overlay: DeliveryBooking[],
-): DeliveryBooking[] {
-  if (overlay.length === 0) return scanBookings;
-  const seen = new Set(scanBookings.map((b) => orderIdKey(b.orderId)));
-  return scanBookings.concat(
-    overlay.filter((b) => !seen.has(orderIdKey(b.orderId))),
-  );
-}
-
-/**
  * The raw matched bookings for a shop's tracked dates, memoized in-process for
  * CACHE_TTL_MS. The cache stores bookings (not counts) so exclusions and count
  * derivation happen per read. Cache entries are keyed by shop and invalidated
- * on rules saves and when the tracked-date set changes. The pending-sync
- * overlay (ADR-22 Phase C) is NEVER cached — it is re-read on every call, on
- * top of the (possibly cached) scan.
+ * on rules saves and when the tracked-date set changes.
  */
 export async function getDeliveryBookingsSnapshot(
   shop: string,
@@ -440,10 +358,7 @@ export async function getDeliveryBookingsSnapshot(
     nowMs - cached.fetchedAtMs < CACHE_TTL_MS
   ) {
     return {
-      bookings: mergeWithPendingSyncBookings(
-        cached.bookings,
-        await fetchPendingSyncBookings(shop, rules, trackedDates),
-      ),
+      bookings: cached.bookings,
       fetchedAt: cached.fetchedAt,
       fromCache: true,
       truncation: buildTruncation(droppedDates, cached.pagedOutDates),
@@ -465,10 +380,7 @@ export async function getDeliveryBookingsSnapshot(
   });
 
   return {
-    bookings: mergeWithPendingSyncBookings(
-      bookings,
-      await fetchPendingSyncBookings(shop, rules, trackedDates),
-    ),
+    bookings,
     fetchedAt,
     fromCache: false,
     truncation: buildTruncation(droppedDates, pagedOutDates),

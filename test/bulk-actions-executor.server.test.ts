@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// ADR-22 Phase B: the shared executor's NEW retry-idempotency behaviors (the
+// The executor's retry-idempotency behaviors (the
 // pre-existing op behaviors stay pinned by the route-level tests, e.g.
 // orders-reschedule-capacity.test.ts):
 // - cancel: "already cancelled" on a re-run reports success;
@@ -10,9 +10,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // - reschedule: metafields EXACTLY at the target skip the write (no duplicate
 //   history), while a drifted spelling still gets the repair write.
 
-const { rescheduleMock, recordLalamoveMock, rulesMock, noticeMock } = vi.hoisted(() => ({
+const { rescheduleMock, rulesMock, noticeMock } = vi.hoisted(() => ({
   rescheduleMock: vi.fn(),
-  recordLalamoveMock: vi.fn(),
   rulesMock: vi.fn(),
   noticeMock: vi.fn(),
 }));
@@ -23,10 +22,6 @@ vi.mock("../app/services/reschedule-order-delivery.server", () => ({
 
 vi.mock("../app/services/reschedule-notice.server", () => ({
   sendRescheduleNotice: noticeMock,
-}));
-
-vi.mock("../app/services/lalamove-tracking.server", () => ({
-  recordLalamoveOrderId: recordLalamoveMock,
 }));
 
 vi.mock("../app/services/schedule-rules.server", () => ({
@@ -128,7 +123,7 @@ describe("executeBulkAction — markFulfilled retry idempotency", () => {
     const results = await executeBulkAction(
       fulfillmentAdmin("FULFILLED"),
       SHOP,
-      { op: "markFulfilled", trackingUrl: "", notifyCustomer: false, lalamoveOrderId: "" },
+      { op: "markFulfilled", trackingUrl: "", notifyCustomer: false },
       [ORDER_1],
     );
     expect(results).toEqual([
@@ -140,7 +135,7 @@ describe("executeBulkAction — markFulfilled retry idempotency", () => {
     const results = await executeBulkAction(
       fulfillmentAdmin("UNFULFILLED"),
       SHOP,
-      { op: "markFulfilled", trackingUrl: "", notifyCustomer: false, lalamoveOrderId: "" },
+      { op: "markFulfilled", trackingUrl: "", notifyCustomer: false },
       [ORDER_1],
     );
     expect(results).toEqual([

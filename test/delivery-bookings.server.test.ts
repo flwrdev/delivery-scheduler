@@ -1,16 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// ADR-22 Phase C: the engine now overlays pending DeliverySyncTask rows on top
-// of the Shopify scan — the prisma seam is mocked (default: no pending tasks,
-// so every pre-Phase-C test runs unchanged).
-const { syncTaskFindManyMock } = vi.hoisted(() => ({
-  syncTaskFindManyMock: vi.fn(),
-}));
-
-vi.mock("../app/db.server", () => ({
-  default: { deliverySyncTask: { findMany: syncTaskFindManyMock } },
-}));
-
 import {
   DEFAULT_DELIVERY_SCHEDULE_RULES,
   type DeliveryScheduleRules,
@@ -94,8 +83,6 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   invalidateDeliveryBookingsCache();
-  syncTaskFindManyMock.mockReset();
-  syncTaskFindManyMock.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -439,110 +426,6 @@ describe("deriveBookedCounts", () => {
     });
     expect(deriveBookedCounts(bookings, "12")).toEqual({
       "2026-07-18": { "9AM-12PM": 1, "3PM-6PM": 1 },
-    });
-  });
-});
-
-describe("pending-sync overlay (ADR-22 Phase C)", () => {
-  const rules = makeRules({
-    "2026-07-18": { "9AM-12PM": { capacity: 5, booked: 0 } },
-  });
-
-  function pendingTask(orderId: string, date: string | null, slot: string | null) {
-    return { shopifyOrderId: orderId, deliveryDate: date, timeSlot: slot };
-  }
-
-  it("counts a pending task whose order the scan cannot see yet", async () => {
-    const admin = makeAdmin([ordersPage([])]);
-    syncTaskFindManyMock.mockResolvedValue([
-      pendingTask("gid://shopify/Order/501", "2026-07-18", "9AM-12PM"),
-    ]);
-
-    const snapshot = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
-    expect(deriveBookedCounts(snapshot.bookings)).toEqual({
-      "2026-07-18": { "9AM-12PM": 1 },
-    });
-    // Query-level semantics: pending-only, metafields not yet written,
-    // tracked dates only.
-    expect(syncTaskFindManyMock).toHaveBeenCalledWith({
-      where: {
-        shop: SHOP,
-        status: "pending",
-        metafieldsDone: false,
-        deliveryDate: { in: ["2026-07-18"] },
-      },
-      select: { shopifyOrderId: true, deliveryDate: true, timeSlot: true },
-    });
-  });
-
-  it("never double-counts an order the scan already sees (dedupe by order id)", async () => {
-    const admin = makeAdmin([
-      ordersPage([{ id: "gid://shopify/Order/501", date: "2026-07-18", slot: "9AM-12PM" }]),
-    ]);
-    syncTaskFindManyMock.mockResolvedValue([
-      pendingTask("gid://shopify/Order/501", "2026-07-18", "9AM-12PM"),
-    ]);
-
-    const snapshot = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
-    expect(deriveBookedCounts(snapshot.bookings)).toEqual({
-      "2026-07-18": { "9AM-12PM": 1 },
-    });
-  });
-
-  it("matches a drifted task slot spelling canonically and drops unmatched/untracked rows", async () => {
-    const admin = makeAdmin([ordersPage([])]);
-    syncTaskFindManyMock.mockResolvedValue([
-      pendingTask("gid://shopify/Order/601", "2026-07-18", "9:00am - 12:00pm"),
-      pendingTask("gid://shopify/Order/602", "2026-07-18", "7PM-9PM"),
-      pendingTask("gid://shopify/Order/603", "2026-07-19", "9AM-12PM"),
-      pendingTask("gid://shopify/Order/604", null, "9AM-12PM"),
-    ]);
-
-    const snapshot = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
-    expect(deriveBookedCounts(snapshot.bookings)).toEqual({
-      "2026-07-18": { "9AM-12PM": 1 },
-    });
-  });
-
-  it("excludeOrderId applies to overlay bookings too (the worker never blocks its own order)", async () => {
-    const admin = makeAdmin([ordersPage([])]);
-    syncTaskFindManyMock.mockResolvedValue([
-      pendingTask("gid://shopify/Order/701", "2026-07-18", "9AM-12PM"),
-    ]);
-
-    const snapshot = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
-    expect(deriveBookedCounts(snapshot.bookings, "gid://shopify/Order/701")).toEqual({});
-  });
-
-  it("stays fresh across scan-cache hits (the overlay is re-read every call)", async () => {
-    const admin = makeAdmin([ordersPage([])]);
-    syncTaskFindManyMock.mockResolvedValueOnce([]);
-    const first = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
-    expect(first.fromCache).toBe(false);
-    expect(deriveBookedCounts(first.bookings)).toEqual({});
-
-    // The task appears AFTER the scan was cached — a second read (cache hit)
-    // must still see it.
-    syncTaskFindManyMock.mockResolvedValueOnce([
-      pendingTask("gid://shopify/Order/801", "2026-07-18", "9AM-12PM"),
-    ]);
-    const second = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
-    expect(second.fromCache).toBe(true);
-    expect(deriveBookedCounts(second.bookings)).toEqual({
-      "2026-07-18": { "9AM-12PM": 1 },
-    });
-    expect(admin.graphql).toHaveBeenCalledTimes(1);
-  });
-
-  it("fails OPEN on Postgres trouble — counts degrade to the scan alone", async () => {
-    const admin = makeAdmin([
-      ordersPage([{ id: "gid://shopify/Order/901", date: "2026-07-18", slot: "9AM-12PM" }]),
-    ]);
-    syncTaskFindManyMock.mockRejectedValue(new Error("neon cold start"));
-
-    const snapshot = await getDeliveryBookingsSnapshot(SHOP, admin, rules);
-    expect(deriveBookedCounts(snapshot.bookings)).toEqual({
-      "2026-07-18": { "9AM-12PM": 1 },
     });
   });
 });

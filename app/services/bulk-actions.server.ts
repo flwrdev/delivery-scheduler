@@ -1,17 +1,12 @@
-// Shared bulk-action executor (ADR-22 Phase B, docs/proposals/orders-async-jobs.md).
-//
-// THE ONE PLACE the /app/orders bulk ops actually execute. Extracted from the
-// route action (2026-08-26) so the two execution paths — inline (small
-// selections, synchronous response) and the Cloud Tasks worker (large
-// selections, chunk-by-chunk) — run byte-identical logic and cannot drift
-// (same REC-1/REC-2 principle as `rescheduleOrderDelivery`).
+// Bulk-action executor for the /app/orders bulk ops, run inline inside the
+// route action.
 //
 // Param VALIDATION does not live here: the route action validates (400s,
-// capacity warn+override) BEFORE calling this or creating a job, so a
-// `BulkOpParams` is valid by construction wherever it appears.
+// capacity warn+override) BEFORE calling this, so a `BulkOpParams` is valid by
+// construction wherever it appears.
 //
-// Retry idempotency (merchant constraint §2a — a worker crash re-executes an
-// item, so every op must be safe to run twice):
+// Retry idempotency (a resubmitted selection re-executes an item, so every op
+// must be safe to run twice):
 // - archive/unarchive/tagsAdd/tagsRemove: naturally idempotent at Shopify.
 // - cancel: an "already cancelled" userError on re-execution is reported as
 //   success, not failure.
@@ -23,12 +18,11 @@
 // - reschedule: an order whose CANONICAL metafields already sit at the target
 //   date+slot is skipped as success — deliberately metafield-only (never the
 //   customAttribute fallback), so a drifted order still gets repaired while a
-//   crash-retry (metafields written by the prior attempt) produces no
-//   duplicate history entry.
+//   retry (metafields written by the prior attempt) produces no duplicate
+//   history entry.
 
 import { rescheduleOrderDelivery } from "./reschedule-order-delivery.server";
 import { sendRescheduleNotice } from "./reschedule-notice.server";
-import { recordLalamoveOrderId } from "./lalamove-tracking.server";
 import { getScheduleRules } from "./schedule-rules.server";
 import { buildOrderEventTag } from "../lib/order-tags";
 import { getShopLocalDate } from "../lib/delivery-availability";
@@ -63,12 +57,7 @@ export const BULK_ACTION_NAMES: readonly BulkActionName[] = [
   "reschedule",
 ];
 
-export const MAX_SELECTED_ORDER_IDS = 100;
-
-// Selections at or under this run inline in the action exactly as before
-// Phase B; larger selections become a BulkActionJob (see
-// bulk-action-jobs.server.ts). Merchant decision 2026-08-26.
-export const BULK_INLINE_MAX = 10;
+export const MAX_SELECTED_ORDER_IDS = 10;
 
 export function isBulkActionName(value: string): value is BulkActionName {
   return (BULK_ACTION_NAMES as readonly string[]).includes(value);
@@ -96,15 +85,9 @@ export interface BulkActionResponse {
     moving: number;
     projected: number;
   };
-  // Phase B: large selections answer immediately with a job to poll instead
-  // of results — the client polls /app/orders/bulk-job/:jobId.
-  mode?: "job";
-  jobId?: string;
-  total?: number;
 }
 
-// Validated op inputs — snapshotted into BulkActionJob.paramsJson for the
-// worker, or passed straight through on the inline path.
+// Validated op inputs, passed from the route action to the executor.
 export type BulkOpParams =
   | { op: "archive" }
   | { op: "unarchive" }
@@ -122,9 +105,6 @@ export type BulkOpParams =
       op: "markFulfilled";
       trackingUrl: string;
       notifyCustomer: boolean;
-      // ADR-16: only ever non-empty for a single-order selection — which is
-      // always ≤ BULK_INLINE_MAX, so the worker never sees one.
-      lalamoveOrderId: string;
     }
   | {
       op: "reschedule";
@@ -210,7 +190,7 @@ const TAGS_REMOVE_MUTATION = `
 
 // Fulfillment-order workflow — used ONLY on markFulfilled. Requires
 // read/write_merchant_managed_fulfillment_orders. Builds one aliased query for
-// the whole id set (a chunk, on the worker path) instead of N roundtrips.
+// the whole id set instead of N roundtrips.
 // displayFulfillmentStatus feeds the re-run idempotency check.
 function buildBatchFulfillmentQuery(ids: string[]): string {
   const fragments = ids
@@ -491,7 +471,7 @@ export async function executeBulkAction(
       await runOne(id, mutation, { id, tags: params.tags }, rootKey, "userErrors");
     }
   } else if (params.op === "markFulfilled") {
-    const { trackingUrl, notifyCustomer, lalamoveOrderId } = params;
+    const { trackingUrl, notifyCustomer } = params;
 
     // ── Step 1: Batch-fetch fulfillment orders (single API call per execution) ─
     const safeIds = orderIds.filter((id) => SHOPIFY_ORDER_GID_RE.test(id));
@@ -589,7 +569,7 @@ export async function executeBulkAction(
         }
 
         const before = results.length;
-        const fulfillJson = await runOne(
+        await runOne(
           id,
           FULFILLMENT_CREATE_MUTATION,
           { fulfillment },
@@ -600,61 +580,13 @@ export async function executeBulkAction(
           const r = results[i];
           if (!r.success && r.message) r.message = scopeHint(r.message);
         }
-
-        // ADR-16: record the Lalamove correlation right after the fulfillment
-        // that created it succeeds — never fails the fulfillment itself, a
-        // bad/mistyped id just gets logged (mirrors the tracking-tag write's
-        // guarded posture below). lalamoveOrderId is only ever truthy when
-        // the selection was a single order (enforced in the action), so `id`
-        // here is always that one order — no extra identity check needed.
-        if (lalamoveOrderId) {
-          const succeeded = results
-            .slice(before)
-            .some((r) => r.orderId === id && r.success);
-          const fulfillmentId = (
-            fulfillJson?.data?.fulfillmentCreate as
-              | { fulfillment?: { id?: string } }
-              | undefined
-          )?.fulfillment?.id;
-          if (succeeded && fulfillmentId) {
-            try {
-              const lalamoveResult = await recordLalamoveOrderId(
-                admin,
-                shop,
-                id,
-                fulfillmentId,
-                lalamoveOrderId,
-              );
-              if (lalamoveResult.status === "not_found") {
-                console.warn(
-                  `[markFulfilled] Lalamove order id "${lalamoveOrderId}" not found — check it's the numeric order id, not the tracking link.`,
-                );
-              } else if (
-                lalamoveResult.status === "lalamove_lookup_failed" ||
-                lalamoveResult.status === "shopify_write_failed"
-              ) {
-                console.warn(
-                  `[markFulfilled] Lalamove tracking record failed: ${lalamoveResult.error}`,
-                );
-              } else if (lalamoveResult.status === "already_tracked") {
-                console.warn(
-                  `[markFulfilled] Lalamove order id "${lalamoveOrderId}" is already linked to a different order — not re-linked to ${id}.`,
-                );
-              }
-            } catch (e: unknown) {
-              console.warn("[markFulfilled] Lalamove tracking record threw:", e);
-            }
-          }
-        }
       }
 
       // ── Step 3: timeline event tag, only for orders that actually got
       //    tracking and only where the fulfillment succeeded. A tagging
       //    failure never turns a successful fulfillment into a reported
       //    failure — the tag is a mirror, like the reschedule sync's.
-      //    Fires on Tracking URL OR the Lalamove Order ID (ADR-16) — either
-      //    one alone still means "tracking got added to this fulfillment."
-      if (trackingUrl || lalamoveOrderId) {
+      if (trackingUrl) {
         const fulfilledIds = results
           .filter((r) => r.success && safeIds.includes(r.orderId))
           .map((r) => r.orderId);
@@ -779,7 +711,7 @@ export async function executeBulkAction(
             // Customer notice runs only after the canonical write succeeded
             // and is reported, never thrown: the reschedule already happened,
             // so an SMTP hiccup must not read as a failed reschedule (and a
-            // worker retry must not re-run the write to re-send the mail).
+            // retry must not re-run the write to re-send the mail).
             if (params.notifyCustomer) {
               const notice = await sendRescheduleNotice(shop, {
                 orderId: id,

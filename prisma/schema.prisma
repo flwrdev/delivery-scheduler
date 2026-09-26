@@ -33,37 +33,11 @@ model Session {
   refreshTokenExpires DateTime?
 }
 
-// Lalamove courier-status listener (NOT dispatch — see ADR-16). Correlates a
-// Lalamove delivery, booked manually by the merchant outside Shopify, to the
-// Shopify order/fulfillment it belongs to, so a Lalamove COMPLETE status can
-// auto-flip the Shopify fulfillment to DELIVERED. Polling-only as of the
-// ADR-16 addendum (2026-08-16): Lalamove's push webhooks never fire for
-// orders booked through the merchant's manual web flow (live-confirmed via
-// the Lalamove Partner Portal's own "Webhook attempts" log), so rows are
-// populated by recordLalamoveOrderId() — the merchant pasting the real
-// Lalamove Order ID into the "Mark as fulfilled" modal — never by webhook or
-// by parsing the merchant-facing tracking share link, which does not carry
-// the real Lalamove order id.
-model LalamoveTracking {
-  id                   String    @id @default(cuid())
-  shop                 String
-  shopifyOrderId       String
-  shopifyFulfillmentId String
-  lalamoveOrderId      String    @unique
-  status               String    @default("PENDING")
-  deliveredAt          DateTime?
-  lastPolledAt         DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-
-  @@index([shop, deliveredAt])
-}
-
 // Customer Email send log (E-5 revisit, ): logs
 // that a merchant sent a customer email via the in-app compose modal, purely
-// for the order panel's DeliveryTimeline display. Same side-table posture as
-// LalamoveTracking above — an app-side log row, never Shopify delivery state,
-// so it does not join the order write-path contract in docs/api.md.
+// for the order panel's DeliveryTimeline display. An app-side log row, never
+// Shopify delivery state, so it does not join the order write-path contract in
+// docs/api.md.
 model EmailSendLog {
   id             String   @id @default(cuid())
   shop           String
@@ -73,95 +47,6 @@ model EmailSendLog {
   sentAt         DateTime @default(now())
 
   @@index([shop, shopifyOrderId])
-}
-
-// Durable work record for the orders/create delivery sync (ADR-22, Phase A of
-// docs/proposals/orders-async-jobs.md). Work BOOKKEEPING only — the Shopify
-// order stays the delivery-state ledger; nothing here is ever read as delivery
-// state. The row is the resume point: which idempotent sync step is already
-// done (review finding S5) and whether the work is still owed (M1) — the
-// webhook writes this row and acks fast, the Cloud Tasks worker does the
-// actual sync with retries, the hourly sweep rescues stranded rows.
-model DeliverySyncTask {
-  id             String    @id @default(cuid())
-  shop           String
-  shopifyOrderId String
-  orderName      String? // "#1046" — merchant-facing display in the ops banner
-  // Work input, extracted once from the webhook payload — retries never need
-  // the original payload again. Null deliveryDate/timeSlot = COD-fee-only task.
-  deliveryDate   String?
-  timeSlot       String?
-  // Validation clock (D4/DEF-7, merchant constraint 2026-08-26): every retry
-  // validates against the order's checkout time, never the retry time — a
-  // delayed sync can never turn a legal checkout into "past cutoff".
-  checkoutTime   DateTime
-  needsCodFee    Boolean   @default(false)
-  // Per-step ledger — steps with nothing to do are created already-true, so
-  // "done" is always simply "all three flags true".
-  metafieldsDone Boolean   @default(false)
-  tagsDone       Boolean   @default(false)
-  codFeeDone     Boolean   @default(false)
-  status         String    @default("pending") // pending | done | failed
-  // Double-processing guard (merchant constraint 2026-08-26): worker lease,
-  // claimed via one conditional updateMany (null or stale = claimable) — see
-  // claimDeliverySyncTask in delivery-sync-task.server.ts.
-  lockedAt       DateTime?
-  attempts       Int       @default(0)
-  // "Not before" marker for the SWEEP only — Cloud Tasks retries pace
-  // themselves via the queue's own backoff policy.
-  nextAttemptAt  DateTime  @default(now())
-  lastError      String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  doneAt         DateTime?
-
-  @@unique([shop, shopifyOrderId]) // webhook redelivery → same row, never a duplicate
-  @@index([status, nextAttemptAt]) // the sweep query
-  @@index([shop, status]) // the merchant-banner count query
-}
-
-// Bulk-action jobs (ADR-22 Phase B, docs/proposals/orders-async-jobs.md §3b —
-// review finding S4): a /app/orders bulk op on MORE than BULK_INLINE_MAX
-// orders becomes one job + per-order items instead of one long HTTP request.
-// The Cloud Tasks worker processes items chunk-by-chunk (re-enqueueing itself
-// between chunks) so every request stays small; the client polls the job by
-// id. Work BOOKKEEPING only — the order writes land on Shopify exactly as the
-// inline path's do (same shared executor, so the two can't drift).
-model BulkActionJob {
-  id         String    @id @default(cuid()) // returned to the client for polling
-  shop       String
-  action     String // BulkActionName
-  paramsJson String // validated BulkOpParams snapshot (validation happens BEFORE job creation)
-  status     String    @default("queued") // queued | running | done | failed
-  // Double-processing guard (§2a): job-level lease, renewed every chunk;
-  // items additionally claim pending → processing before execution.
-  lockedAt   DateTime?
-  totalCount Int
-  okCount    Int       @default(0)
-  failCount  Int       @default(0)
-  lastError  String?
-  createdAt  DateTime  @default(now())
-  startedAt  DateTime?
-  finishedAt DateTime?
-  updatedAt  DateTime  @updatedAt
-  items      BulkActionJobItem[]
-
-  @@index([shop, status, createdAt]) // status polling scope check
-  @@index([status, updatedAt]) // the sweep's stranded-job rescue query
-}
-
-model BulkActionJobItem {
-  id             String  @id @default(cuid())
-  jobId          String
-  shopifyOrderId String
-  orderName      String?
-  status         String  @default("pending") // pending | processing | ok | failed
-  message        String? // same per-item message the inline BulkActionItemResult carries
-  updatedAt      DateTime @updatedAt
-  job            BulkActionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
-
-  @@unique([jobId, shopifyOrderId])
-  @@index([jobId, status])
 }
 
 model DeliveryScheduleConfig {

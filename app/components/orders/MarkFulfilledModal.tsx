@@ -19,8 +19,6 @@ export interface MarkFulfilledModalProps {
   setFulfillTrackingUrl: (value: string) => void;
   fulfillNotify: boolean;
   setFulfillNotify: (value: boolean) => void;
-  fulfillLalamoveOrderId: string;
-  setFulfillLalamoveOrderId: (value: string) => void;
   onConfirm: () => void;
 }
 
@@ -33,8 +31,6 @@ export function MarkFulfilledModal({
   setFulfillTrackingUrl,
   fulfillNotify,
   setFulfillNotify,
-  fulfillLalamoveOrderId,
-  setFulfillLalamoveOrderId,
   onConfirm,
 }: MarkFulfilledModalProps) {
   return (
@@ -71,23 +67,6 @@ export function MarkFulfilledModal({
             onChange={setFulfillTrackingUrl}
             autoComplete="off"
           />
-          {selectedCount === 1 && (
-            <TextField
-              label="Lalamove Order ID (optional)"
-              placeholder="e.g. 3562752825958289729"
-              helpText={
-                <>
-                  From the Lalamove app&apos;s order detail &quot;Additional
-                  info&quot; section — <strong>not</strong> the tracking
-                  link. When completed, this order is automatically marked
-                  Delivered.
-                </>
-              }
-              value={fulfillLalamoveOrderId}
-              onChange={setFulfillLalamoveOrderId}
-              autoComplete="off"
-            />
-          )}
           <Checkbox
             label="Notify customer by email"
             checked={fulfillNotify}
