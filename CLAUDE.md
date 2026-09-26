@@ -18,12 +18,27 @@ npm run lint
 npm test                  # vitest: test/**/*.test.{ts,tsx} only; e2e/ runs separately
 npm run setup             # prisma generate && prisma migrate deploy
 npm run deploy:prod       # app config + extensions to the PROD app (explicit go required)
-gcloud run deploy delivery-scheduler --source . --region us-central1   # backend
+gcloud run deploy delivery-scheduler --source . --region us-central1 --project lalamove-map --service-account delivery-scheduler@lalamove-map.iam.gserviceaccount.com   # backend (explicit go required)
 ```
 
 After creating or pulling a Prisma migration, state that `npm run setup` must run before the next `npm run dev`.
 
-Local `.env` points at the Neon `dev` branch; only Cloud Run reaches `production`. The `BulkActionJob` path is kept on purpose for peak days (Valentine's, Mother's Day) even though it has not been used yet.
+The container runs `npm run setup` (`prisma migrate deploy`) on every start, so a migration in the image is applied to `production` by the deploy itself. `migrate deploy` ignores migrations recorded in `_prisma_migrations` whose folders were deleted.
+
+`.github/workflows/deploy.yml` authenticates as `github-deployer@lalamove-map.iam.gserviceaccount.com`; it failed on 2026-09-26 because that account had been deleted. The merchant deploys with the `gcloud` command above.
+
+Neon project `delivery-scheduler` (Free plan) has one branch, `production`. The `dev` branch was deleted on 2026-09-25, so there is no dev database until a new one is branched from `production`. Only Cloud Run reaches `production`. Neon "block public connections" must stay off: Cloud Run connects over the public internet, and turning it on took the app down on 2026-09-25.
+
+## Current shape (merchant decisions, 2026-09-25 unless noted)
+
+- Every endpoint is verified by Shopify: webhook HMAC, app-proxy signature, or session token. There are no internal endpoints with their own secrets, no pollers, no Cloud Tasks, and no Cloud Scheduler jobs. Merchant: "dapat ang mga verification ay ang external logical na may shopify-Hmac at hindi ang internal logic."
+- `orders/create` writes the delivery metafields, the schedule tag, and the COD fee line item inline, and answers 500 on a failed step so Shopify redelivers.
+- Postgres (`neondb`) holds only `Session`, `DeliveryScheduleConfig`, `EmailSendLog`, and `_prisma_migrations`.
+- Removed on merchant request: Lalamove tracking (poll, webhook, Order ID field, table), the delivery-sync queue and hourly sweep, bulk-action jobs, and the COD Settings page. Bulk actions run inline, 10 orders at most.
+- The COD fee is Shopify-owned: the `COD-FEE` SKU product and its metafields. The app only adds the line item to COD orders. There is no lock against a double fee from overlapping webhook deliveries; merchant: add one only after an incident ("tsaka na lang lagyan kung may nangyari ng insidente").
+- Orders page "Today" view auto-refreshes every 60 minutes.
+- The `flowercart_marketing` database on `production` stays, for safe storage with no access by anyone else. It is written from outside this repo. Do not modify or delete it.
+- Before any deploy, push to `main`, or database write, show the exact command or change and wait for the merchant (2026-09-26: "ipakita mo muna saakin yung exact command").
 
 ## Rules
 
