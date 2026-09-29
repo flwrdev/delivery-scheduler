@@ -13,6 +13,7 @@ import {
   Thumbnail,
 } from "@shopify/polaris";
 import type { SendEmailResponse } from "../../services/send-customer-email.server";
+import { replySubject } from "../../lib/email-replies";
 
 // "Send email" compose modal (customer-email-design.md §4) — opened from the
 // details panel's Actions menu, single order only. The To field is display
@@ -25,6 +26,7 @@ export interface SendEmailModalProps {
   orderId: string | null;
   orderName: string | null;
   customerEmail: string | null;
+  replyTo?: { subject: string; messageId: string | null } | null;
 }
 
 const MAX_SUBJECT = 200;
@@ -48,6 +50,7 @@ export function SendEmailModal({
   orderId,
   orderName,
   customerEmail,
+  replyTo = null,
 }: SendEmailModalProps) {
   const shopify = useAppBridge();
   const fetcher = useFetcher<SendEmailResponse>();
@@ -64,14 +67,21 @@ export function SendEmailModal({
   const wasOpenRef = useRef(false);
   useEffect(() => {
     if (open && !wasOpenRef.current) {
-      setSubject(orderName ? `Order ${orderName}` : "");
+      // The added "Re: " can push a max-length subject past the server's cap.
+      setSubject(
+        replyTo
+          ? replySubject(replyTo.subject).slice(0, MAX_SUBJECT)
+          : orderName
+            ? `Order ${orderName}`
+            : "",
+      );
       setBody("");
       setPhotos([]);
       setError(null);
       setPhotoError(null);
     }
     wasOpenRef.current = open;
-  }, [open, orderName]);
+  }, [open, orderName, replyTo]);
 
   // Thumbnail previews need object URLs, which must be revoked on change.
   const photoPreviews = useMemo(
@@ -150,6 +160,7 @@ export function SendEmailModal({
     fd.append("orderId", orderId);
     fd.append("subject", subject);
     fd.append("body", body);
+    if (replyTo?.messageId) fd.append("inReplyTo", replyTo.messageId);
     for (const photo of photos) fd.append("photo", photo, photo.name);
     // multipart: the photos must survive serialization; the route action's
     // request.formData() parses multipart natively, with or without files.
@@ -160,9 +171,9 @@ export function SendEmailModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Send email"
+      title={replyTo ? "Reply to customer" : "Send email"}
       primaryAction={{
-        content: isSubmitting ? "Sending…" : "Send email",
+        content: isSubmitting ? "Sending…" : replyTo ? "Send reply" : "Send email",
         onAction: handleSend,
         loading: isSubmitting,
         disabled: !canSend,

@@ -215,6 +215,31 @@ describe("handleSendEmailOp", () => {
     });
   });
 
+  it("threads a reply with In-Reply-To and References", async () => {
+    const { admin } = makeAdmin(orderPayload("cust@example.com"));
+    const fd = makeFd({
+      subject: "Re: Order #1009",
+      inReplyTo: "<r1@example.com>",
+    });
+    const res = await handleSendEmailOp(admin, fd, SHOP);
+    expect(res.status).toBe(200);
+    expect(sendMailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inReplyTo: "<r1@example.com>",
+        references: ["<r1@example.com>"],
+      }),
+    );
+  });
+
+  it("400 on a malformed reply reference, before any send", async () => {
+    const { admin, calls } = makeAdmin(orderPayload("cust@example.com"));
+    const fd = makeFd({ inReplyTo: "<a@b>\r\nBcc: evil@attacker.test" });
+    const res = await handleSendEmailOp(admin, fd, SHOP);
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+    expect(sendMailMock).not.toHaveBeenCalled();
+  });
+
   it("does not log to EmailSendLog when the send fails", async () => {
     sendMailMock.mockRejectedValueOnce({ code: "EAUTH", message: "535" });
     const { admin } = makeAdmin(orderPayload("cust@example.com"));

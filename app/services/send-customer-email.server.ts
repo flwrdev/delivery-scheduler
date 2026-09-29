@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import type { Transporter } from "nodemailer";
 import type { AdminGraphQLClient } from "./order-delivery-metafields.server";
 import prisma from "../db.server";
+import { isValidMessageId } from "../lib/email-replies";
 
 // Customer Email (customer-email-design.md): in-app compose, sent server-side
 // through the merchant's business mailbox on Namecheap Private Email via
@@ -38,6 +39,8 @@ export interface SendCustomerEmailInput {
   subject: string;
   textBody: string;
   attachments?: EmailAttachment[];
+  /** Without In-Reply-To/References the customer's client files the reply as a new conversation. */
+  inReplyTo?: string;
 }
 
 export type SendCustomerEmailResult =
@@ -126,6 +129,7 @@ export async function sendCustomerEmail({
   subject,
   textBody,
   attachments,
+  inReplyTo,
 }: SendCustomerEmailInput): Promise<SendCustomerEmailResult> {
   const cfg = smtpConfig();
   if (!cfg.user || !cfg.password) {
@@ -135,6 +139,7 @@ export async function sendCustomerEmail({
     ? { name: cfg.fromName, address: cfg.user }
     : cfg.user;
   const hasPhotos = Boolean(attachments && attachments.length > 0);
+  const threading = inReplyTo ? { inReplyTo, references: [inReplyTo] } : {};
   try {
     await getTransport(cfg).sendMail({
       from,
@@ -147,6 +152,7 @@ export async function sendCustomerEmail({
       ...(hasPhotos ? {} : { bcc: cfg.user }),
       subject,
       text: textBody,
+      ...threading,
       ...(hasPhotos ? { attachments } : {}),
     });
   } catch (e: unknown) {
@@ -164,6 +170,7 @@ export async function sendCustomerEmail({
         to: cfg.user,
         subject,
         text: `${textBody}\n\n${marker}`,
+        ...threading,
       });
     } catch {
       return { ok: true, copyFailed: true };
@@ -207,9 +214,13 @@ export async function handleSendEmailOp(
   const orderId = String(fd.get("orderId") || "");
   const subject = String(fd.get("subject") || "").trim();
   const body = String(fd.get("body") || "").trim();
+  const inReplyTo = String(fd.get("inReplyTo") || "").trim();
 
   if (!SHOPIFY_ORDER_GID_RE.test(orderId)) {
     return opJson({ ok: false, message: "Invalid order ID." }, 400);
+  }
+  if (inReplyTo && !isValidMessageId(inReplyTo)) {
+    return opJson({ ok: false, message: "Invalid reply reference." }, 400);
   }
   if (!subject) {
     return opJson({ ok: false, message: "Enter a subject." }, 400);
@@ -335,6 +346,7 @@ export async function handleSendEmailOp(
     subject,
     textBody: body,
     attachments,
+    ...(inReplyTo ? { inReplyTo } : {}),
   });
   if (!sent.ok) {
     return opJson({ ok: false, message: sent.error });

@@ -148,6 +148,44 @@
   background: var(--p-color-text-success, #29845a);
 }
 
+.odp-timeline-item--reply::before {
+  background: var(--p-color-icon-emphasis, #005bd3);
+}
+
+.orders-bell {
+  position: relative;
+  display: inline-flex;
+}
+
+.orders-bell-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--p-color-bg-fill-critical, #c70a24);
+  color: var(--p-color-text-on-color, #fff);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.orders-bell-list {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.odp-timeline-mail-text {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Connecting rail: runs from this item's dot down through the flex gap to
    the next item's dot, so the list reads as one continuous timeline. */
 .odp-timeline-item:not(:last-child)::after {

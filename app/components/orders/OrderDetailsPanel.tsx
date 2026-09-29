@@ -24,6 +24,7 @@ import {
   getRescheduleTimelineEvents,
 } from "../../lib/order-utils";
 import { MAX_ORDER_TAG_LENGTH } from "../../lib/order-tags";
+import type { MailboxMessage } from "../../lib/email-replies";
 import { buildMessengerInboxUrl, getMessengerPsid } from "../../lib/messenger-conversation";
 import { polarisBadgeTone } from "./panel/badge-tone";
 import { DeliverySection } from "./panel/DeliverySection";
@@ -48,6 +49,8 @@ export interface OrderDetailsPanelProps {
   onSendEmail?: () => void;
   // Edit details: opens the shipping-address edit modal for this order.
   onEditDetails?: () => void;
+  /** Opens the compose modal as a reply to a customer email from the timeline. */
+  onReplyEmail?: (message: MailboxMessage) => void;
   /** Meta Page ID for the "Open Messenger conversation" action; "" hides it. */
   metaPageId?: string;
 }
@@ -67,6 +70,7 @@ export function OrderDetailsPanel({
   onReschedule,
   onSendEmail,
   onEditDetails,
+  onReplyEmail,
   metaPageId = "",
 }: OrderDetailsPanelProps) {
   const tagFetcher = useFetcher<{
@@ -377,7 +381,7 @@ export function OrderDetailsPanel({
 
           {/* Rendered last: its own leading Divider + heading show up only
               when the order actually has reschedule/activity signal. */}
-          <DeliveryTimeline order={order} />
+          <DeliveryTimeline order={order} onReplyEmail={onReplyEmail} />
         </div>
       </div>
     </>

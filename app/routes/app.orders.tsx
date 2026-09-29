@@ -38,6 +38,7 @@ import {
 } from "react-router";
 import type { RescheduleTarget } from "../components/orders/RescheduleModal";
 import type { RescheduleRulesData } from "./app.orders_.reschedule-rules";
+import type { InboxRepliesData } from "./app.orders_.inbox";
 import { useBulkActions } from "../hooks/useBulkActions";
 import { useSmartRefresh } from "../hooks/useSmartRefresh";
 import { useOrdersDiff } from "../hooks/useOrdersDiff";
@@ -58,6 +59,11 @@ import { RescheduleModal } from "../components/orders/RescheduleModal";
 import { SendEmailModal } from "../components/orders/SendEmailModal";
 import { EditDetailsModal } from "../components/orders/EditDetailsModal";
 import { RecentReschedulesBanner } from "../components/orders/RecentReschedulesBanner";
+import { NotificationsBell } from "../components/orders/NotificationsBell";
+import type {
+  EmailReplyNotification,
+  MailboxMessage,
+} from "../lib/email-replies";
 import {
   DEFAULT_DELIVERY_SCHEDULE_RULES,
   getShopLocalDate,
@@ -72,7 +78,11 @@ import {
 } from "../lib/recent-reschedules";
 import { handleSendEmailOp } from "../services/send-customer-email.server";
 import { handleEditDetailsOp } from "../services/update-order-contact.server";
-import { handleMarkRescheduleSeenOp } from "../services/reschedule-seen.server";
+import {
+  handleMarkRescheduleSeenOp,
+  handleMarkSeenOp,
+} from "../services/reschedule-seen.server";
+import { EMAIL_REPLY_SEEN_OP } from "../services/customer-inbox.server";
 import type { AdminGraphQLClient } from "../services/order-delivery-metafields.server";
 import {
   MAX_SELECTED_ORDER_IDS,
@@ -411,6 +421,8 @@ type LoaderData = {
    * left open past shop midnight both still see the shop's real "Today".
    */
   todayISO: string;
+  /** Shop timezone (IANA) used for the notification bell's time labels. */
+  shopTimezone: string;
   /** Orders page size this load used (25 or 250) — tab counts derived from a 25-row page are hidden as unrepresentative. */
   pageSize: number;
   /** Google Maps key for the Edit-details address search; "" hides the field. */
@@ -636,6 +648,7 @@ export const loader = async ({
       tabParam,
       sortParam,
       todayISO,
+      shopTimezone,
       pageSize,
       recentReschedules,
       dateScoped,
@@ -699,6 +712,12 @@ export const action = async ({
   // before the bulk machinery like the ops around it.
   if (opRaw === "markRescheduleSeen") {
     return handleMarkRescheduleSeenOp(admin, fd);
+  }
+
+  // Stores the reply's own receivedAt, not the click time, so a reply that
+  // lands after the click still counts as unseen.
+  if (opRaw === "markEmailReplySeen") {
+    return handleMarkSeenOp(admin, fd, EMAIL_REPLY_SEEN_OP);
   }
 
   // Edit details: single-order shipping-address rewrite from the panel's
@@ -1126,6 +1145,7 @@ function Extension() {
     paused: refreshPaused,
     dataStamp: loaderData,
   });
+  const wasRefreshingRef = useRef(false);
 
   // View identity for the background diff — every URL param except ?order
   // (the panel toggle doesn't re-run the loader, see shouldRevalidate). Same
@@ -1176,6 +1196,61 @@ function Extension() {
     (item: RecentRescheduleItem) => submitReschedulesSeen([item]),
     [submitReschedulesSeen],
   );
+
+  // Every inbox read is a fresh IMAP login, so it follows the list's own
+  // refresh cadence plus bell opens (at most once a minute) instead of
+  // re-running after every action on the page.
+  const inboxFetcher = useFetcher<InboxRepliesData>();
+  const loadInbox = inboxFetcher.load;
+  const inboxLoadedAtRef = useRef(0);
+  const reloadInbox = useCallback(
+    (minAgeMs = 0) => {
+      if (Date.now() - inboxLoadedAtRef.current < minAgeMs) return;
+      inboxLoadedAtRef.current = Date.now();
+      loadInbox("/app/orders/inbox");
+    },
+    [loadInbox],
+  );
+  useEffect(() => {
+    reloadInbox();
+  }, [reloadInbox]);
+  // The revalidator only reports "loading" for smart/manual refresh, not for
+  // post-action revalidation, so this edge tracks the refresh cadence alone.
+  useEffect(() => {
+    if (wasRefreshingRef.current && !isRefreshing) reloadInbox();
+    wasRefreshingRef.current = isRefreshing;
+  }, [isRefreshing, reloadInbox]);
+
+  const replySeenFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const pendingReplySeenIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (replySeenFetcher.state !== "idle") {
+      for (const id of replySeenFetcher.formData?.getAll("orderId") ?? []) {
+        if (typeof id === "string") ids.add(id);
+      }
+    }
+    return ids;
+  }, [replySeenFetcher.state, replySeenFetcher.formData]);
+  const submitRepliesSeen = useCallback(
+    (items: EmailReplyNotification[]) => {
+      if (items.length === 0) return;
+      const fd = new FormData();
+      fd.append("_action", "markEmailReplySeen");
+      for (const item of items) {
+        fd.append("orderId", item.orderId);
+        fd.append("receivedAt", item.receivedAt);
+      }
+      replySeenFetcher.submit(fd, { method: "post" });
+    },
+    [replySeenFetcher],
+  );
+  const bellSeenError =
+    replySeenFetcher.state === "idle" && replySeenFetcher.data?.ok === false
+      ? replySeenFetcher.data.message
+      : rescheduleSeenFetcher.state === "idle" &&
+          rescheduleSeenFetcher.data?.ok === false
+        ? rescheduleSeenFetcher.data.message
+        : null;
 
   const ordersDiffTitle = useMemo(() => {
     const parts: string[] = [];
@@ -1260,10 +1335,23 @@ function Extension() {
 
   // Customer Email — panel-only compose; the modal reads its target from the
   // open panel order (?order=), never from the bulk selection.
+  const [emailReplyTo, setEmailReplyTo] = useState<{
+    subject: string;
+    messageId: string | null;
+  } | null>(null);
   const openPanelSendEmail = useCallback(() => {
     if (!selectedOrder) return;
+    setEmailReplyTo(null);
     openModal("sendEmail");
   }, [selectedOrder, openModal]);
+  const openPanelReplyEmail = useCallback(
+    (message: MailboxMessage) => {
+      if (!selectedOrder) return;
+      setEmailReplyTo({ subject: message.subject, messageId: message.messageId });
+      openModal("sendEmail");
+    },
+    [selectedOrder, openModal],
+  );
 
   // Edit details — panel-only, same shape as the compose modal above: the
   // target comes from the open panel order (?order=), never the selection.
@@ -1322,7 +1410,7 @@ function Extension() {
   // page — so jump to All + search by order number (guarantees it is on the
   // page), then open it.
   const openRecentReschedule = useCallback(
-    (item: RecentRescheduleItem) => {
+    (item: Pick<RecentRescheduleItem, "name" | "legacyId">) => {
       closeModal();
       setTagsModalOrderId(null);
       setKpiProductsOpen(false);
@@ -1747,7 +1835,32 @@ function Extension() {
   const selectedCount = selectedResources.length;
 
   return (
-    <Page title="Orders Operations" fullWidth>
+    <Page
+      title="Orders Operations"
+      fullWidth
+      primaryAction={
+        <NotificationsBell
+          replies={inboxFetcher.data?.replies ?? []}
+          repliesLoading={inboxFetcher.state !== "idle"}
+          repliesError={
+            inboxFetcher.data && !inboxFetcher.data.ok
+              ? inboxFetcher.data.error
+              : null
+          }
+          reschedules={loaderData.recentReschedules}
+          pendingReplySeenIds={pendingReplySeenIds}
+          pendingRescheduleSeenIds={pendingSeenIds}
+          seenErrorMessage={bellSeenError}
+          timezone={loaderData.shopTimezone}
+          todayISO={loaderData.todayISO}
+          onOpen={() => reloadInbox(60_000)}
+          onOpenReply={openRecentReschedule}
+          onReplySeen={submitRepliesSeen}
+          onOpenReschedule={openRecentReschedule}
+          onRescheduleSeen={submitReschedulesSeen}
+        />
+      }
+    >
       <BlockStack gap="400">
         {/* ── Error banner ──────────────────────────────────────────────────── */}
         {error && !errorDismissed && (
@@ -2051,6 +2164,7 @@ function Extension() {
         customerEmail={
           selectedOrder?.customer?.defaultEmailAddress?.emailAddress ?? null
         }
+        replyTo={emailReplyTo}
       />
       <EditDetailsModal
         open={activeModal === "editDetails" && selectedOrder !== null}
@@ -2101,6 +2215,7 @@ function Extension() {
             onReschedule={openPanelReschedule}
             onSendEmail={openPanelSendEmail}
             onEditDetails={openPanelEditDetails}
+            onReplyEmail={openPanelReplyEmail}
           />
         </Suspense>
       )}
