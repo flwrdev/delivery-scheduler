@@ -16,13 +16,13 @@ export function SharedTagsModal({ open, onClose, tags }: SharedTagsModalProps) {
     <Modal
       open={open}
       onClose={onClose}
-      title="Tags"
+      title="Attributes"
       primaryAction={{ content: "Close", onAction: onClose }}
     >
       <Modal.Section>
         {tags.length === 0 ? (
           <Text as="p" tone="subdued">
-            No tags
+            No tags on this order.
           </Text>
         ) : (
           <InlineStack gap="100" wrap>

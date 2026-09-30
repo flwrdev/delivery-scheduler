@@ -25,7 +25,7 @@ export function AddTagsModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Add tags"
+      title="Add tags to selected orders"
       primaryAction={{
         content: isSubmitting ? "Adding…" : "Add tags",
         onAction: onConfirm,
@@ -44,7 +44,7 @@ export function AddTagsModal({
           </Text>
           <TextField
             label="Tags (comma-separated)"
-            placeholder="priority, vip"
+            placeholder="e.g. priority, vip, holiday"
             value={addTagsInput}
             onChange={setAddTagsInput}
             autoComplete="off"

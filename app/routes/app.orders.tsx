@@ -1615,7 +1615,7 @@ function Extension() {
         style: "currency",
         currency,
       }),
-      kpiAvgRevenue: avg ? `Avg ${avg} per order` : "",
+      kpiAvgRevenue: avg ? `Avg ${avg} / order` : "",
     };
   }, [displayedOrders]);
 
@@ -1924,7 +1924,8 @@ function Extension() {
         {ordersDiffTitle && (
           <Banner tone="info" title={ordersDiffTitle} onDismiss={dismissOrdersDiff}>
             <Text as="p">
-              New and updated orders are marked in the table.
+              This view changed since the last refresh — new and updated rows
+              are marked in the table below.
             </Text>
           </Banner>
         )}
@@ -2041,7 +2042,7 @@ function Extension() {
           <Card>
             <BlockStack gap="100">
               <Text as="p" variant="bodySm" tone="subdued">
-                Delivery fees · this page
+                Delivery Fees · this page
               </Text>
               <Text as="p" variant="headingLg">
                 {kpiDeliveryFees}
