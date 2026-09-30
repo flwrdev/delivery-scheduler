@@ -19,6 +19,8 @@ export interface MailboxMessage {
   date: string;
   /** Quoted history is removed, otherwise every reply repeats our own email underneath it. */
   text: string;
+  /** Present only when quote stripping removed something, to keep the thread payload small. */
+  fullText?: string;
   direction: EmailDirection;
   verdict: SenderVerdict;
 }
@@ -129,10 +131,17 @@ export function stripQuotedReply(text: string | null | undefined): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  const result = kept || source.trim();
-  return result.length > EMAIL_TEXT_MAX_LENGTH
-    ? `${result.slice(0, EMAIL_TEXT_MAX_LENGTH).trimEnd()}…`
-    : result;
+  return capEmailText(kept || source.trim());
+}
+
+export function capEmailText(text: string): string {
+  return text.length > EMAIL_TEXT_MAX_LENGTH
+    ? `${text.slice(0, EMAIL_TEXT_MAX_LENGTH).trimEnd()}…`
+    : text;
+}
+
+export function normalizeEmailText(text: string | null | undefined): string {
+  return capEmailText((text ?? "").replace(/\r\n?/g, "\n").trim());
 }
 
 export function buildPreview(text: string, max = EMAIL_PREVIEW_LENGTH): string {

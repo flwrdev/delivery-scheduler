@@ -21,6 +21,7 @@ export type BulkModalName =
   | "markAsPaid"
   | "reschedule"
   | "sendEmail"
+  | "viewEmail"
   | "editDetails";
 
 const ACTION_LABEL: Record<BulkActionName, { verb: string; ing: string }> = {

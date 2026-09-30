@@ -57,6 +57,7 @@ import { KpiProductsModal } from "../components/orders/KpiProductsModal";
 import { MarkFulfilledModal } from "../components/orders/MarkFulfilledModal";
 import { RescheduleModal } from "../components/orders/RescheduleModal";
 import { SendEmailModal } from "../components/orders/SendEmailModal";
+import { EmailViewModal } from "../components/orders/EmailViewModal";
 import { EditDetailsModal } from "../components/orders/EditDetailsModal";
 import { RecentReschedulesBanner } from "../components/orders/RecentReschedulesBanner";
 import { NotificationsBell } from "../components/orders/NotificationsBell";
@@ -64,6 +65,7 @@ import type {
   EmailReplyNotification,
   MailboxMessage,
 } from "../lib/email-replies";
+import type { QuickReply } from "../lib/quick-replies";
 import {
   DEFAULT_DELIVERY_SCHEDULE_RULES,
   getShopLocalDate,
@@ -1352,6 +1354,18 @@ function Extension() {
     },
     [selectedOrder, openModal],
   );
+  const [viewingEmail, setViewingEmail] = useState<{
+    message: MailboxMessage;
+    quickReplies: QuickReply[];
+  } | null>(null);
+  const openPanelViewEmail = useCallback(
+    (message: MailboxMessage, quickReplies: QuickReply[]) => {
+      if (!selectedOrder) return;
+      setViewingEmail({ message, quickReplies });
+      openModal("viewEmail");
+    },
+    [selectedOrder, openModal],
+  );
 
   // Edit details — panel-only, same shape as the compose modal above: the
   // target comes from the open panel order (?order=), never the selection.
@@ -2166,6 +2180,13 @@ function Extension() {
         }
         replyTo={emailReplyTo}
       />
+      <EmailViewModal
+        open={activeModal === "viewEmail" && selectedOrder !== null}
+        onClose={closeModal}
+        message={viewingEmail?.message ?? null}
+        quickReplies={viewingEmail?.quickReplies ?? []}
+        onReply={openPanelReplyEmail}
+      />
       <EditDetailsModal
         open={activeModal === "editDetails" && selectedOrder !== null}
         onClose={closeModal}
@@ -2215,7 +2236,7 @@ function Extension() {
             onReschedule={openPanelReschedule}
             onSendEmail={openPanelSendEmail}
             onEditDetails={openPanelEditDetails}
-            onReplyEmail={openPanelReplyEmail}
+            onViewEmail={openPanelViewEmail}
           />
         </Suspense>
       )}

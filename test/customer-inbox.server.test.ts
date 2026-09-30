@@ -351,6 +351,40 @@ describe("getOrderThread", () => {
     expect(imap.state.searches.map((s) => s.path)).toEqual(["INBOX", "Sent"]);
     expect(imap.state.openedReadOnly).toEqual([true, true]);
   });
+
+  it("keeps the full text only when quoted history was stripped", async () => {
+    imap.state.mailboxes.INBOX = [
+      {
+        uid: 1,
+        source: raw({
+          from: "juan@example.com",
+          subject: "Re: Order #4539",
+          id: "<quoted@example.com>",
+          body: "Friday po\r\n\r\nOn Sun, Sep 27, 2026 The Flowercart <jhay@flowercart.store> wrote:\r\n> Hi Juan",
+        }),
+      },
+      {
+        uid: 2,
+        source: raw({
+          from: "juan@example.com",
+          subject: "Re: Order #4539",
+          id: "<plain@example.com>",
+          body: "Salamat",
+        }),
+      },
+    ];
+    const result = await getOrderThread(
+      { orderName: "#4539", customerEmail: "juan@example.com" },
+      new Date("2026-09-28T04:00:00Z"),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const quoted = result.data.find((m) => m.messageId === "<quoted@example.com>");
+    const plain = result.data.find((m) => m.messageId === "<plain@example.com>");
+    expect(quoted?.text).toBe("Friday po");
+    expect(quoted?.fullText).toContain("> Hi Juan");
+    expect(plain?.fullText).toBeUndefined();
+  });
 });
 
 describe("markEmailReplySeen op", () => {

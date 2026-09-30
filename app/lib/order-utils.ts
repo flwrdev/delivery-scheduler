@@ -620,6 +620,27 @@ export function formatTimelineTime(value: string): string {
   });
 }
 
+function localDayKey(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+// Same browser-local clock as formatTimelineTime, so a row's day heading and
+// its time never disagree around midnight.
+export function formatTimelineDay(value: string, now: Date = new Date()): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date not recorded";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (localDayKey(date) === localDayKey(now)) return "Today";
+  if (localDayKey(date) === localDayKey(yesterday)) return "Yesterday";
+  return date.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
+  });
+}
+
 export function formatTimelineStatus(value: string): string {
   return value === "—" ? "Status not recorded" : formatStatusLabel(value);
 }

@@ -37,6 +37,8 @@ Neon project `delivery-scheduler` (Free plan) has one branch, `production`. The 
 - Removed on merchant request: Lalamove tracking (poll, webhook, Order ID field, table), the delivery-sync queue and hourly sweep, bulk-action jobs, and the COD Settings page. Bulk actions run inline, 10 orders at most.
 - The COD fee is Shopify-owned: the `COD-FEE` SKU product and its metafields. The app only adds the line item to COD orders. There is no lock against a double fee from overlapping webhook deliveries; merchant: add one only after an incident ("tsaka na lang lagyan kung may nangyari ng insidente").
 - Orders page "Today" view auto-refreshes every 60 minutes.
+- Incoming customer email is read from the Private Email mailbox over IMAP, read-only, only during a request: Orders page load, Refresh, opening the bell, and opening an order panel. There is no IDLE connection and no poller. IMAP reuses `EMAIL_SMTP_USER`/`EMAIL_SMTP_PASSWORD`; `EMAIL_IMAP_HOST` and `EMAIL_IMAP_PORT` are optional.
+- Email state lives in Shopify, not Postgres: `$app.email_reply_seen_at` (order metafield, date_time) and `$app.quick_replies` (shop metafield, json, edited on the Delivery Scheduler page).
 - The `flowercart_marketing` database on `production` stays, for safe storage with no access by anyone else. It is written from outside this repo. Do not modify or delete it.
 - Before any deploy, push to `main`, or database write, show the exact command or change and wait for the merchant (2026-09-26: "ipakita mo muna saakin yung exact command").
 

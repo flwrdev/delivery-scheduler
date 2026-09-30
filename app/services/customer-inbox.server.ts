@@ -11,6 +11,7 @@ import {
   type ReplyOrderMatch,
   isSelfAddress,
   normalizeEmail,
+  normalizeEmailText,
   parseOrderNumber,
   selectUnseenReplies,
   senderVerdict,
@@ -180,6 +181,8 @@ export async function toMailboxMessage(
   }
   // App sends are BCC'd to this mailbox, so our own messages also show up in INBOX.
   const outbound = mailbox === "sent" || isSelfAddress(fromAddress, mailboxUser);
+  const stripped = stripQuotedReply(text);
+  const full = normalizeEmailText(text);
   return {
     key: `${mailbox}:${msg.uid}`,
     messageId: envelope.messageId?.trim() || null,
@@ -191,7 +194,8 @@ export async function toMailboxMessage(
       .filter(Boolean),
     date:
       toIso(envelope.date) ?? toIso(msg.internalDate) ?? new Date(0).toISOString(),
-    text: stripQuotedReply(text),
+    text: stripped,
+    ...(full !== stripped ? { fullText: full } : {}),
     direction: outbound ? "outbound" : "inbound",
     verdict: outbound ? "pass" : senderVerdict(authResults),
   };

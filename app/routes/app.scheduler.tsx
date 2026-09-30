@@ -25,6 +25,7 @@ import {
 } from "../services/scheduler-ops.server";
 import { DayOverridesCard } from "../components/scheduler/DayOverridesCard";
 import { OverviewCard } from "../components/scheduler/OverviewCard";
+import { QuickRepliesCard } from "../components/scheduler/QuickRepliesCard";
 import { SettingsCard } from "../components/scheduler/SettingsCard";
 import { SlotsCard } from "../components/scheduler/SlotsCard";
 import type {
@@ -337,6 +338,7 @@ export default function SchedulerPage() {
             onSync={onSync}
           />
         </div>
+        <QuickRepliesCard />
       </BlockStack>
     </Page>
   );

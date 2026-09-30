@@ -4,6 +4,7 @@ import type {
 } from "react-router";
 
 import type { MailboxMessage } from "../lib/email-replies";
+import { type QuickReply, parseQuickReplies } from "../lib/quick-replies";
 import { getOrderThread } from "../services/customer-inbox.server";
 import { authenticate } from "../shopify.server";
 
@@ -11,7 +12,12 @@ import { authenticate } from "../shopify.server";
 // email are read from Shopify, so a crafted URL can't pull an arbitrary
 // address's mail out of the mailbox.
 export type EmailThreadData =
-  | { ok: true; orderId: string; messages: MailboxMessage[] }
+  | {
+      ok: true;
+      orderId: string;
+      messages: MailboxMessage[];
+      quickReplies: QuickReply[];
+    }
   | { ok: false; orderId: string; error: string; messages: [] };
 
 // Every read is a fresh IMAP login; only a send can change this thread.
@@ -31,6 +37,11 @@ const ORDER_FOR_THREAD_QUERY = `#graphql
         defaultEmailAddress {
           emailAddress
         }
+      }
+    }
+    shop {
+      quickReplies: metafield(namespace: "$app", key: "quick_replies") {
+        value
       }
     }
   }
@@ -60,12 +71,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   let order: OrderForThread | null = null;
+  let quickReplies: QuickReply[] = [];
   try {
     const res = await admin.graphql(ORDER_FOR_THREAD_QUERY, {
       variables: { id: orderId },
     });
     const body = (await res.json()) as {
-      data?: { order?: OrderForThread | null };
+      data?: {
+        order?: OrderForThread | null;
+        shop?: { quickReplies?: { value?: string | null } | null } | null;
+      };
       errors?: Array<{ message: string }>;
     };
     if (body.errors?.length) {
@@ -74,6 +89,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       );
     }
     order = body.data?.order ?? null;
+    quickReplies = parseQuickReplies(body.data?.shop?.quickReplies?.value);
   } catch (e) {
     return failure(e instanceof Error ? e.message : "Couldn't read the order.");
   }
@@ -94,5 +110,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ok: true,
     orderId,
     messages: result.data,
+    quickReplies,
   } satisfies EmailThreadData);
 };
