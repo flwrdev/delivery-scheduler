@@ -55,26 +55,27 @@ export function CancelModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={`Cancel ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}?`}
+      title="Cancel orders?"
       primaryAction={{
-        content: selectedCount === 1 ? "Cancel order" : "Cancel orders",
+        content: isSubmitting
+          ? "Cancelling…"
+          : `Cancel ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`,
         onAction: onConfirm,
         destructive: true,
         loading: isSubmitting,
         disabled: isSubmitting || selectedCount === 0,
       }}
       secondaryActions={[
-        {
-          content: selectedCount === 1 ? "Keep order" : "Keep orders",
-          onAction: onClose,
-          disabled: isSubmitting,
-        },
+        { content: "Keep orders", onAction: onClose, disabled: isSubmitting },
       ]}
     >
       <Modal.Section>
         <BlockStack gap="400">
           <Banner tone="critical">
-            <Text as="p">You can’t undo a cancellation.</Text>
+            <Text as="p">
+              {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
+              be cancelled. You can’t undo this.
+            </Text>
           </Banner>
           <Select
             label="Reason"
@@ -93,8 +94,7 @@ export function CancelModal({
             onChange={setCancelNotify}
           />
           <TextField
-            label="Staff note"
-            helpText="Optional. Only staff can see this."
+            label="Staff note (optional)"
             value={cancelStaffNote}
             onChange={setCancelStaffNote}
             maxLength={255}

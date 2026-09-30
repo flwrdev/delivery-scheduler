@@ -1923,7 +1923,9 @@ function Extension() {
             in the table below; dismissing clears the badges ─────────────── */}
         {ordersDiffTitle && (
           <Banner tone="info" title={ordersDiffTitle} onDismiss={dismissOrdersDiff}>
-            <Text as="p">New and updated orders are marked in the table.</Text>
+            <Text as="p">
+              New and updated orders are marked in the table.
+            </Text>
           </Banner>
         )}
 
@@ -1932,7 +1934,7 @@ function Extension() {
           <Card>
             <BlockStack gap="100">
               <Text as="p" variant="bodySm" tone="subdued">
-                Orders
+                Orders · this page
               </Text>
               <Text as="p" variant="headingLg">
                 {kpiOrderCount}
@@ -1956,7 +1958,7 @@ function Extension() {
           <Card>
             <BlockStack gap="100">
               <Text as="p" variant="bodySm" tone="subdued">
-                Revenue
+                Revenue · this page
               </Text>
               <Text as="p" variant="headingLg">
                 {kpiRevenue}
@@ -1982,7 +1984,7 @@ function Extension() {
             <Card>
               <BlockStack gap="100">
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Unpaid
+                  Unpaid · this page
                 </Text>
                 <Text
                   as="p"
@@ -2018,7 +2020,7 @@ function Extension() {
             <Card>
               <BlockStack gap="100">
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Unfulfilled
+                  Unfulfilled · this page
                 </Text>
                 <Text
                   as="p"
@@ -2039,7 +2041,7 @@ function Extension() {
           <Card>
             <BlockStack gap="100">
               <Text as="p" variant="bodySm" tone="subdued">
-                Delivery fees
+                Delivery fees · this page
               </Text>
               <Text as="p" variant="headingLg">
                 {kpiDeliveryFees}
@@ -2050,23 +2052,18 @@ function Extension() {
 
         {/* ── Filters + table ───────────────────────────────────────────────── */}
         <BlockStack gap="200">
-          <InlineStack align="space-between" gap="200" blockAlign="center">
+          <InlineStack align="end" gap="200" blockAlign="center">
             <Text as="span" variant="bodySm" tone="subdued">
-              Totals above count only the orders on this page.
+              {lastUpdatedLabel}
             </Text>
-            <InlineStack gap="200" blockAlign="center">
-              <Text as="span" variant="bodySm" tone="subdued">
-                {lastUpdatedLabel}
-              </Text>
-              <Button
-                variant="plain"
-                onClick={refresh}
-                loading={isRefreshing}
-                accessibilityLabel="Refresh orders"
-              >
-                Refresh
-              </Button>
-            </InlineStack>
+            <Button
+              variant="plain"
+              onClick={refresh}
+              loading={isRefreshing}
+              accessibilityLabel="Refresh orders"
+            >
+              Refresh
+            </Button>
           </InlineStack>
           <Card padding="0">
           <OrdersIndexTable

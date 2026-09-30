@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
-import { XIcon } from "@shopify/polaris-icons";
 import {
   ActionList,
   Badge,
@@ -251,12 +250,14 @@ export function OrderDetailsPanel({
                 >
                   <ActionList actionRole="menuitem" items={actionItems} />
                 </Popover>
-                <Button
-                  variant="tertiary"
-                  icon={XIcon}
+                <button
+                  type="button"
+                  className="odp-close"
                   onClick={onClose}
-                  accessibilityLabel="Close order details"
-                />
+                  aria-label="Close order details"
+                >
+                  ×
+                </button>
               </InlineStack>
             </InlineStack>
             <Text as="p" variant="bodySm" tone="subdued">

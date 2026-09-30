@@ -37,9 +37,11 @@ export function MarkFulfilledModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={`Mark ${selectedCount} ${selectedCount === 1 ? "order" : "orders"} as fulfilled?`}
+      title="Mark orders as fulfilled?"
       primaryAction={{
-        content: "Mark as fulfilled",
+        content: isSubmitting
+          ? "Fulfilling…"
+          : `Mark ${selectedCount} ${selectedCount === 1 ? "order" : "orders"} fulfilled`,
         onAction: onConfirm,
         loading: isSubmitting,
         disabled: isSubmitting || selectedCount === 0,
@@ -51,7 +53,10 @@ export function MarkFulfilledModal({
       <Modal.Section>
         <BlockStack gap="400">
           <Banner tone="warning">
-            <Text as="p">This creates a fulfillment in Shopify.</Text>
+            <Text as="p">
+              This creates a Shopify fulfillment for {selectedCount}{" "}
+              {selectedCount === 1 ? "order" : "orders"}.
+            </Text>
           </Banner>
           <TextField
             label="Tracking URL (optional)"
@@ -61,7 +66,7 @@ export function MarkFulfilledModal({
             autoComplete="off"
           />
           <Checkbox
-            label="Notify customers by email"
+            label="Notify customer by email"
             checked={fulfillNotify}
             onChange={setFulfillNotify}
           />

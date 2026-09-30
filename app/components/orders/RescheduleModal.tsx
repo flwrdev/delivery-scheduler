@@ -184,7 +184,9 @@ export function RescheduleModal({
       onClose={onClose}
       title="Update delivery slot"
       primaryAction={{
-        content: capacityWarning
+        content: isSubmitting
+          ? "Updating…"
+          : capacityWarning
             ? `Reschedule anyway (${capacityWarning.projected}/${capacityWarning.capacity})`
             : "Update delivery",
         onAction: handleConfirm,

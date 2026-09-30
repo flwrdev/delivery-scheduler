@@ -41,9 +41,9 @@ export function RemoveTagsModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={`Remove tags from ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
+      title="Remove tags"
       primaryAction={{
-        content: "Remove tags",
+        content: isSubmitting ? "Removing…" : "Remove tags",
         onAction: onConfirm,
         loading: isSubmitting,
         disabled:
@@ -55,9 +55,12 @@ export function RemoveTagsModal({
     >
       <Modal.Section>
         <BlockStack gap="400">
+          <Text as="p">
+            Remove the tags below from {selectedCount}{" "}
+            {selectedCount === 1 ? "order" : "orders"}.
+          </Text>
           <TextField
-            label="Tags"
-            helpText="Separate tags with commas."
+            label="Tags (comma-separated)"
             placeholder="priority, vip"
             value={removeTagsInput}
             onChange={setRemoveTagsInput}

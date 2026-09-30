@@ -21,9 +21,11 @@ export function MarkAsPaidModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={`Mark ${selectedCount} ${selectedCount === 1 ? "order" : "orders"} as paid?`}
+      title="Mark orders as paid?"
       primaryAction={{
-        content: "Mark as paid",
+        content: isSubmitting
+          ? "Marking as paid…"
+          : `Mark ${selectedCount} ${selectedCount === 1 ? "order" : "orders"} as paid`,
         onAction: onConfirm,
         loading: isSubmitting,
         disabled: isSubmitting || selectedCount === 0,
@@ -35,7 +37,8 @@ export function MarkAsPaidModal({
       <Modal.Section>
         <Banner tone="warning">
           <Text as="p">
-            The full balance is recorded as paid. You can’t undo this here.
+            {selectedCount} {selectedCount === 1 ? "order" : "orders"} will be
+            marked as paid. You can’t undo this here.
           </Text>
         </Banner>
       </Modal.Section>
