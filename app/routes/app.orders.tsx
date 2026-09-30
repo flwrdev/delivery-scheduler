@@ -1615,7 +1615,7 @@ function Extension() {
         style: "currency",
         currency,
       }),
-      kpiAvgRevenue: avg ? `Avg ${avg} / order` : "",
+      kpiAvgRevenue: avg ? `Avg ${avg} per order` : "",
     };
   }, [displayedOrders]);
 
@@ -1850,7 +1850,7 @@ function Extension() {
 
   return (
     <Page
-      title="Orders Operations"
+      title="Order operations"
       fullWidth
       primaryAction={
         <NotificationsBell
@@ -1879,7 +1879,7 @@ function Extension() {
         {/* ── Error banner ──────────────────────────────────────────────────── */}
         {error && !errorDismissed && (
           <Banner
-            title="Failed to load orders"
+            title="Couldn't load orders"
             tone="critical"
             onDismiss={() => setErrorDismissed(true)}
           >
@@ -1923,10 +1923,7 @@ function Extension() {
             in the table below; dismissing clears the badges ─────────────── */}
         {ordersDiffTitle && (
           <Banner tone="info" title={ordersDiffTitle} onDismiss={dismissOrdersDiff}>
-            <Text as="p">
-              This view changed since the last refresh — new and updated rows
-              are marked in the table below.
-            </Text>
+            <Text as="p">New and updated orders are marked in the table.</Text>
           </Banner>
         )}
 
@@ -1935,7 +1932,7 @@ function Extension() {
           <Card>
             <BlockStack gap="100">
               <Text as="p" variant="bodySm" tone="subdued">
-                Orders · this page
+                Orders
               </Text>
               <Text as="p" variant="headingLg">
                 {kpiOrderCount}
@@ -1959,7 +1956,7 @@ function Extension() {
           <Card>
             <BlockStack gap="100">
               <Text as="p" variant="bodySm" tone="subdued">
-                Revenue · this page
+                Revenue
               </Text>
               <Text as="p" variant="headingLg">
                 {kpiRevenue}
@@ -1985,7 +1982,7 @@ function Extension() {
             <Card>
               <BlockStack gap="100">
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Unpaid · this page
+                  Unpaid
                 </Text>
                 <Text
                   as="p"
@@ -2021,7 +2018,7 @@ function Extension() {
             <Card>
               <BlockStack gap="100">
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Unfulfilled · this page
+                  Unfulfilled
                 </Text>
                 <Text
                   as="p"
@@ -2042,7 +2039,7 @@ function Extension() {
           <Card>
             <BlockStack gap="100">
               <Text as="p" variant="bodySm" tone="subdued">
-                Delivery Fees · this page
+                Delivery fees
               </Text>
               <Text as="p" variant="headingLg">
                 {kpiDeliveryFees}
@@ -2053,18 +2050,23 @@ function Extension() {
 
         {/* ── Filters + table ───────────────────────────────────────────────── */}
         <BlockStack gap="200">
-          <InlineStack align="end" gap="200" blockAlign="center">
+          <InlineStack align="space-between" gap="200" blockAlign="center">
             <Text as="span" variant="bodySm" tone="subdued">
-              {lastUpdatedLabel}
+              Totals above count only the orders on this page.
             </Text>
-            <Button
-              variant="plain"
-              onClick={refresh}
-              loading={isRefreshing}
-              accessibilityLabel="Refresh orders"
-            >
-              Refresh
-            </Button>
+            <InlineStack gap="200" blockAlign="center">
+              <Text as="span" variant="bodySm" tone="subdued">
+                {lastUpdatedLabel}
+              </Text>
+              <Button
+                variant="plain"
+                onClick={refresh}
+                loading={isRefreshing}
+                accessibilityLabel="Refresh orders"
+              >
+                Refresh
+              </Button>
+            </InlineStack>
           </InlineStack>
           <Card padding="0">
           <OrdersIndexTable

@@ -55,36 +55,35 @@ export function CancelModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Cancel selected orders?"
+      title={`Cancel ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}?`}
       primaryAction={{
-        content: isSubmitting
-          ? "Cancelling…"
-          : `Cancel ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`,
+        content: selectedCount === 1 ? "Cancel order" : "Cancel orders",
         onAction: onConfirm,
         destructive: true,
         loading: isSubmitting,
         disabled: isSubmitting || selectedCount === 0,
       }}
       secondaryActions={[
-        { content: "Keep them", onAction: onClose, disabled: isSubmitting },
+        {
+          content: selectedCount === 1 ? "Keep order" : "Keep orders",
+          onAction: onClose,
+          disabled: isSubmitting,
+        },
       ]}
     >
       <Modal.Section>
         <BlockStack gap="400">
           <Banner tone="critical">
-            <Text as="p">
-              {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
-              be cancelled. Cancellation is irreversible.
-            </Text>
+            <Text as="p">You can’t undo a cancellation.</Text>
           </Banner>
           <Select
-            label="Cancellation reason"
+            label="Reason"
             options={CANCEL_REASON_OPTIONS}
             value={cancelReason}
             onChange={setCancelReason}
           />
           <Checkbox
-            label="Restock inventory committed to these orders"
+            label="Restock items"
             checked={cancelRestock}
             onChange={setCancelRestock}
           />
@@ -94,7 +93,8 @@ export function CancelModal({
             onChange={setCancelNotify}
           />
           <TextField
-            label="Staff note (optional, internal only)"
+            label="Staff note"
+            helpText="Optional. Only staff can see this."
             value={cancelStaffNote}
             onChange={setCancelStaffNote}
             maxLength={255}

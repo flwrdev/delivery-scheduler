@@ -23,7 +23,7 @@ export function KpiProductsModal({
       <Modal.Section>
         {kpiProducts.length === 0 ? (
           <Text as="p" tone="subdued">
-            No products found.
+            No items to prepare.
           </Text>
         ) : (
           <BlockStack gap="150">

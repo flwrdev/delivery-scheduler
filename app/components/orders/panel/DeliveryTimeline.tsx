@@ -334,7 +334,7 @@ export function DeliveryTimeline({ order, onViewEmail }: DeliveryTimelineProps) 
         </div>
         {threadLoading && (
           <Text as="p" variant="bodySm" tone="subdued">
-            Checking the inbox for emails about this order…
+            Checking emails…
           </Text>
         )}
         {threadError && (

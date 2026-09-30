@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
+import { XIcon } from "@shopify/polaris-icons";
 import {
   ActionList,
   Badge,
@@ -250,14 +251,12 @@ export function OrderDetailsPanel({
                 >
                   <ActionList actionRole="menuitem" items={actionItems} />
                 </Popover>
-                <button
-                  type="button"
-                  className="odp-close"
+                <Button
+                  variant="tertiary"
+                  icon={XIcon}
                   onClick={onClose}
-                  aria-label="Close order details"
-                >
-                  ×
-                </button>
+                  accessibilityLabel="Close order details"
+                />
               </InlineStack>
             </InlineStack>
             <Text as="p" variant="bodySm" tone="subdued">
@@ -276,8 +275,8 @@ export function OrderDetailsPanel({
         <div className="odp-body">
           {notInView && (
             <Text as="p" variant="bodySm" tone="subdued">
-              This order is no longer in the current view — showing its last
-              loaded details.
+              This order is no longer in this view. Showing the last loaded
+              details.
             </Text>
           )}
           <DeliverySection order={order} todayISO={todayISO} />

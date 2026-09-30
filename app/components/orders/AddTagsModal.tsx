@@ -1,4 +1,4 @@
-import { BlockStack, Modal, Text, TextField } from "@shopify/polaris";
+import { Modal, TextField } from "@shopify/polaris";
 
 // Bulk "Add tags" modal (Polaris React). Visibility is controlled by the
 // parent via `open`/`onClose`.
@@ -25,9 +25,9 @@ export function AddTagsModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Add tags to selected orders"
+      title={`Add tags to ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
       primaryAction={{
-        content: isSubmitting ? "Adding…" : "Add tags",
+        content: "Add tags",
         onAction: onConfirm,
         loading: isSubmitting,
         disabled: isSubmitting || !addTagsInput.trim() || selectedCount === 0,
@@ -37,19 +37,14 @@ export function AddTagsModal({
       ]}
     >
       <Modal.Section>
-        <BlockStack gap="400">
-          <Text as="p">
-            Add the tags below to {selectedCount}{" "}
-            {selectedCount === 1 ? "order" : "orders"}.
-          </Text>
-          <TextField
-            label="Tags (comma-separated)"
-            placeholder="e.g. priority, vip, holiday"
-            value={addTagsInput}
-            onChange={setAddTagsInput}
-            autoComplete="off"
-          />
-        </BlockStack>
+        <TextField
+          label="Tags"
+          helpText="Separate tags with commas."
+          placeholder="priority, vip"
+          value={addTagsInput}
+          onChange={setAddTagsInput}
+          autoComplete="off"
+        />
       </Modal.Section>
     </Modal>
   );

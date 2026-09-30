@@ -48,7 +48,7 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <ui-nav-menu>
-        <Link to={ordersHref} rel="home">Orders Operations</Link>
+        <Link to={ordersHref} rel="home">Order operations</Link>
         <Link to={schedulerHref}>Delivery Scheduler</Link>
       </ui-nav-menu>
       <PolarisAppProvider i18n={polarisEnTranslations}>

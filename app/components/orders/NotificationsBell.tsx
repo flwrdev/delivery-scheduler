@@ -231,7 +231,7 @@ function ReplyRow({
       <BlockStack gap="100">
         <InlineStack gap="200" blockAlign="center">
           <Text as="span" fontWeight="semibold">
-            Customer replied to Order {item.name}
+            Customer replied to order {item.name}
           </Text>
           {item.unseenCount > 1 && (
             <Badge size="small">{`${item.unseenCount} new`}</Badge>

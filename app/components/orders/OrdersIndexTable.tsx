@@ -269,7 +269,7 @@ export function OrdersIndexTable({
         title={hasActiveFilters ? "No orders match this view" : "No orders found"}
         description={
           hasActiveFilters
-            ? "Try adjusting or clearing your filters."
+            ? "Try changing the filters or search term."
             : "Orders will appear here after customers place them."
         }
         withIllustration
@@ -599,7 +599,7 @@ export function OrdersIndexTable({
           { title: "Customer" },
           { title: "City" },
           { title: "Delivery date" },
-          { title: "Time window" },
+          { title: "Time slot" },
           { title: "Payment" },
           { title: "Fulfillment" },
           { title: "Total", alignment: "end" },

@@ -41,9 +41,9 @@ export function RemoveTagsModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Remove tags from selected orders"
+      title={`Remove tags from ${selectedCount} ${selectedCount === 1 ? "order" : "orders"}`}
       primaryAction={{
-        content: isSubmitting ? "Removing…" : "Remove tags",
+        content: "Remove tags",
         onAction: onConfirm,
         loading: isSubmitting,
         disabled:
@@ -55,13 +55,10 @@ export function RemoveTagsModal({
     >
       <Modal.Section>
         <BlockStack gap="400">
-          <Text as="p">
-            Remove the tags below from {selectedCount}{" "}
-            {selectedCount === 1 ? "order" : "orders"}.
-          </Text>
           <TextField
-            label="Tags (comma-separated)"
-            placeholder="e.g. priority, vip"
+            label="Tags"
+            helpText="Separate tags with commas."
+            placeholder="priority, vip"
             value={removeTagsInput}
             onChange={setRemoveTagsInput}
             autoComplete="off"
@@ -69,7 +66,7 @@ export function RemoveTagsModal({
           {suggestedTags.length > 0 && (
             <BlockStack gap="200">
               <Text as="p" variant="bodySm" tone="subdued">
-                Tags on the selected orders — click to add:
+                Tags on these orders
               </Text>
               <InlineStack gap="100" wrap>
                 {suggestedTags.map((tag) => (
