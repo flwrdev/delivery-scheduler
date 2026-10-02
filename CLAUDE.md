@@ -11,11 +11,11 @@ No comments that describe what code does — only why (non-obvious invariants, w
 ## Commands
 
 ```bash
-npm run dev               # DEV app config; does NOT auto-apply migrations
-npm run dev:prod-preview  # PROD app config, read-only preview of the deployed build
+npm run dev               # shopify app dev with shopify.app.production.toml, the only app config; does NOT auto-apply migrations
 npm run typecheck         # react-router typegen + tsc
 npm run lint
 npm test                  # vitest: test/**/*.test.{ts,tsx} only; e2e/ runs separately
+npm run test:extensions   # vitest: extensions/*/tests/**/*.test.{ts,tsx}
 npm run setup             # prisma generate && prisma migrate deploy
 npm run deploy:prod       # app config + extensions to the PROD app (explicit go required)
 gcloud run deploy delivery-scheduler --source . --region us-central1 --project lalamove-map --service-account delivery-scheduler@lalamove-map.iam.gserviceaccount.com   # backend (explicit go required)
@@ -23,16 +23,19 @@ gcloud run deploy delivery-scheduler --source . --region us-central1 --project l
 
 After creating or pulling a Prisma migration, state that `npm run setup` must run before the next `npm run dev`.
 
-The container runs `npm run setup` (`prisma migrate deploy`) on every start, so a migration in the image is applied to `production` by the deploy itself. `migrate deploy` ignores migrations recorded in `_prisma_migrations` whose folders were deleted.
+The container runs `npm run setup` (`prisma generate && prisma migrate deploy`) on every start, so a migration in the image is applied to `production` by the deploy itself. `migrate deploy` ignores migrations recorded in `_prisma_migrations` whose folders were deleted.
 
-`.github/workflows/deploy.yml` authenticates as `github-deployer@lalamove-map.iam.gserviceaccount.com`; it failed on 2026-09-26 because that account had been deleted. The merchant deploys with the `gcloud` command above.
+There is no CI: `.github/workflows/` (`ci.yml`, `deploy.yml`) was deleted in commit 7f89d04. The merchant deploys with the `gcloud` command above. The `github-deployer@lalamove-map.iam.gserviceaccount.com` account is disabled, not deleted, and still holds deploy roles (Google Cloud console, checked 2026-10-02).
 
 Neon project `delivery-scheduler` (Free plan) has one branch, `production`. The `dev` branch was deleted on 2026-09-25, so there is no dev database until a new one is branched from `production`. Only Cloud Run reaches `production`. Neon "block public connections" must stay off: Cloud Run connects over the public internet, and turning it on took the app down on 2026-09-25.
 
 ## Current shape (merchant decisions, 2026-09-25 unless noted)
 
-- Every endpoint is verified by Shopify: webhook HMAC, app-proxy signature, or session token. There are no internal endpoints with their own secrets, no pollers, no Cloud Tasks, and no Cloud Scheduler jobs. Merchant: "dapat ang mga verification ay ang external logical na may shopify-Hmac at hindi ang internal logic."
-- `orders/create` writes the delivery metafields, the schedule tag, and the COD fee line item inline, and answers 500 on a failed step so Shopify redelivers.
+- Every endpoint is verified by Shopify: webhook HMAC, app-proxy signature, or session token. There are no internal endpoints with their own secrets and no pollers. Merchant: "dapat ang mga verification ay ang external logical na may shopify-Hmac at hindi ang internal logic."
+- Google Cloud still has (console, checked 2026-10-02): the Cloud Scheduler job `delivery-scheduler-keepwarm`, which pings the app every 10 minutes from 7am to 9pm Manila time; an empty Cloud Tasks queue, `messenger-events`, that no code in this repo uses; and a second Cloud Run service, `local`, created 2026-09-30, whose only revision failed to start.
+- `orders/create` writes the delivery metafields, the schedule tags, and the COD fee line item inline, and answers 500 on a failed step so Shopify redelivers.
+- The schedule tags are the bare date and slot (`2026-10-03`, `9AM-12PM`). The app writes them on `orders/create` and on every reschedule. No Shopify Flow writes them: every delivery-tag workflow in Flow is inactive, and "Tag orders with delivery date and time" was turned off on 2026-05-01 (checked 2026-10-02). The Orders page date tabs and date filter search by these tags, and the merchant's Shopify Orders list, order email notifications and analytics use them. Merchant (2026-10-02): "kung babaguhin mo ang order tag ay pwede masira date picker logic kaya dahilan ng pa sulat pa ng app ng order tag" and "yung tag ginagamit ko sa automate sa ibang paraan … tulad ng mga order email notification at ibang analytics na sa order tag bumabase."
+- Slot capacity limits are on only for Valentine's Day and Mother's Day. Merchant (2026-10-02): "no capacity yet and its intentional because the capacity is for valentine and mothersday only.. at hindi ito napupuno sa totoong buhay."
 - Postgres (`neondb`) holds only `Session`, `DeliveryScheduleConfig`, `EmailSendLog`, and `_prisma_migrations`.
 - Removed on merchant request: Lalamove tracking (poll, webhook, Order ID field, table), the delivery-sync queue and hourly sweep, bulk-action jobs, and the COD Settings page. Bulk actions run inline, 10 orders at most.
 - The COD fee is Shopify-owned: the `COD-FEE` SKU product and its metafields. The app only adds the line item to COD orders. There is no lock against a double fee from overlapping webhook deliveries; merchant: add one only after an incident ("tsaka na lang lagyan kung may nangyari ng insidente").
