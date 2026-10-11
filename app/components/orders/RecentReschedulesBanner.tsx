@@ -85,8 +85,8 @@ export function RecentReschedulesBanner({
         ))}
         {visible.length > rows.length && (
           <Text as="p" tone="subdued" variant="bodySm">
-            +{visible.length - rows.length} more — mark the rows above as seen
-            to reveal them, or use the Mark all button.
+            {visible.length - rows.length} more. Mark rows as seen to show
+            them.
           </Text>
         )}
         {errorMessage && (

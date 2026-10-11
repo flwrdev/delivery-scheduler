@@ -21,7 +21,7 @@ export function UnarchiveModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Unarchive selected orders?"
+      title="Unarchive orders?"
       primaryAction={{
         content: isSubmitting
           ? "Unarchiving…"
@@ -37,8 +37,8 @@ export function UnarchiveModal({
       <Modal.Section>
         <Banner tone="info">
           <Text as="p">
-            {selectedCount} {selectedCount === 1 ? "order" : "orders"} will be
-            unarchived and returned to the main orders view.
+            {selectedCount} {selectedCount === 1 ? "order" : "orders"} will show
+            in the main list again.
           </Text>
         </Banner>
       </Modal.Section>

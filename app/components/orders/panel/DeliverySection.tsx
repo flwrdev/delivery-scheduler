@@ -50,7 +50,7 @@ function CopyableValue({
       onClick={() => onCopy(fieldKey, value)}
       onKeyDown={(e) => e.key === "Enter" && onCopy(fieldKey, value)}
     >
-      <Text as="span">{copied ? "Copied!" : value}</Text>
+      <Text as="span">{copied ? "Copied" : value}</Text>
     </span>
   );
 }
@@ -275,7 +275,7 @@ export function DeliverySection({
           size="slim"
           onClick={() => copyText(buildDeliveryInfoText(order))}
         >
-          {copied ? "Copied!" : "Copy delivery info"}
+          {copied ? "Copied" : "Copy delivery info"}
         </Button>
       </InlineStack>
     </BlockStack>

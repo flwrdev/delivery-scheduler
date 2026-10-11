@@ -22,7 +22,7 @@ export function ArchiveModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Archive selected orders?"
+      title="Archive orders?"
       primaryAction={{
         content: isSubmitting
           ? "Archiving…"
@@ -38,9 +38,8 @@ export function ArchiveModal({
       <Modal.Section>
         <Banner tone="warning">
           <Text as="p">
-            {selectedCount} {selectedCount === 1 ? "order" : "orders"} will be
-            archived and hidden from the main orders view. You can unarchive
-            them later.
+            {selectedCount} {selectedCount === 1 ? "order" : "orders"} will move
+            to Archived. You can unarchive them anytime.
           </Text>
         </Banner>
       </Modal.Section>

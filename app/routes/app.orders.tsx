@@ -1850,7 +1850,7 @@ function Extension() {
 
   return (
     <Page
-      title="Orders Operations"
+      title="Order operations"
       fullWidth
       primaryAction={
         <NotificationsBell
@@ -1879,7 +1879,7 @@ function Extension() {
         {/* ── Error banner ──────────────────────────────────────────────────── */}
         {error && !errorDismissed && (
           <Banner
-            title="Failed to load orders"
+            title="Couldn't load orders"
             tone="critical"
             onDismiss={() => setErrorDismissed(true)}
           >

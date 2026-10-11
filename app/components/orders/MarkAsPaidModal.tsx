@@ -21,7 +21,7 @@ export function MarkAsPaidModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Mark selected orders as paid?"
+      title="Mark orders as paid?"
       primaryAction={{
         content: isSubmitting
           ? "Marking as paid…"
@@ -38,8 +38,7 @@ export function MarkAsPaidModal({
         <Banner tone="warning">
           <Text as="p">
             {selectedCount} {selectedCount === 1 ? "order" : "orders"} will be
-            marked as fully paid. This captures the outstanding balance and
-            cannot be undone from here.
+            marked as paid. You can’t undo this here.
           </Text>
         </Banner>
       </Modal.Section>

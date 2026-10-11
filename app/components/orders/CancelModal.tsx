@@ -55,7 +55,7 @@ export function CancelModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Cancel selected orders?"
+      title="Cancel orders?"
       primaryAction={{
         content: isSubmitting
           ? "Cancelling…"
@@ -66,7 +66,7 @@ export function CancelModal({
         disabled: isSubmitting || selectedCount === 0,
       }}
       secondaryActions={[
-        { content: "Keep them", onAction: onClose, disabled: isSubmitting },
+        { content: "Keep orders", onAction: onClose, disabled: isSubmitting },
       ]}
     >
       <Modal.Section>
@@ -74,17 +74,17 @@ export function CancelModal({
           <Banner tone="critical">
             <Text as="p">
               {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
-              be cancelled. Cancellation is irreversible.
+              be cancelled. You can’t undo this.
             </Text>
           </Banner>
           <Select
-            label="Cancellation reason"
+            label="Reason"
             options={CANCEL_REASON_OPTIONS}
             value={cancelReason}
             onChange={setCancelReason}
           />
           <Checkbox
-            label="Restock inventory committed to these orders"
+            label="Restock items"
             checked={cancelRestock}
             onChange={setCancelRestock}
           />
@@ -94,7 +94,7 @@ export function CancelModal({
             onChange={setCancelNotify}
           />
           <TextField
-            label="Staff note (optional, internal only)"
+            label="Staff note (optional)"
             value={cancelStaffNote}
             onChange={setCancelStaffNote}
             maxLength={255}

@@ -227,14 +227,13 @@ export function RescheduleModal({
                 ? "That date is blocked in the delivery settings."
                 : undefined
             }
-            helpText="Administrative override — customer booking limits (cutoff, lead time, reschedule lock) don't apply here."
+            helpText="Customer limits (cutoff, lead time, reschedule lock) don’t apply here."
           />
           {dateInPast && (
             <Banner tone="warning" title="This date is in the past">
               <Text as="p">
-                {date} is before today ({shopTodayISO}) on the shop calendar —
-                the order will immediately show as overdue. Double-check the
-                year before confirming.
+                {date} is before today ({shopTodayISO}). The order will show as
+                overdue. Check the year before you confirm.
               </Text>
             </Banner>
           )}
@@ -257,7 +256,7 @@ export function RescheduleModal({
                 {capacityWarning.capacity}. Moving {capacityWarning.moving}{" "}
                 {capacityWarning.moving === 1 ? "order" : "orders"} puts it at{" "}
                 {capacityWarning.projected}/{capacityWarning.capacity}.
-                Confirming overrides the capacity limit.
+                Confirm to go over the limit.
               </Text>
             </Banner>
           )}
@@ -266,7 +265,7 @@ export function RescheduleModal({
             checked={notifyCustomer}
             onChange={setNotifyCustomer}
             disabled={isSubmitting}
-            helpText="Plain-text email from your business mailbox, sent right after the update. Skipped for orders without a customer email."
+            helpText="Sent from your business mailbox. Orders without an email are skipped."
           />
         </BlockStack>
       </Modal.Section>
