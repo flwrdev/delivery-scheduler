@@ -25,8 +25,8 @@ Secret values are never recorded here, names only.
 
 ## Cloud Run
 Service `delivery-scheduler`, region `us-central1`, URL `https://delivery-scheduler-1030649952056.us-central1.run.app`.
-- Revisions: `delivery-scheduler-host-fix-1013` (serving 100% of traffic, created 2026-10-12 13:45 UTC), `delivery-scheduler-00002-2t6` (created 2026-10-12 12:02 UTC), `delivery-scheduler-00001-9mz` (created 2026-10-12 09:27 UTC). All three run the same image digest.
-- Image: `us-central1-docker.pkg.dev/jhay-510919/cloud-run-source-deploy/delivery-scheduler@sha256:88183196c5d696b54eccdfa48398df9562324d1334ef8c607435ae42ba412495`.
+- Revisions: `delivery-scheduler-00004-2qx` (serving 100% of traffic, created 2026-10-12 18:20 UTC, image `0f1ddfb8…`), `delivery-scheduler-host-fix-1013` (13:45 UTC), `delivery-scheduler-00002-2t6` (12:02 UTC) and `delivery-scheduler-00001-9mz` (09:27 UTC). The last three run the earlier image `88183196…`.
+- Image: `us-central1-docker.pkg.dev/jhay-510919/cloud-run-source-deploy/delivery-scheduler@sha256:0f1ddfb8bc02c53e572b2041e03f7542d83c1af101db393297d2a3b77f54a9cf`.
 - Runtime service account: `delivery-scheduler-runtime@jhay-510919.iam.gserviceaccount.com`.
 - Scaling: minimum 0 instances, maximum 2, concurrency 80, startup CPU boost on. Resources: 1 CPU, 512Mi. Request timeout 300 s. Container port 8080. Ingress: all.
 - Service IAM: `roles/run.invoker` for `allUsers` (public). Requests are verified by Shopify signatures and session tokens in the app.
@@ -60,9 +60,9 @@ All nine secrets are readable only by `delivery-scheduler-runtime` (`roles/secre
 ## Artifact Registry
 Repository `cloud-run-source-deploy` (docker, standard, `us-central1`). Cleanup policy: keep the 2 most recent versions, delete the rest.
 
-Image `delivery-scheduler`, digest `sha256:88183196c5d696b54eccdfa48398df9562324d1334ef8c607435ae42ba412495`, tag `latest`, created 2026-10-12 09:27 UTC, 183 MB as reported by Artifact Registry. It is the only image.
+Image `delivery-scheduler` has two digests. Current: `sha256:0f1ddfb8bc02c53e572b2041e03f7542d83c1af101db393297d2a3b77f54a9cf`, tag `latest`, created 2026-10-12 18:20 UTC (the 20-minute refresh change). Previous: `sha256:88183196c5d696b54eccdfa48398df9562324d1334ef8c607435ae42ba412495`, created 09:27 UTC, 183 MB as reported by Artifact Registry; revisions 00001, 00002 and host-fix-1013 still use it.
 
-Contents (`linux/amd64`, 11 layers, 174 MB compressed):
+Contents of the previous digest (`linux/amd64`, 11 layers, 174 MB compressed). The current image is built from the same Dockerfile; its size was not measured:
 | Layer | Compressed size | What it is |
 |---|---|---|
 | 1 | 3.7 MB | Alpine 3.24 base |
@@ -77,10 +77,10 @@ Image settings: working directory `/app`; environment `PATH`, `NODE_VERSION`, `Y
 The image holds no source of `app/`, `extensions/` or `test/`, no `.env` file and no secret value.
 
 ## Cloud Build
-One build, status SUCCESS, 2026-10-12 09:23 UTC, region `us-central1` (the `gcloud run deploy --source` build).
+Two builds, both SUCCESS, region `us-central1` (each is a `gcloud run deploy --source` build): `d5c2c6d9` (2026-10-12 09:23 UTC) and `bc228380` (2026-10-12 18:15 UTC).
 
 ## Cloud Storage
-Bucket `run-sources-jhay-510919-us-central1` (`us-central1`): the uploaded source of the deploy, 1 object, 924 KiB.
+Bucket `run-sources-jhay-510919-us-central1` (`us-central1`): the uploaded source of each deploy, 2 objects, 1.84 MiB in total.
 
 ## Enabled APIs
 Enabled for this work: `run`, `cloudbuild`, `artifactregistry`, `iam`, `secretmanager`, `billingbudgets`.

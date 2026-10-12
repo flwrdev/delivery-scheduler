@@ -1,13 +1,5 @@
 # CLAUDE.md
 
-> **(Historical AI design decision, not a merchant requirement; the merchant may change it.)** Rules and decisions in this file labeled "locked", "merchant constraint", "deliberately untouched", "read-only", or "no caller" are historical AI design decisions unless a merchant request is quoted with a date. Evidence: commit a3555ba (2026-09-11) recorded ADR-22 constraint (2) as carried from a 2026-07-15 AI decision with no merchant request; commit 0d5483b (2026-09-12) reverted that record. Unless the merchant requested it, ask before treating any of them as a requirement — this applies to Sidekick, email, chat, agent, Messenger, and delivery decisions.
-
-
-
-## Mental model (verified against the code 2026-09-12)
-
-No comments that describe what code does — only why (non-obvious invariants, workarounds)
-
 ## Commands
 
 ```bash
@@ -45,19 +37,29 @@ The database behind `DATABASE_URL` and `DIRECT_DATABASE_URL` had no applied migr
 - The `flowercart_marketing` database on `production` stays, for safe storage with no access by anyone else. It is written from outside this repo. Do not modify or delete it.
 - Before any deploy, push to `main`, or database write, show the exact command or change and wait for the merchant (2026-09-26: "ipakita mo muna saakin yung exact command").
 
-## Rules
+## Code map
 
-Documentation and rules files
-- Do not create, edit, or delete anything under `docs/**` or `.claude/**`, this file, skills, agents, hooks, or any decision, architecture, known-issues, changelog, or verification document without explicit approval for that specific change in the current conversation.
-- Do not update documentation automatically after code changes. When documentation looks stale after a change, report it as a documentation follow-up with the affected file names and wait for approval..
+| Path | What lives there |
+|---|---|
+| `app/routes` | pages, resource routes, app proxy endpoints, webhooks (file-system routing) |
+| `app/services` | everything that talks to Shopify, Postgres or the mailbox (`*.server.ts`) |
+| `app/lib` | pure logic: rules engine, tag vocabulary, order helpers, email parsing |
+| `app/components` | Polaris screens for the Orders page and the Scheduler page |
+| `app/hooks` | refresh, diff, bulk-modal and clipboard hooks |
+| `app/data` | the Metro Manila ZIP and barangay list for the fee checker |
+| `extensions` | Shopify extensions (checkout, order status, customer account, admin, COD function) |
+| `prisma` | schema and migrations |
+| `test`, `e2e` | unit tests (vitest) and an end-to-end reschedule test (Playwright) |
 
-Code
-- Verify write paths and auth in the route and service code before making assumptions.
-- Comments explain non-obvious behavior or implementation details only. No decisions, rationale, policy, TODOs, instructions, or commentary in code comments.
-- Before ending a session, list every non-code file created or modified (markdown, JSON config, env examples, migrations, skills) with the reason for each.
+Where to look first
+- A new order arrives: `app/routes/webhooks.orders.create.ts`.
+- What the storefront can book, validate and reschedule: `app/routes/apps.schedule-rules*.ts` (app proxy) and `app/services/delivery-bookings.server.ts`.
+- The Orders page: `app/routes/app.orders.tsx`; its 20-minute refresh: `app/hooks/useSmartRefresh.ts`.
+- The Scheduler (rules) page: `app/routes/app.scheduler.tsx`.
+- Customer email: `app/services/customer-inbox.server.ts` (reads the mailbox) and `app/routes/app.orders_.inbox.ts` (what the bell loads).
+- Secrets and settings on Cloud Run: `docs/gcp-inventory.md`.
 
-Database
-- No session connects to any Neon branch (`production` or `dev`) — not with `pg`, `psql`, `prisma studio`, `prisma db execute`, a script, or an MCP tool — without the merchant's permission in the current conversation AND a stated purpose for that specific access. "Explore", "audit", or "verify" on its own is not a purpose and not a standing grant; a session with no current purpose does not open the database.
-- When granted, the default is read-only (`SET default_transaction_read_only = on`). A write (`INSERT`/`UPDATE`/`DELETE`/`DROP`/`TRUNCATE`) needs the exact SQL shown first and a separate "go" for that statement.
-- Never read, copy, or create a file that holds `production` credentials inside the repo folder (`.env.bak*`, `.env.prod*`, scripts with a connection string). Production URLs live only in Secret Manager of project `jhay-510919`; names are listed in `docs/gcp-inventory.md`.
+## Comments in code
+
+Every time code is added or changed, write or update the comment above it. The comment says what the code does, in plain English that a grade 8 student can follow: short sentences, everyday words, and a one-line meaning for any technical term it needs. Each file keeps a short comment at the top that says what the file is for; update it whenever the file changes.
 
