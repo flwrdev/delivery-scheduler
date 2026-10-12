@@ -1,3 +1,5 @@
+// Confirmation modal for archiving the selected orders (the `archive` bulk action).
+
 import { Banner, Modal, Text } from "@shopify/polaris";
 
 // Bulk "Archive selected orders" confirmation modal (Polaris React).

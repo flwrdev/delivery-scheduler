@@ -1,3 +1,8 @@
+// Sends an email to a customer from the merchant's business mailbox (nodemailer over SMTP).
+// Supports up to three photo attachments, replies in the customer's thread, a copy to the
+// sender, and records a row in EmailSendLog. handleSendEmailOp is the `sendEmail` action of
+// the Orders page. Sending never writes to the Shopify order.
+
 import nodemailer from "nodemailer";
 import type { Transporter } from "nodemailer";
 import type { AdminGraphQLClient } from "./order-delivery-metafields.server";

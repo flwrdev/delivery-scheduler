@@ -1,3 +1,6 @@
+// Webhook handler for app/scopes_update: saves the app's new list of granted scopes on the
+// stored session.
+
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 

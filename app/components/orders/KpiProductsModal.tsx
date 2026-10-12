@@ -1,3 +1,6 @@
+// "Items to prepare" modal opened from the Orders KPI card: the products and quantities to
+// prepare for the loaded orders.
+
 import { BlockStack, InlineStack, Modal, Text } from "@shopify/polaris";
 
 // "Items to prepare" modal, opened from the Orders KPI card (Polaris React).

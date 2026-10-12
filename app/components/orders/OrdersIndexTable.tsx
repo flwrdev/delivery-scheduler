@@ -1,3 +1,7 @@
+// The Orders list: tabs, search and filters, sorting, pagination and one row per order with its
+// delivery date, time slot, payment and fulfilment status and tags. It only presents data;
+// every change is reported to the route through callbacks that update the URL parameters.
+
 import { useEffect, useState } from "react";
 import {
   Badge,

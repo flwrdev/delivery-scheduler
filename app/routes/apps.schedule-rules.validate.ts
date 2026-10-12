@@ -1,3 +1,7 @@
+// App proxy endpoint (/apps/schedule-rules/validate): checks one chosen delivery date and time
+// slot against the schedule rules (cutoff, preparation time, blocked dates, capacity) and returns
+// the validation result, so the storefront can warn the customer before checkout.
+
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 import { validateDeliverySelection } from "../lib/delivery-availability";

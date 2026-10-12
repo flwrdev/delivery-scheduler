@@ -1,3 +1,7 @@
+// Resource route (/app/scheduler/quick-replies): loads and saves the merchant's saved email
+// replies, stored in the shop metafield $app.quick_replies. Kept apart from the scheduler
+// action so saving replies never touches the schedule rules. Admin session required.
+
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 
 import {

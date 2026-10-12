@@ -1,3 +1,6 @@
+// Modal for cancelling the selected orders (the `cancel` bulk action). Asks for the reason and
+// whether to restock the items and notify the customers by email.
+
 import {
   Banner,
   BlockStack,

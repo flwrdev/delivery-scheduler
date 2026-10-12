@@ -1,3 +1,6 @@
+// Scheduler card with the summary: number of slots, blocked dates, capacity-tracked days and
+// slots at or near capacity, and a button to refresh the booked counts.
+
 import {
   Badge,
   BlockStack,

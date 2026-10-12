@@ -1,3 +1,6 @@
+// Turns Shopify login error codes (missing or invalid shop) into the messages shown on the
+// login form.
+
 import { LoginErrorType } from "@shopify/shopify-app-react-router/server";
 
 export function loginErrorMessage(loginErrors) {

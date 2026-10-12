@@ -1,3 +1,8 @@
+// App proxy endpoint (GET /apps/schedule-rules/coverage?q=...) behind the storefront delivery fee
+// checker block. Looks the typed area or ZIP up in the bundled Metro Manila list and returns
+// whether it is covered and an estimated fee. Needs no database; the request signature and the
+// shop domain are checked.
+
 import type { LoaderFunctionArgs } from "react-router";
 
 import { verifyAppProxySignature } from "../lib/verify-app-proxy.server";

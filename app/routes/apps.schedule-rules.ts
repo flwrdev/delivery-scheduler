@@ -1,3 +1,8 @@
+// App proxy endpoint (GET /apps/schedule-rules) for the storefront date picker.
+// Returns the availability window: for every upcoming date and time slot whether it can be
+// booked, plus the same-day cutoff time and the first and last selectable dates.
+// Computed from the stored schedule rules and the live booked counts. Shopify signs the request.
+
 import type { LoaderFunctionArgs } from "react-router";
 
 import {

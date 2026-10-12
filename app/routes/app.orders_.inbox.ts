@@ -1,3 +1,7 @@
+// Resource route (GET /app/orders/inbox): unseen customer email replies read from the mailbox
+// over IMAP, for the notifications bell. It is separate from the orders loader so a slow or
+// unreachable mailbox can never delay the orders list. Admin session required.
+
 import type {
   LoaderFunctionArgs,
   ShouldRevalidateFunctionArgs,

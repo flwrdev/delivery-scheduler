@@ -1,3 +1,8 @@
+// Reads and writes the delivery data on a Shopify order: pulls Delivery Date and Delivery Time
+// out of the webhook payload, builds the metafields (custom, delivery and sidekick namespaces),
+// replaces the schedule tags, and works out delivery.sync_status for a choice made at checkout.
+// All writes go through the Admin GraphQL API.
+
 import {
   buildDeliveryTags,
   isDeliveryScheduleTag,

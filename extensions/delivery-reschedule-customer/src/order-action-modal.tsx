@@ -1,3 +1,7 @@
+// Customer account modal to reschedule an order's delivery. Loads the schedule rules from
+// /public/customer-account/schedule-rules, lets the customer pick an available date and time
+// slot, and submits it to /public/customer-account/reschedule. Both calls carry a session token.
+
 import {
   DEFAULT_DELIVERY_SCHEDULE_RULES,
   cloneDeliveryScheduleRules,
@@ -49,7 +53,7 @@ export default async function renderRescheduleModal() {
   rerender();
 }
 
-const APP_BASE_URL = 'https://delivery-scheduler-299861709433.us-central1.run.app';
+const APP_BASE_URL = 'https://delivery-scheduler-1030649952056.us-central1.run.app';
 const SCHEDULE_RULES_URL = `${APP_BASE_URL}/public/customer-account/schedule-rules`;
 const RESCHEDULE_URL = `${APP_BASE_URL}/public/customer-account/reschedule`;
 

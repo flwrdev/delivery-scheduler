@@ -1,3 +1,5 @@
+// Confirmation modal for unarchiving the selected orders (the `unarchive` bulk action).
+
 import { Banner, Modal, Text } from "@shopify/polaris";
 
 // Bulk "Unarchive selected orders" confirmation modal (Polaris React).

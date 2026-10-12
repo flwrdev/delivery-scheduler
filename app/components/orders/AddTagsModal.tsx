@@ -1,3 +1,5 @@
+// Modal to add tags to the selected orders. The parent submits the `tagsAdd` bulk action.
+
 import { BlockStack, Modal, Text, TextField } from "@shopify/polaris";
 
 // Bulk "Add tags" modal (Polaris React). Visibility is controlled by the

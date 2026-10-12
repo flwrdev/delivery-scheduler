@@ -1,3 +1,6 @@
+// The bell on the Orders page. Lists unseen customer email replies and recent customer
+// reschedules, opens the related order or email, and lets the merchant mark items as seen.
+
 import { useState } from "react";
 import {
   Badge,

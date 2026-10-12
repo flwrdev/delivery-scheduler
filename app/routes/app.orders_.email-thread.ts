@@ -1,3 +1,7 @@
+// Resource route (GET /app/orders/email-thread?orderId=...): the email conversation of one order
+// plus the saved quick replies. Only the order id comes from the browser; the order name and the
+// customer address are read from Shopify, so a crafted URL cannot read another address's mail.
+
 import type {
   LoaderFunctionArgs,
   ShouldRevalidateFunctionArgs,

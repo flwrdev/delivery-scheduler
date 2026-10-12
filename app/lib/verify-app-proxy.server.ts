@@ -1,3 +1,7 @@
+// Verifies the signature Shopify adds to app proxy requests (an HMAC-SHA256 of the sorted query
+// parameters, signed with the app secret) and rejects signatures older than five minutes.
+// Used by app proxy routes that answer without loading a session.
+
 import crypto from "node:crypto";
 
 // Shopify signs app proxy requests with an HMAC-SHA256 hex digest of every

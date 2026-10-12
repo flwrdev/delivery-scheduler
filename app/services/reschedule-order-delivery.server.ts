@@ -1,3 +1,8 @@
+// The one write sequence for changing an order's delivery date and slot. Shared by the customer
+// account route (source "customer") and the merchant reschedule (source "merchant").
+// Updates the canonical and mirror metafields, the custom attributes and the schedule tags,
+// adds the `resched` lock and event tag, and appends an entry to the reschedule history.
+
 import { RESCHEDULED_ORDER_TAG } from "../lib/constants";
 import { getShopLocalDate } from "../lib/delivery-availability";
 import { buildOrderEventTag } from "../lib/order-tags";

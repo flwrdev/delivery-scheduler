@@ -1,3 +1,5 @@
+// Confirmation modal for marking the selected orders as paid (the `markAsPaid` bulk action).
+
 import { Banner, Modal, Text } from "@shopify/polaris";
 
 // Bulk "Mark selected orders as paid" confirmation modal (Polaris React).

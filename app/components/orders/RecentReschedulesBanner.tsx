@@ -1,3 +1,6 @@
+// Banner on the Orders page listing orders the customer rescheduled recently and the merchant
+// has not marked Seen. A rescheduled order leaves the day's list, so this makes the change visible.
+
 import { Banner, BlockStack, Button, InlineStack, Text } from "@shopify/polaris";
 import {
   type RecentRescheduleItem,

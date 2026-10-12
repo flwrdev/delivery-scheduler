@@ -1,3 +1,7 @@
+// App proxy endpoint that returns the products of one collection through the Storefront API,
+// for the storefront's "Show more" pagination. Needs SHOPIFY_STOREFRONT_ACCESS_TOKEN; without
+// it only this route fails.
+
 import type { LoaderFunctionArgs } from "react-router";
 
 import { verifyAppProxySignature } from "../lib/verify-app-proxy.server";

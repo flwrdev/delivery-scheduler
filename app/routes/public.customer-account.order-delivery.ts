@@ -1,3 +1,7 @@
+// Endpoint for the customer account order status extension: returns the order's current delivery
+// date, time slot and reschedule status (read from order metafields). Verifies the session token
+// and that the order belongs to the signed-in customer.
+
 import { jwtVerify } from "jose";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 

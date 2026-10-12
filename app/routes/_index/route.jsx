@@ -1,3 +1,7 @@
+// Public landing page at `/`. When a `shop` query parameter is present it redirects into the
+// app (/app); otherwise it shows a form that posts the shop domain to /auth/login.
+// The visible copy is still the Shopify template placeholder.
+
 import { redirect, Form, useLoaderData } from "react-router";
 import { login } from "../../shopify.server";
 import styles from "./styles.module.css";

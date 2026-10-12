@@ -1,3 +1,7 @@
+// Admin order action that shows the order's reschedule status (status, date, slot and when it
+// was requested). It
+// is read-only: it reads the order metafields through the Admin API and changes nothing.
+
 import "@shopify/ui-extensions/preact";
 import { render } from "preact";
 import { formatRescheduledAt } from "./format-timestamp";

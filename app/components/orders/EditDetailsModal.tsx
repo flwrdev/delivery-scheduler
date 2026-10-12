@@ -1,3 +1,7 @@
+// Modal to edit an order's shipping address and receiver phone. Offers Google Places address
+// search when a Maps key is configured (the manual fields always work) and submits the
+// `editDetails` action to the Orders route.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";

@@ -1,3 +1,8 @@
+// Types and helpers for the Orders page. Describes the Order shape returned by the GraphQL
+// query and provides the formatting and lookup helpers built on it: delivery date and slot,
+// customer and address text, payment and fulfilment status badges, tag display, and the
+// timeline of reschedule events.
+
 import { orderEventTagLabel } from "./order-tags";
 
 // ─── Types ────────────────────────────────────────────────────────────────────

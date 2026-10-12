@@ -1,3 +1,6 @@
+// Modal for fulfilling the selected orders, with an optional tracking URL and a choice to notify
+// the customers (the `markFulfilled` bulk action).
+
 import {
   Banner,
   BlockStack,

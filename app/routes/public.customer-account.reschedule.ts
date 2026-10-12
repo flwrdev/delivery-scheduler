@@ -1,3 +1,8 @@
+// Endpoint for the customer account reschedule modal. Verifies the session token and that the
+// order belongs to the customer, applies the self-service gates (not fulfilled, not already
+// rescheduled), validates the new date and slot, then calls
+// services/reschedule-order-delivery.server.ts to write the change.
+
 import { jwtVerify } from "jose";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 

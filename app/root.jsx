@@ -1,3 +1,6 @@
+// Root HTML document shared by every page: the <head> (meta tags, fonts), the matched
+// route rendered in <Outlet />, and the scripts that hydrate React in the browser.
+
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
 export default function App() {

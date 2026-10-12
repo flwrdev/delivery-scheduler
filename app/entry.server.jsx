@@ -1,3 +1,7 @@
+// Server-side rendering entry. Renders the React page and streams it to the client:
+// bots get the full page (onAllReady), browsers start receiving at the shell (onShellReady).
+// addDocumentResponseHeaders adds the headers Shopify needs to embed the app in its admin.
+
 import { PassThrough } from "stream";
 import { renderToPipeableStream } from "react-dom/server";
 import { ServerRouter } from "react-router";

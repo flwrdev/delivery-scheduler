@@ -1,3 +1,5 @@
+// Maps the app's badge tone names (from lib/order-utils) to Polaris Badge tones.
+
 import type { BadgeProps } from "@shopify/polaris";
 import type { BadgeTone } from "../../../lib/order-utils";
 

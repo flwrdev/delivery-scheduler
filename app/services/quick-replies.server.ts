@@ -1,3 +1,5 @@
+// Reads and saves the merchant's quick email replies as a JSON shop metafield ($app.quick_replies).
+
 import type { AdminGraphQLClient } from "./order-delivery-metafields.server";
 import { type QuickReply, parseQuickReplies } from "../lib/quick-replies";
 

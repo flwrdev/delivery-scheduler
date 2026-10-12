@@ -1,3 +1,6 @@
+// Scheduler card to manage the time slots: add, rename the display label, reorder and delete.
+// A slot's time range cannot be edited; to change times, add a new slot and delete the old one.
+
 import { useMemo, useState } from "react";
 import {
   Badge,

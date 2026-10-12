@@ -1,3 +1,6 @@
+// Webhook handler for app/uninstalled: deletes the shop's stored sessions. Shopify can deliver
+// it more than once, so a missing session is not an error.
+
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 

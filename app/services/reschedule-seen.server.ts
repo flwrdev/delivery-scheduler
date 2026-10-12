@@ -1,3 +1,7 @@
+// Records which reschedules (and email replies) the merchant has acknowledged with Seen, by
+// writing the event's timestamp to an app-owned order metafield. Stored on the order so it is
+// shared across devices and staff, and a newer event on the same order shows up again.
+
 import type { AdminGraphQLClient } from "./order-delivery-metafields.server";
 
 // The `markRescheduleSeen` op behind the Orders Ops "Rescheduled today"

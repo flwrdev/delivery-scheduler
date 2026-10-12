@@ -1,3 +1,7 @@
+// Block on the admin order page showing the order's delivery date, time slot and reschedule
+// status. Reads the order metafields (and legacy attributes for older orders) through the
+// Admin API; read-only.
+
 import "@shopify/ui-extensions/preact";
 import { render } from "preact";
 import { formatRescheduledAt } from "./format-timestamp";

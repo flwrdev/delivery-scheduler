@@ -1,3 +1,7 @@
+// State for the Orders page modals: which bulk-action modal is open, and the follow-up work after
+// an action finishes (closing the modal and a delayed second refresh after fulfilment, because
+// Shopify updates the fulfilment status a moment later).
+
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useFetcher, useRevalidator } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";

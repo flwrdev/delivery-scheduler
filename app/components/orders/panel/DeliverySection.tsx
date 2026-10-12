@@ -1,3 +1,6 @@
+// Delivery details in the order panel: date, time slot, receiver, address and instructions,
+// each with a copy button, and a status chip (Today, Overdue) based on the shop-local date.
+
 import type { ReactNode } from "react";
 import { Badge, BlockStack, Button, InlineStack, Text } from "@shopify/polaris";
 import { useCopyToClipboard } from "../../../hooks/useCopyToClipboard";

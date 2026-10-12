@@ -1,3 +1,10 @@
+// The scheduling rules engine, used by the server and by the extensions.
+// Defines DeliveryScheduleRules (timezone, cutoff hour, preparation hours, booking window,
+// slots, blocked dates and slots, capacity) and answers the questions built on them: which
+// dates and slots are bookable, whether a chosen date and slot is valid, when the cutoff
+// passes, whether a slot is blocked or full, and which order tags a choice produces.
+// Everything here is pure: it takes the rules and a clock and returns an answer.
+
 import { findSlotOverrideKey, resolveConfiguredSlotValue } from "./slot-value";
 
 export interface DeliveryScheduleSlot {

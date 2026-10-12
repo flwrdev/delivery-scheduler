@@ -1,3 +1,7 @@
+// Builds and sends the email that tells a customer their delivery was rescheduled by the
+// merchant. Uses the same SMTP path and EmailSendLog row as any other customer email. The
+// recipient comes from the order read from Shopify, never from the request.
+
 import prisma from "../db.server";
 import { sendCustomerEmail } from "./send-customer-email.server";
 

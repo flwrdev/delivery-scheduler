@@ -1,3 +1,7 @@
+// Helpers for building URLs inside the embedded app. Shopify passes `host` and `shop` query
+// parameters that App Bridge needs, so links must carry them. sanitizeEmbeddedAppReturnTo only
+// accepts paths under /app, which prevents open redirects through `returnTo`.
+
 const EMBEDDED_ROUTE_PARAM_KEYS = ["host", "shop"];
 const EMBEDDED_APP_ROOT = "/app";
 

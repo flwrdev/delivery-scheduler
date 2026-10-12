@@ -1,3 +1,6 @@
+// Scheduler card for per-date overrides: block a whole date, block individual slots on a date,
+// or set a capacity for a slot on a date. Each save is one `saveDayOverride` operation.
+
 import { useState } from "react";
 import {
   Badge,

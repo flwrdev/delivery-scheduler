@@ -1,3 +1,6 @@
+// Modal that shows one email from the customer's conversation, with the saved quick replies
+// and a Reply button for messages from the customer.
+
 import { useEffect, useState } from "react";
 import {
   Badge,

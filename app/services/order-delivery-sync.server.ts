@@ -1,3 +1,8 @@
+// What happens to a new order's delivery data (called by the orders/create webhook): loads the
+// schedule rules, evaluates the chosen date and slot, writes the metafields and the schedule tag,
+// and adds the COD fee for cash on delivery orders. Every step is idempotent, so Shopify can
+// safely redeliver the webhook.
+
 import { applyCodFeeToOrder } from "./cod-fee.server";
 import {
   type AdminGraphQLClient,

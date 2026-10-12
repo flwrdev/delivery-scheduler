@@ -1,3 +1,5 @@
+// The order's line items in the order panel, with the item count.
+
 import { BlockStack, Text } from "@shopify/polaris";
 import { type Order, formatMoney } from "../../../lib/order-utils";
 

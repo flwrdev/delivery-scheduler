@@ -1,3 +1,15 @@
+// Order operations page (/app/orders): the merchant's delivery workspace.
+//
+// Loader: authenticates, then queries Shopify orders (tab, delivery-date tag, search, sort and
+// cursor paging), works out the shop-local "today" from the schedule timezone, builds the KPI
+// cards and loads recent customer reschedules for the banner.
+// Action: one POST endpoint that dispatches on the `_action` form field: sendEmail,
+// markRescheduleSeen, markEmailReplySeen, editDetails, and the bulk actions archive, unarchive,
+// cancel, tagsAdd, tagsRemove, markFulfilled, markAsPaid and reschedule (run inline through
+// services/bulk-actions.server.ts for at most 10 orders).
+// Component: renders the order table, the order panel and one modal per action, refreshes the
+// data in the background (hooks/useSmartRefresh) and loads the mailbox replies lazily.
+
 import { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense } from "react";
 
 // Lazy-loaded: the panel only mounts when a merchant opens an order, so it

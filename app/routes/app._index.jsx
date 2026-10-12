@@ -1,3 +1,7 @@
+// Entry point of the embedded app (/app). Authenticates, then redirects to the page named in
+// `returnTo` or to /app/orders. Shows a short "Reconnecting" screen when the embedded `host`
+// parameter is missing.
+
 import { redirect, useLoaderData, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";

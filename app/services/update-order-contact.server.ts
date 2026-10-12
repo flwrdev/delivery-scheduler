@@ -1,3 +1,7 @@
+// The "Edit details" action: rewrites an order's shipping address (street, city, ZIP) and the
+// receiver's phone through Shopify's orderUpdate, validating the input first. It does not touch
+// any delivery metafield or schedule tag.
+
 import { getShopLocalDate } from "../lib/delivery-availability";
 import { buildOrderEventTag } from "../lib/order-tags";
 import type { AdminGraphQLClient } from "./order-delivery-metafields.server";

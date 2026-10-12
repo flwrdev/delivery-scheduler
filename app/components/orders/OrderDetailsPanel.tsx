@@ -1,3 +1,7 @@
+// Side panel with everything about one order: delivery details, items and a timeline, plus the
+// actions menu (reschedule, send email, edit details, tags). Opened with the `?order=` URL
+// parameter and loaded lazily.
+
 import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import {

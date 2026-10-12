@@ -1,3 +1,8 @@
+// Loads and saves the delivery schedule rules (table DeliveryScheduleConfig) and combines them
+// with live booked counts from Shopify orders. Reads fall back to the defaults when no row
+// exists; saves are validated and use the `version` column as an optimistic lock, returning
+// `stale_config` when someone else saved first.
+
 import prisma from "../db.server";
 import {
   DEFAULT_DELIVERY_SCHEDULE_RULES,

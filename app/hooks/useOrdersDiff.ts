@@ -1,3 +1,6 @@
+// Compares each background refresh of the Orders page with the previous one and reports orders
+// that are new or whose delivery date or slot changed, so the table can highlight them.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type Order,

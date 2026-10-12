@@ -22,7 +22,7 @@ import {
 const extension = getExtension("customer-account.order.action.render");
 
 const APP_BASE_URL =
-  "https://delivery-scheduler-299861709433.us-central1.run.app";
+  "https://delivery-scheduler-1030649952056.us-central1.run.app";
 const SCHEDULE_RULES_URL = `${APP_BASE_URL}/public/customer-account/schedule-rules`;
 const RESCHEDULE_URL = `${APP_BASE_URL}/public/customer-account/reschedule`;
 

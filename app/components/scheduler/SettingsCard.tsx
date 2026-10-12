@@ -1,3 +1,6 @@
+// Scheduler card for the general rules: timezone, same-day cutoff hour, preparation time and
+// booking window in days.
+
 import { useMemo, useState } from "react";
 import {
   BlockStack,

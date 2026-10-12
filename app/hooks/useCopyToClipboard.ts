@@ -1,3 +1,5 @@
+// Copies text to the clipboard and tracks the "Copied" feedback, for one value or per field.
+
 import { useState, useCallback } from "react";
 
 export function useCopyToClipboard() {

@@ -1,3 +1,8 @@
+// Layout route for every page under /app. Authenticates the merchant with authenticate.admin,
+// wraps the page in the App Bridge and Polaris providers, renders the navigation menu
+// (Order operations, Delivery Scheduler) and keeps the `host`/`shop` parameters on links.
+// If `host` is missing it redirects through /app so App Bridge can re-initialise.
+
 import {
   Link,
   Outlet,

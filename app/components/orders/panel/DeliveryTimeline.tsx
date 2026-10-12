@@ -1,3 +1,7 @@
+// Timeline in the order panel: reschedules, fulfilment, delivery, emails sent by the app and
+// emails from the mailbox, newest first. Loads the mailbox conversation on demand from
+// /app/orders/email-thread.
+
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { Badge, BlockStack, Button, Divider, Text } from "@shopify/polaris";

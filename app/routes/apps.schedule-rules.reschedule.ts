@@ -1,3 +1,9 @@
+// App proxy endpoint (POST /apps/schedule-rules/reschedule): lets a logged-in customer
+// reschedule their own order from the storefront. Shopify adds `logged_in_customer_id` to the
+// signed request; the route checks that customer owns the order, that the order is still
+// reschedulable (not fulfilled, `resched` tag absent), validates the new date and slot, then
+// writes the delivery metafields, attributes and tags on the order.
+
 import type { ActionFunctionArgs } from "react-router";
 
 import { RESCHEDULED_ORDER_TAG } from "../lib/constants";

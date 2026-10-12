@@ -18,21 +18,21 @@ npm test                  # vitest: test/**/*.test.{ts,tsx} only; e2e/ runs sepa
 npm run test:extensions   # vitest: extensions/*/tests/**/*.test.{ts,tsx}
 npm run setup             # prisma generate && prisma migrate deploy
 npm run deploy:prod       # app config + extensions to the PROD app (explicit go required)
-gcloud run deploy delivery-scheduler --source . --region us-central1 --project lalamove-map --service-account delivery-scheduler@lalamove-map.iam.gserviceaccount.com   # backend (explicit go required)
+gcloud run deploy delivery-scheduler --source . --region us-central1 --project jhay-510919 --service-account delivery-scheduler-runtime@jhay-510919.iam.gserviceaccount.com   # backend (explicit go required); secrets and env vars stay on the service, see docs/gcp-inventory.md
 ```
 
 After creating or pulling a Prisma migration, state that `npm run setup` must run before the next `npm run dev`.
 
-The container runs `npm run setup` (`prisma generate && prisma migrate deploy`) on every start, so a migration in the image is applied to `production` by the deploy itself. `migrate deploy` ignores migrations recorded in `_prisma_migrations` whose folders were deleted.
+The container start command (Dockerfile `CMD`) runs `prisma migrate deploy`, then `react-router-serve`. `prisma generate` runs only at image build. A migration in the image is applied to the database by the deploy itself. `migrate deploy` ignores migrations recorded in `_prisma_migrations` whose folders were deleted. The runtime image installs only the root production dependencies (`npm ci --omit=dev --workspaces=false`).
 
-There is no CI: `.github/workflows/` (`ci.yml`, `deploy.yml`) was deleted in commit 7f89d04. The merchant deploys with the `gcloud` command above. The `github-deployer@lalamove-map.iam.gserviceaccount.com` account is disabled, not deleted, and still holds deploy roles (Google Cloud console, checked 2026-10-02).
+There is no CI: `.github/workflows/` (`ci.yml`, `deploy.yml`) was deleted in commit 7f89d04. The merchant deploys with the `gcloud` command above. Production runs in Google Cloud project `jhay-510919`. The old project `lalamove-map` has been `DELETE_REQUESTED` since 2026-10-05 and is not used.
 
-Neon project `delivery-scheduler` (Free plan) has one branch, `production`. The `dev` branch was deleted on 2026-09-25, so there is no dev database until a new one is branched from `production`. Only Cloud Run reaches `production`. Neon "block public connections" must stay off: Cloud Run connects over the public internet, and turning it on took the app down on 2026-09-25.
+The database behind `DATABASE_URL` and `DIRECT_DATABASE_URL` had no applied migrations at the 2026-10-12 deploy: all 11 were applied from scratch. Which Neon project and branch it is has not been verified. Neon "block public connections" must stay off: Cloud Run connects over the public internet.
 
 ## Current shape (merchant decisions, 2026-09-25 unless noted)
 
 - Every endpoint is verified by Shopify: webhook HMAC, app-proxy signature, or session token. There are no internal endpoints with their own secrets and no pollers. Merchant: "dapat ang mga verification ay ang external logical na may shopify-Hmac at hindi ang internal logic."
-- Google Cloud still has (console, checked 2026-10-02): the Cloud Scheduler job `delivery-scheduler-keepwarm`, which pings the app every 10 minutes from 7am to 9pm Manila time; an empty Cloud Tasks queue, `messenger-events`, that no code in this repo uses; and a second Cloud Run service, `local`, created 2026-09-30, whose only revision failed to start.
+- Google Cloud project `jhay-510919` has one Cloud Run service, `delivery-scheduler`, scaled to zero (`min-instances 0`). It has no Cloud Scheduler job and no Cloud Tasks queue; neither API is enabled (checked 2026-10-12).
 - `orders/create` writes the delivery metafields, the schedule tags, and the COD fee line item inline, and answers 500 on a failed step so Shopify redelivers.
 - The schedule tags are the bare date and slot (`2026-10-03`, `9AM-12PM`). The app writes them on `orders/create` and on every reschedule. No Shopify Flow writes them: every delivery-tag workflow in Flow is inactive, and "Tag orders with delivery date and time" was turned off on 2026-05-01 (checked 2026-10-02). The Orders page date tabs and date filter search by these tags, and the merchant's Shopify Orders list, order email notifications and analytics use them. Merchant (2026-10-02): "kung babaguhin mo ang order tag ay pwede masira date picker logic kaya dahilan ng pa sulat pa ng app ng order tag" and "yung tag ginagamit ko sa automate sa ibang paraan … tulad ng mga order email notification at ibang analytics na sa order tag bumabase."
 - Slot capacity limits are on only for Valentine's Day and Mother's Day. Merchant (2026-10-02): "no capacity yet and its intentional because the capacity is for valentine and mothersday only.. at hindi ito napupuno sa totoong buhay."
@@ -59,5 +59,5 @@ Code
 Database
 - No session connects to any Neon branch (`production` or `dev`) — not with `pg`, `psql`, `prisma studio`, `prisma db execute`, a script, or an MCP tool — without the merchant's permission in the current conversation AND a stated purpose for that specific access. "Explore", "audit", or "verify" on its own is not a purpose and not a standing grant; a session with no current purpose does not open the database.
 - When granted, the default is read-only (`SET default_transaction_read_only = on`). A write (`INSERT`/`UPDATE`/`DELETE`/`DROP`/`TRUNCATE`) needs the exact SQL shown first and a separate "go" for that statement.
-- Never read, copy, or create a file that holds `production` credentials inside the repo folder (`.env.bak*`, `.env.prod*`, scripts with a connection string). Production URLs live only in Cloud Run Secret Manager.
+- Never read, copy, or create a file that holds `production` credentials inside the repo folder (`.env.bak*`, `.env.prod*`, scripts with a connection string). Production URLs live only in Secret Manager of project `jhay-510919`; names are listed in `docs/gcp-inventory.md`.
 

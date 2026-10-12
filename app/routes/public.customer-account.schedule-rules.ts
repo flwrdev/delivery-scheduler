@@ -1,3 +1,8 @@
+// Endpoint for the customer account "Reschedule Delivery" extension: returns the schedule
+// rules and availability for the order. The extension sends a Shopify customer account session
+// token; it is verified here with the app secret (signature, audience, shop). CORS only allows
+// Shopify's extension origin.
+
 import { jwtVerify } from "jose";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 

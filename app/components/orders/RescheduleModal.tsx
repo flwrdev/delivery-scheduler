@@ -1,3 +1,7 @@
+// Modal to change the delivery date and time slot of one or more orders ("Update delivery
+// slot"). Shows the available slots from the schedule rules and warns about past dates and
+// slots that would exceed their capacity. The parent submits the `reschedule` action.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Banner,

@@ -1,3 +1,7 @@
+// Resource route (GET /app/orders/reschedule-rules): the schedule rules and live booked counts
+// the reschedule modal needs. Fetched only when the modal opens so the orders loader does not
+// pay for the booked-count query on every page load. Read-only; admin session required.
+
 import type { LoaderFunctionArgs } from "react-router";
 
 import type {

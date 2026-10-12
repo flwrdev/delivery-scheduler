@@ -1,3 +1,6 @@
+// Login page for entering a shop domain. The loader and the action both call login(), which
+// starts the OAuth flow for a valid domain or returns an error shown under the field.
+
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { useState } from "react";
 import { Form, useActionData, useLoaderData } from "react-router";

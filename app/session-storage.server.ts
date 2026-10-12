@@ -1,3 +1,7 @@
+// Postgres storage for Shopify sessions (the access tokens issued when the app is installed).
+// Implements the store/load/delete/find-by-shop interface that shopifyApp expects and maps
+// Shopify's Session object to the `Session` table in prisma/schema.prisma.
+
 import { Session } from "@shopify/shopify-api";
 import { Prisma, type PrismaClient } from "./generated/prisma/client";
 

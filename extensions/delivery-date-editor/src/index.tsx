@@ -1,3 +1,8 @@
+// Customer account extension for the order status page. Shows the order's delivery date and
+// time slot, reading them from the order data and from the app's
+// /public/customer-account/order-delivery endpoint (called with a session token) so the block
+// is current right after a reschedule.
+
 export default async function renderOrderStatusBlock() {
   const api = (globalThis as unknown as {
     shopify: CustomerAccountOrderStatusApi;
@@ -171,7 +176,7 @@ export default async function renderOrderStatusBlock() {
   render();
 }
 
-const APP_BASE_URL = 'https://delivery-scheduler-299861709433.us-central1.run.app';
+const APP_BASE_URL = 'https://delivery-scheduler-1030649952056.us-central1.run.app';
 const ORDER_DELIVERY_URL = `${APP_BASE_URL}/public/customer-account/order-delivery`;
 const AUTH_FAIL_STOP = 3;
 const TOTAL_FAIL_STOP = 20;

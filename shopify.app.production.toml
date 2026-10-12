@@ -1,8 +1,8 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "a9127e5f8228762411a021805a397069"
+client_id = "192d50677bb4239697e25fd7ad097c50"
 name = "delivery-scheduler"
-application_url = "https://delivery-scheduler-299861709433.us-central1.run.app"
+application_url = "https://delivery-scheduler-1030649952056.us-central1.run.app"
 embedded = true
 
 [build]
@@ -30,10 +30,10 @@ scopes="read_orders,write_orders,write_order_edits,read_customers,write_products
 
 
 [auth]
-redirect_urls = [ "https://delivery-scheduler-299861709433.us-central1.run.app/auth/callback", "https://delivery-scheduler-299861709433.us-central1.run.app/auth/shopify/callback", "https://delivery-scheduler-299861709433.us-central1.run.app/api/auth/callback" ]
+redirect_urls = [ "https://delivery-scheduler-1030649952056.us-central1.run.app/auth/callback", "https://delivery-scheduler-1030649952056.us-central1.run.app/auth/shopify/callback", "https://delivery-scheduler-1030649952056.us-central1.run.app/api/auth/callback" ]
 
 [app_proxy]
-url = "https://delivery-scheduler-299861709433.us-central1.run.app/apps/schedule-rules"
+url = "https://delivery-scheduler-1030649952056.us-central1.run.app/apps/schedule-rules"
 subpath = "schedule-rules"
 prefix = "apps"
 

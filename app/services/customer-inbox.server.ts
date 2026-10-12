@@ -1,3 +1,8 @@
+// Reads customer emails from the shop's mailbox over IMAP (imapflow) and matches replies to
+// orders. listUnseenReplies feeds the notifications bell; getOrderThread returns the
+// conversation of one order. Mailboxes are opened read-only, so the app never changes the
+// merchant's read/unread state.
+
 import { ImapFlow } from "imapflow";
 import type { FetchMessageObject, SearchObject } from "imapflow";
 import { simpleParser } from "mailparser";

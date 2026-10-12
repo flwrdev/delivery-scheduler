@@ -1,3 +1,7 @@
+// Refreshes the Orders page in the background by re-running the route loader (30 minutes, 60 on
+// the Today view). A refresh is held back while a modal is open, an action is running or the
+// browser tab is hidden, then runs once it is safe.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRevalidator } from "react-router";
 

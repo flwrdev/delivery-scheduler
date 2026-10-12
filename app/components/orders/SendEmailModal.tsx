@@ -1,3 +1,6 @@
+// Modal to write an email to the customer of an order, with up to three photos. Submits the
+// `sendEmail` action as multipart form data.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";

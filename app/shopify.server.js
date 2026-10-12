@@ -1,3 +1,9 @@
+// Shopify app setup and the single shared `shopify` object used by every route.
+// Reads the API key, secret, scopes and app URL from environment variables, stores sessions
+// in Postgres through PrismaSessionStorage, and runs as a single-merchant app.
+// Exports authenticate (admin, webhook, public app proxy), login, unauthenticated and
+// registerWebhooks. Routes call authenticate.* first; it rejects any request Shopify did not sign.
+
 import "@shopify/shopify-app-react-router/adapters/node";
 import {
   ApiVersion,

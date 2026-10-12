@@ -1,3 +1,5 @@
+// Modal titled "Attributes" that lists the tags passed to it.
+
 import { InlineStack, Modal, Tag, Text } from "@shopify/polaris";
 import { tagDisplayLabel } from "../../lib/order-utils";
 

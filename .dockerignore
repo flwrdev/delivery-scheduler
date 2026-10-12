@@ -17,3 +17,14 @@ e2e
 .gemini
 .playwright-mcp
 .browser
+extensions
+test
+home.png
+*.code-workspace
+.aiexclude
+.shopify
+.react-router
+app/generated
+*.pem
+credentials.json
+service-account.json

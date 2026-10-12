@@ -1,3 +1,6 @@
+// Scheduler card to edit the merchant's saved email replies. Loads and saves them through
+// /app/scheduler/quick-replies.
+
 import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";

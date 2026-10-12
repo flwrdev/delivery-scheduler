@@ -1,3 +1,10 @@
+// Shopify Function that runs at checkout and decides whether cash on delivery is offered.
+// COD is hidden when the subtotal is below the minimum (default 2500) or above an optional
+// maximum, when the address is not in the Philippines, or when it is outside Metro Manila
+// (ZIP ranges first, then the city name when the ZIP is missing). When COD stays visible, its
+// name can be renamed to show the current fee. Settings come from the function's configuration
+// metafield; the defaults are in this file.
+
 import type {
   CartPaymentMethodsTransformRunInput,
   CartPaymentMethodsTransformRunResult,

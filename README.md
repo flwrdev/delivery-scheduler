@@ -9,10 +9,11 @@ Shopify orders, and gives the merchant an orders-operations workspace
 bulk fulfillment ops, customer email with photo attachments).
 
 **Production:** Google Cloud Run (`delivery-scheduler`, us-central1, project
-`lalamove-map`) + Neon Postgres (sessions, the schedule settings and the email
+`jhay-510919`) + Neon Postgres (sessions, the schedule settings and the email
 send log — delivery state lives on the Shopify order itself).
 
 Agent guidance and project rules live in [CLAUDE.md](CLAUDE.md).
+How the app works: [docs/architecture.md](docs/architecture.md). Operations: [docs/runbook.md](docs/runbook.md). Google Cloud resources, principals and secret names: [docs/gcp-inventory.md](docs/gcp-inventory.md).
 
 ## Quick start
 
@@ -28,12 +29,11 @@ npm run typecheck && npm run lint && npm run build
 ## Production deploys
 
 ```bash
-gcloud run deploy delivery-scheduler --source . --region us-central1 --project lalamove-map --service-account delivery-scheduler@lalamove-map.iam.gserviceaccount.com   # backend
-npm run deploy:prod   # app config + extensions
+gcloud run deploy delivery-scheduler --source . --region us-central1 --project jhay-510919 --service-account delivery-scheduler-runtime@jhay-510919.iam.gserviceaccount.com   # backend
+npm run deploy:prod   # app config + extensions (shopify app deploy --config shopify.app.production.toml)
 ```
 
-⚠️ Never run the bare `shopify app deploy` / `npm run deploy` — always use
-`npm run deploy:prod` explicitly. `shopify.app.production.toml` is the only app
-config.
+`shopify.app.production.toml` is the only app config. The bare `npm run deploy`
+is disabled; use `npm run deploy:prod`. Details are in [docs/runbook.md](docs/runbook.md).
 
 

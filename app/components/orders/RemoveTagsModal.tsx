@@ -1,3 +1,5 @@
+// Modal to remove tags from the selected orders. The parent submits the `tagsRemove` bulk action.
+
 import { BlockStack, InlineStack, Modal, Tag, Text, TextField } from "@shopify/polaris";
 import { tagDisplayLabel } from "../../lib/order-utils";
 
