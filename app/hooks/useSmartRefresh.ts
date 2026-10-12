@@ -1,6 +1,6 @@
-// Refreshes the Orders page in the background by re-running the route loader (30 minutes, 60 on
-// the Today view). A refresh is held back while a modal is open, an action is running or the
-// browser tab is hidden, then runs once it is safe.
+// Refreshes the Orders page in the background by re-running the route loader (every 20 minutes).
+// The mailbox is read again after each refresh. A refresh is held back while a modal is open,
+// an action is running or the browser tab is hidden, then runs once it is safe.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRevalidator } from "react-router";
@@ -11,7 +11,7 @@ import { useRevalidator } from "react-router";
 // is deliberately invisible (no loading bar; only the manual Refresh button
 // shows a spinner).
 //
-// Cadence: 30 min default, 60 min on the Today view. A tick is suppressed and
+// Cadence: 20 min on every view. A tick is suppressed and
 // QUEUED while the merchant is mid-task (`paused` — any modal open or an
 // action fetcher in flight) or the browser tab is hidden; the queued tick
 // fires once the blocker lifts. Any loader settle (navigation, React
@@ -19,8 +19,8 @@ import { useRevalidator } from "react-router";
 // resets the "Last updated" stamp and drops the queued tick — the data is
 // already fresh at that point.
 
-const DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
-const TODAY_INTERVAL_MS = 60 * 60 * 1000;
+const DEFAULT_INTERVAL_MS = 20 * 60 * 1000;
+const TODAY_INTERVAL_MS = 20 * 60 * 1000;
 
 export interface UseSmartRefreshOptions {
   isTodayView: boolean;

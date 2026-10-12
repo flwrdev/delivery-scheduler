@@ -39,7 +39,7 @@ The database behind `DATABASE_URL` and `DIRECT_DATABASE_URL` had no applied migr
 - Postgres (`neondb`) holds only `Session`, `DeliveryScheduleConfig`, `EmailSendLog`, and `_prisma_migrations`.
 - Removed on merchant request: Lalamove tracking (poll, webhook, Order ID field, table), the delivery-sync queue and hourly sweep, bulk-action jobs, and the COD Settings page. Bulk actions run inline, 10 orders at most.
 - The COD fee is Shopify-owned: the `COD-FEE` SKU product and its metafields. The app only adds the line item to COD orders. There is no lock against a double fee from overlapping webhook deliveries; merchant: add one only after an incident ("tsaka na lang lagyan kung may nangyari ng insidente").
-- Orders page "Today" view auto-refreshes every 60 minutes.
+- Orders page auto-refreshes every 20 minutes on every view, and the mailbox is read again after each refresh.
 - Incoming customer email is read from the Private Email mailbox over IMAP, read-only, only during a request: Orders page load, Refresh, opening the bell, and opening an order panel. There is no IDLE connection and no poller. IMAP reuses `EMAIL_SMTP_USER`/`EMAIL_SMTP_PASSWORD`; `EMAIL_IMAP_HOST` and `EMAIL_IMAP_PORT` are optional.
 - Email state lives in Shopify, not Postgres: `$app.email_reply_seen_at` (order metafield, date_time) and `$app.quick_replies` (shop metafield, json, edited on the Delivery Scheduler page).
 - The `flowercart_marketing` database on `production` stays, for safe storage with no access by anyone else. It is written from outside this repo. Do not modify or delete it.
