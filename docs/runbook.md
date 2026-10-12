@@ -46,6 +46,23 @@ Open the app from the store admin. `/app/orders` and `/app/scheduler` should loa
 | `Permission denied on resource project` | the project is deleted or the account has no access; check `gcloud projects describe` |
 | deploy fails on `--set-secrets` | a named secret does not exist yet |
 | every migration is applied from scratch | the database behind `DIRECT_DATABASE_URL` is empty |
+| `Couldn't read the inbox: Socket timeout` on the Orders page | `EMAIL_SMTP_HOST`, `EMAIL_SMTP_USER` or the mailbox password is wrong. A hidden character at the end of a pasted value, or one wrong letter in the password, causes it even when the mail server is healthy. See "Add or replace a secret value" |
+
+## Add or replace a secret value
+Pasting a value into the Google Cloud console can bring a hidden character with it (a zero-width space is the bytes `e2 80 8b`). The value then looks right but does not match.
+
+Add the value from the terminal instead, so only the typed text is stored:
+```bash
+printf '%s' 'the-value' | gcloud secrets versions add NAME --data-file=- --project jhay-510919
+gcloud secrets versions disable OLD_VERSION --secret=NAME --project jhay-510919
+gcloud run services update delivery-scheduler --region us-central1 --project jhay-510919 --revision-suffix=NEW_NAME
+```
+The last command is needed because the service reads secrets only when an instance starts. The typed value stays in the terminal history.
+
+To check a stored value without printing it, compare its size with the number of visible characters. A hidden character adds bytes (a zero-width space adds 3):
+```bash
+gcloud secrets versions access latest --secret=NAME --project jhay-510919 | tr -d '\r' | wc -c
+```
 
 ## Components and APIs
 - Google Cloud APIs enabled for this work: `run`, `cloudbuild`, `artifactregistry`, `iam`, `secretmanager`, `billingbudgets`.

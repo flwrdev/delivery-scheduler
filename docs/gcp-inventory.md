@@ -25,14 +25,20 @@ Secret values are never recorded here, names only.
 
 ## Cloud Run
 Service `delivery-scheduler`, region `us-central1`, URL `https://delivery-scheduler-1030649952056.us-central1.run.app`.
-- Revisions: `delivery-scheduler-00002-2t6` (serving 100% of traffic, created 2026-10-12 12:02 UTC), `delivery-scheduler-00001-9mz` (created 2026-10-12 09:27 UTC). Both run the same image digest.
+- Revisions: `delivery-scheduler-host-fix-1013` (serving 100% of traffic, created 2026-10-12 13:45 UTC), `delivery-scheduler-00002-2t6` (created 2026-10-12 12:02 UTC), `delivery-scheduler-00001-9mz` (created 2026-10-12 09:27 UTC). All three run the same image digest.
 - Image: `us-central1-docker.pkg.dev/jhay-510919/cloud-run-source-deploy/delivery-scheduler@sha256:88183196c5d696b54eccdfa48398df9562324d1334ef8c607435ae42ba412495`.
 - Runtime service account: `delivery-scheduler-runtime@jhay-510919.iam.gserviceaccount.com`.
 - Scaling: minimum 0 instances, maximum 2, concurrency 80, startup CPU boost on. Resources: 1 CPU, 512Mi. Request timeout 300 s. Container port 8080. Ingress: all.
 - Service IAM: `roles/run.invoker` for `allUsers` (public). Requests are verified by Shopify signatures and session tokens in the app.
 
 ## Secret Manager
-All nine secrets have one enabled version. Each is readable only by `delivery-scheduler-runtime` (`roles/secretmanager.secretAccessor`, set on the secret, not on the project). The service reads `latest`.
+All nine secrets are readable only by `delivery-scheduler-runtime` (`roles/secretmanager.secretAccessor`, set on the secret, not on the project). The service reads `latest` when an instance starts, so a changed secret applies only to a new revision.
+
+| Secret | Versions |
+|---|---|
+| `EMAIL_SMTP_HOST` | v2 enabled; v1 disabled (it ended with a hidden character) |
+| `SMPT_PASSWORD` | v2 enabled; v1 destroyed (wrong password) |
+| the other seven | v1 enabled |
 
 | Secret | Environment variable |
 |---|---|
