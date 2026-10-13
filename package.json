@@ -1,6 +1,7 @@
 {
   "name": "delivery-scheduler",
   "private": false,
+  "license": "MIT",
   "scripts": {
     "build": "react-router build",
     "dev": "shopify app dev --config shopify.app.production.toml",

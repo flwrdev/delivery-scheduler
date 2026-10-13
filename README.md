@@ -60,3 +60,7 @@ npm run typecheck && npm run lint && npm run build
 ## Production
 
 Production runs on Google Cloud Run (`delivery-scheduler`, `us-central1`) with Neon Postgres. Only the maintainer deploys. Contributors never need production access; see [docs/runbook.md](docs/runbook.md) for how deploys work.
+
+## License
+
+[MIT](LICENSE). Anyone may use, copy, change and share this code, including for commercial use, as long as the license notice stays with it.

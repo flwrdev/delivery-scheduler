@@ -1,7 +1,7 @@
 {
   "name": "cod-eligibility",
   "version": "0.0.1",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "shopify": "npm exec -- shopify",

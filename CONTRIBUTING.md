@@ -86,6 +86,10 @@ These are relied on by the shop owner's own automations or by live orders. Chang
 
 Never commit `.env`, tokens, passwords, database URLs or API secrets. `.env` and `.env.*` are gitignored (except `.env.example`). If you think you found a leaked secret or a security bug, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
+## License
+
+This project is under the [MIT License](LICENSE). By opening a pull request you agree that your contribution is shared under the same license.
+
 ## AI coding agents
 
 If you use an AI agent, [CLAUDE.md](CLAUDE.md) holds the project rules for agents. The same review standard applies to AI-written code.
