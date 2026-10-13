@@ -135,9 +135,10 @@ Migrations in `prisma/migrations` run when the container starts (`prisma migrate
 | `delivery-fee-checker` | Theme block | storefront | area input that calls `/apps/schedule-rules/coverage` |
 
 ## Configuration
-Environment variables and secrets are listed in [gcp-inventory.md](gcp-inventory.md). Locally, copy `.env.example`.
+Every environment variable is explained in [development.md](development.md). The production secrets are listed by name in [gcp-inventory.md](gcp-inventory.md). Locally, copy `.env.example`.
 
 ## Develop and test
+Full setup, including your own Shopify dev app and database: [development.md](development.md).
 ```
 npm install
 npm run setup          # prisma generate and migrate deploy (needs DIRECT_DATABASE_URL)

@@ -58,6 +58,9 @@ Where to look first
 - The Scheduler (rules) page: `app/routes/app.scheduler.tsx`.
 - Customer email: `app/services/customer-inbox.server.ts` (reads the mailbox) and `app/routes/app.orders_.inbox.ts` (what the bell loads).
 - Secrets and settings on Cloud Run: `docs/gcp-inventory.md`.
+- Local setup, every environment variable and the tooling: `docs/development.md`. Contributor rules: `CONTRIBUTING.md`.
+
+The repository is public (2026-10-13). Never write secret values, billing IDs or personal email addresses into any tracked file.
 
 ## Comments in code
 

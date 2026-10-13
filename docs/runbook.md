@@ -19,6 +19,8 @@ Secrets and environment variables stay on the service. Change one variable witho
 ```
 gcloud run services update delivery-scheduler --region us-central1 --project jhay-510919 --update-env-vars NAME=value
 ```
+`deploy.sh` in the repo root is an older alternative: it builds the image with local Docker, pushes it to Artifact Registry and deploys it with `--image`. It does not pass `--service-account`, so it keeps the service's current one. The `--source` command above is the one in use.
+
 Check: the revision is `Ready`; the log shows `All migrations have been successfully applied` or `No pending migration`; `/` answers 200.
 
 ## Deploy the Shopify configuration and extensions

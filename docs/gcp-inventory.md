@@ -1,12 +1,12 @@
 # Google Cloud inventory
 
-Project `jhay-510919` (number `1030649952056`), billing account "Delivery Scheduler" (`017072-6E7F55-594170`, USD). Verified 2026-10-12 with read-only `gcloud` commands and the Artifact Registry API.
-Secret values are never recorded here, names only.
+Project `jhay-510919` (number `1030649952056`), billing account "Delivery Scheduler" (USD; the account ID is not recorded in this public repo). Verified 2026-10-12 with read-only `gcloud` commands and the Artifact Registry API.
+Secret values are never recorded here, names only. This repository is public: do not add secret values, billing IDs or personal email addresses to this file.
 
 ## Project IAM: principals and roles
 | Principal | Role | Note |
 |---|---|---|
-| `user:janbradlieapelado@gmail.com` | `roles/owner` | project owner |
+| the merchant's Google account | `roles/owner` | project owner |
 | `1030649952056-compute@developer.gserviceaccount.com` | `roles/editor` | default Compute Engine service account; broad role granted by Google at project creation |
 | `1030649952056@cloudbuild.gserviceaccount.com` | `roles/cloudbuild.builds.builder` | Cloud Build |
 | `service-1030649952056@gcp-sa-cloudbuild.iam.gserviceaccount.com` | `roles/cloudbuild.serviceAgent` | Google-managed |
