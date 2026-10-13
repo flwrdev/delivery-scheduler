@@ -1,3 +1,5 @@
+// This file sets up Vite, the tool that builds and runs the app.
+// It picks the host name and the live-reload connection (HMR) settings.
 import { reactRouter } from "@react-router/dev/vite";
 import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
@@ -15,7 +17,9 @@ if (
   delete process.env.HOST;
 }
 
-const host = new URL(process.env.SHOPIFY_APP_URL || "")
+// Gets the host name (the web address without the path) from SHOPIFY_APP_URL.
+// If SHOPIFY_APP_URL is not set, it uses http://localhost.
+const host = new URL(process.env.SHOPIFY_APP_URL || "http://localhost")
   .hostname;
 let hmrConfig;
 
