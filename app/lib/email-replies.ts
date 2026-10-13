@@ -43,7 +43,11 @@ export interface EmailReplyNotification {
   fromName: string;
   fromAddress: string;
   subject: string;
-  preview: string;
+  messageId: string | null;
+  /** The newest unseen reply with quoted history removed. */
+  text: string;
+  /** Present only when quote stripping removed something. */
+  fullText?: string;
   receivedAt: string;
   unseenCount: number;
   matchedBy: "subject" | "sender";
@@ -52,7 +56,6 @@ export interface EmailReplyNotification {
 
 export const EMAIL_REPLY_WINDOW_DAYS = 3;
 export const EMAIL_THREAD_WINDOW_DAYS = 90;
-export const EMAIL_PREVIEW_LENGTH = 140;
 export const EMAIL_TEXT_MAX_LENGTH = 4000;
 
 const ORDER_NUMBER_RE = /#\s?(\d{3,8})\b/;
@@ -144,11 +147,6 @@ export function normalizeEmailText(text: string | null | undefined): string {
   return capEmailText((text ?? "").replace(/\r\n?/g, "\n").trim());
 }
 
-export function buildPreview(text: string, max = EMAIL_PREVIEW_LENGTH): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
-}
-
 // Callers pass only the topmost Authentication-Results header: our receiving
 // server adds it, while lower ones travel with the message and can be forged.
 // Anyone can put "Order #4539" in a subject, so a failed check is surfaced.
@@ -221,7 +219,9 @@ export function selectUnseenReplies(
       fromName: latest.message.fromName,
       fromAddress: latest.message.fromAddress,
       subject: latest.message.subject,
-      preview: buildPreview(latest.message.text),
+      messageId: latest.message.messageId,
+      text: latest.message.text,
+      ...(latest.message.fullText !== undefined ? { fullText: latest.message.fullText } : {}),
       receivedAt: new Date(timeOf(latest.message.date)).toISOString(),
       unseenCount: count,
       matchedBy: latest.matchedBy,

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   type MailboxMessage,
   type MatchedReply,
-  buildPreview,
   isSelfAddress,
   isValidMessageId,
   parseOrderNumber,
@@ -110,16 +109,6 @@ describe("stripQuotedReply", () => {
   });
 });
 
-describe("buildPreview", () => {
-  it("flattens whitespace and truncates with an ellipsis", () => {
-    expect(buildPreview("a\n\n b   c")).toBe("a b c");
-    const long = "x".repeat(200);
-    const preview = buildPreview(long, 20);
-    expect(preview).toHaveLength(20);
-    expect(preview.endsWith("…")).toBe(true);
-  });
-});
-
 describe("senderVerdict", () => {
   it("uses DMARC when present", () => {
     expect(
@@ -165,9 +154,20 @@ describe("selectUnseenReplies", () => {
     const newer = message({ key: "inbox:2", date: "2026-09-28T02:00:00.000Z", text: "second" });
     const rows = selectUnseenReplies([matched(older), matched(newer)]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].preview).toBe("second");
+    expect(rows[0].text).toBe("second");
+    expect(rows[0].messageId).toBe("<a@example.com>");
+    expect(rows[0].fullText).toBeUndefined();
     expect(rows[0].unseenCount).toBe(2);
     expect(rows[0].receivedAt).toBe("2026-09-28T02:00:00.000Z");
+  });
+
+  it("carries the whole reply text and the quoted original", () => {
+    const long = "Pa-cancel po ng order. ".repeat(30).trim();
+    const rows = selectUnseenReplies([
+      matched(message({ text: long, fullText: `${long}\n\n> Order #4539` })),
+    ]);
+    expect(rows[0].text).toBe(long);
+    expect(rows[0].fullText).toBe(`${long}\n\n> Order #4539`);
   });
 
   it("hides replies at or before the seen timestamp but resurfaces newer ones", () => {

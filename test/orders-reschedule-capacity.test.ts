@@ -38,7 +38,22 @@ vi.mock("../app/services/reschedule-order-delivery.server", () => ({
   rescheduleOrderDelivery: rescheduleMock,
 }));
 
-import { action, type BulkActionResponse } from "../app/routes/app.orders";
+import { authenticate } from "../app/shopify.server";
+import {
+  executeBulkAction,
+  type BulkActionResponse,
+} from "../app/services/bulk-actions.server";
+import { runOrdersBulkOp } from "../app/services/orders-bulk-op";
+import { getScheduleRulesWithBookedCounts } from "../app/services/schedule-rules.server";
+
+async function action({ request }: { request: Request }): Promise<Response> {
+  const { admin, session } = await authenticate.admin(request);
+  const result = await runOrdersBulkOp(admin as never, session.shop, await request.formData(), {
+    getScheduleRulesWithBookedCounts,
+    executeBulkAction,
+  });
+  return Response.json(result.body, result.status === 200 ? undefined : { status: result.status });
+}
 
 const TARGET_DATE = "2026-08-15";
 const TARGET_SLOT = "9AM-12PM";

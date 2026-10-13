@@ -18,26 +18,14 @@ import {
   sortThread,
   stripQuotedReply,
 } from "../lib/email-replies";
-import type { MarkSeenOpConfig, SeenMetafield } from "./reschedule-seen.server";
+
+export { EMAIL_REPLY_SEEN_METAFIELD, EMAIL_REPLY_SEEN_OP } from "./reschedule-seen.server";
 
 // One IMAP connection per request, never a kept-alive IDLE session: Cloud Run
 // scales to zero and gives no CPU between requests, so a background
 // connection would be dropped anyway. Mailboxes are opened read-only
 // (EXAMINE) and bodies fetched with BODY.PEEK so the app never flips the
 // merchant's read/unread state in webmail or on the phone.
-
-export const EMAIL_REPLY_SEEN_METAFIELD = {
-  namespace: "$app",
-  key: "email_reply_seen_at",
-  type: "date_time",
-} as const satisfies SeenMetafield;
-
-export const EMAIL_REPLY_SEEN_OP: MarkSeenOpConfig<"markEmailReplySeen"> = {
-  action: "markEmailReplySeen",
-  metafield: EMAIL_REPLY_SEEN_METAFIELD,
-  timestampField: "receivedAt",
-  noun: "replies",
-};
 
 export const INBOX_NOT_CONFIGURED_MESSAGE =
   "The email inbox is not configured on this environment.";

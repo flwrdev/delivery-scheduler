@@ -26,8 +26,10 @@ import {
   getTodayInTimezone,
   runSchedulerOp,
 } from "../app/services/scheduler-ops.server";
+import { tableBackedStore } from "./schedule-rules-test-store";
 
 const SHOP = "test-shop.myshopify.com";
+const store = tableBackedStore(prismaMock.deliveryScheduleConfig, SHOP);
 // 2026-07-16 12:00 Asia/Manila (04:00 UTC) — "today" for pruning assertions.
 const NOW = new Date("2026-07-16T04:00:00Z");
 const PAST_DATE = "2026-07-10";
@@ -103,7 +105,7 @@ describe("getTodayInTimezone", () => {
 
 describe("runSchedulerOp — envelope and guards", () => {
   it("rejects an unknown op without touching the database", async () => {
-    const result = await runSchedulerOp(SHOP, "dropTables", {}, 3, NOW);
+    const result = await runSchedulerOp(SHOP, store, "dropTables", {}, 3, NOW);
     expect(result).toEqual({ ok: false, code: "unknown_op" });
     expect(prismaMock.deliveryScheduleConfig.updateMany).not.toHaveBeenCalled();
   });
@@ -111,6 +113,7 @@ describe("runSchedulerOp — envelope and guards", () => {
   it("returns stale_config with fresh state when the client version is behind", async () => {
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "saveSettings",
       { timezone: "Asia/Manila", cutoffHour: 12, prepHours: 1, maxDays: 25 },
       2, // loaded before another session bumped to 3
@@ -131,6 +134,7 @@ describe("saveSettings", () => {
   it("writes the settings under the version guard and bumps the version", async () => {
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "saveSettings",
       { timezone: "Asia/Manila", cutoffHour: 12, prepHours: 2, maxDays: 30 },
       3,
@@ -149,6 +153,7 @@ describe("saveSettings", () => {
   it("surfaces the schema's field errors for invalid settings", async () => {
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "saveSettings",
       { timezone: "Asia/Manilaa", cutoffHour: 12, prepHours: 2, maxDays: 30 },
       3,
@@ -172,7 +177,7 @@ describe("createSlot", () => {
   };
 
   it("appends a slot with a generated canonical value", async () => {
-    const result = await runSchedulerOp(SHOP, "createSlot", validInput, 3, NOW);
+    const result = await runSchedulerOp(SHOP, store, "createSlot", validInput, 3, NOW);
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -191,6 +196,7 @@ describe("createSlot", () => {
   it("rejects duplicate times even in a different case/spacing form", async () => {
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "createSlot",
       {
         start: { hour: 9, minute: 0, meridiem: "AM" },
@@ -207,6 +213,7 @@ describe("createSlot", () => {
   it("rejects an inverted range and a duplicate display label", async () => {
     const inverted = await runSchedulerOp(
       SHOP,
+      store,
       "createSlot",
       { ...validInput, start: { hour: 7, minute: 0, meridiem: "PM" } },
       3,
@@ -216,6 +223,7 @@ describe("createSlot", () => {
 
     const dupDisplay = await runSchedulerOp(
       SHOP,
+      store,
       "createSlot",
       { ...validInput, display: "morning" },
       3,
@@ -232,6 +240,7 @@ describe("updateSlotDisplay / reorderSlots", () => {
   it("renames only the display, never the value", async () => {
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "updateSlotDisplay",
       { value: "9AM-12PM", display: "Early morning" },
       3,
@@ -249,6 +258,7 @@ describe("updateSlotDisplay / reorderSlots", () => {
   it("rejects an unknown slot value", async () => {
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "updateSlotDisplay",
       { value: "5AM-6AM", display: "Ghost" },
       3,
@@ -260,6 +270,7 @@ describe("updateSlotDisplay / reorderSlots", () => {
   it("reorders with a valid permutation and rejects a stale one", async () => {
     const ok = await runSchedulerOp(
       SHOP,
+      store,
       "reorderSlots",
       { order: ["12PM-3PM", "9AM-12PM"] },
       3,
@@ -275,6 +286,7 @@ describe("updateSlotDisplay / reorderSlots", () => {
 
     const stale = await runSchedulerOp(
       SHOP,
+      store,
       "reorderSlots",
       { order: ["12PM-3PM"] },
       3,
@@ -288,6 +300,7 @@ describe("deleteSlot", () => {
   it("cascades the slot out of overrides and prunes past-dated entries", async () => {
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "deleteSlot",
       { value: "9AM-12PM" },
       3,
@@ -316,6 +329,7 @@ describe("deleteSlot", () => {
     });
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "deleteSlot",
       { value: "9AM-12PM" },
       3,
@@ -329,6 +343,7 @@ describe("saveDayOverride / clearDayOverride", () => {
   it("saves a full-day block and drops that day's slot-level overrides", async () => {
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "saveDayOverride",
       { date: FUTURE_DATE, blocked: true, blockedSlots: [], capacities: {} },
       3,
@@ -346,6 +361,7 @@ describe("saveDayOverride / clearDayOverride", () => {
   it("saves per-slot blocks and capacities for a day", async () => {
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "saveDayOverride",
       {
         date: "2026-07-25",
@@ -375,6 +391,7 @@ describe("saveDayOverride / clearDayOverride", () => {
     // merchant's caps and window blocks with a "Day saved" success toast.
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "saveDayOverride",
       {
         date: "2026-07-25",
@@ -399,6 +416,7 @@ describe("saveDayOverride / clearDayOverride", () => {
   it("rejects unknown slots and negative capacities", async () => {
     const unknown = await runSchedulerOp(
       SHOP,
+      store,
       "saveDayOverride",
       { date: "2026-07-25", blocked: false, blockedSlots: ["5AM-6AM"], capacities: {} },
       3,
@@ -408,6 +426,7 @@ describe("saveDayOverride / clearDayOverride", () => {
 
     const negative = await runSchedulerOp(
       SHOP,
+      store,
       "saveDayOverride",
       { date: "2026-07-25", blocked: false, blockedSlots: [], capacities: { "9AM-12PM": -1 } },
       3,
@@ -419,6 +438,7 @@ describe("saveDayOverride / clearDayOverride", () => {
   it("clears every override for one date", async () => {
     const result = await runSchedulerOp(
       SHOP,
+      store,
       "clearDayOverride",
       { date: FUTURE_DATE },
       3,

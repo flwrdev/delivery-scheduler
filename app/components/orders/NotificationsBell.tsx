@@ -242,7 +242,7 @@ function ReplyRow({
             </Badge>
           )}
         </InlineStack>
-        {item.preview && <Text as="p">“{item.preview}”</Text>}
+        {item.text && <Text as="p">“{item.text}”</Text>}
         <Text as="p" variant="bodySm" tone="subdued">
           {when} · {item.fromName}
           {item.matchedBy === "sender" ? " · matched by sender email" : ""}

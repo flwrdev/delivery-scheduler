@@ -64,6 +64,19 @@ export const RESCHEDULE_SEEN_OP: MarkSeenOpConfig<"markRescheduleSeen"> = {
   noun: "reschedules",
 };
 
+export const EMAIL_REPLY_SEEN_METAFIELD = {
+  namespace: "$app",
+  key: "email_reply_seen_at",
+  type: "date_time",
+} as const satisfies SeenMetafield;
+
+export const EMAIL_REPLY_SEEN_OP: MarkSeenOpConfig<"markEmailReplySeen"> = {
+  action: "markEmailReplySeen",
+  metafield: EMAIL_REPLY_SEEN_METAFIELD,
+  timestampField: "receivedAt",
+  noun: "replies",
+};
+
 export interface SeenEntry {
   orderId: string;
   seenAt: string;

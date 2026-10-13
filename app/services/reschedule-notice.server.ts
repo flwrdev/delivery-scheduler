@@ -1,14 +1,8 @@
-import prisma from "../db.server";
 import { sendCustomerEmail } from "./send-customer-email.server";
 
-// Customer notice after a MERCHANT reschedule (2026-09-04). Rides the existing
-// SMTP path (customer-email-design.md): same transport, same From, same
-// BCC-self copy, same EmailSendLog row for the panel timeline — no worker, no
-// new table, no Shopify order write. The customer's own self-service
-// reschedule is not noticed here: they just did it themselves in the modal.
-//
-// Recipient trust (E-4): the address comes from the order state the executor
-// already read via Admin GraphQL, never from the request.
+// Customer email after a merchant reschedule, sent through sendCustomerEmail
+// (same transport, From and BCC copy). The recipient comes from the order the
+// bulk executor read via Admin GraphQL, never from the request.
 
 export interface RescheduleNoticeInput {
   orderId: string;
@@ -82,7 +76,7 @@ export function buildRescheduleNotice(
 }
 
 export async function sendRescheduleNotice(
-  shop: string,
+  _shop: string,
   input: RescheduleNoticeInput,
 ): Promise<RescheduleNoticeResult> {
   const to = input.to?.trim() || "";
@@ -99,19 +93,5 @@ export async function sendRescheduleNotice(
     };
   }
   if (!sent.ok) return { status: "failed", error: sent.error };
-
-  // Panel-timeline log only (E-5 revisit) — the send already succeeded, so a
-  // logging failure must never turn it into a failure report.
-  try {
-    await prisma.emailSendLog.create({
-      data: { shop, shopifyOrderId: input.orderId, to, subject },
-    });
-  } catch (error) {
-    console.warn(
-      `[reschedule-notice] EmailSendLog write failed for ${input.orderId}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
   return { status: "sent", to };
 }

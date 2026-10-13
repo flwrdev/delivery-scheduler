@@ -34,8 +34,10 @@ import {
   getScheduleRulesWithHealth,
   upsertScheduleRules,
 } from "../app/services/schedule-rules.server";
+import { tableBackedStore } from "./schedule-rules-test-store";
 
 const SHOP = "test-shop.myshopify.com";
+const store = tableBackedStore(prismaMock.deliveryScheduleConfig, SHOP);
 
 function storedRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -70,7 +72,7 @@ describe("getScheduleRules — pure read (PERF-2 fix)", () => {
   it("reads with findUnique and NEVER writes a row as a read side effect", async () => {
     prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(null);
 
-    const rules = await getScheduleRules(SHOP);
+    const rules = await getScheduleRules(SHOP, store);
 
     expect(rules).toEqual(DEFAULT_DELIVERY_SCHEDULE_RULES);
     expect(prismaMock.deliveryScheduleConfig.findUnique).toHaveBeenCalledWith({
@@ -86,7 +88,7 @@ describe("getScheduleRules — pure read (PERF-2 fix)", () => {
     );
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await getScheduleRulesWithHealth(SHOP);
+    const result = await getScheduleRulesWithHealth(SHOP, store);
 
     expect(result.version).toBe(3);
     expect(result.configHealth.length).toBeGreaterThan(0);
@@ -101,7 +103,7 @@ describe("upsertScheduleRules — strict validation + optimistic version guard",
   it("rejects an invalid patch with field errors and writes nothing", async () => {
     prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(storedRow());
 
-    const result = await upsertScheduleRules(SHOP, { cutoffHour: 99 });
+    const result = await upsertScheduleRules(SHOP, store, { cutoffHour: 99 });
 
     expect(result).toMatchObject({ ok: false, code: "validation" });
     if (!result.ok && result.code === "validation") {
@@ -118,7 +120,7 @@ describe("upsertScheduleRules — strict validation + optimistic version guard",
       .mockResolvedValueOnce(storedRow({ cutoffHour: 12, version: 4 })); // fresh re-read
     prismaMock.deliveryScheduleConfig.updateMany.mockResolvedValue({ count: 1 });
 
-    const result = await upsertScheduleRules(SHOP, { cutoffHour: 12 });
+    const result = await upsertScheduleRules(SHOP, store, { cutoffHour: 12 });
 
     expect(prismaMock.deliveryScheduleConfig.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -139,7 +141,7 @@ describe("upsertScheduleRules — strict validation + optimistic version guard",
       .mockResolvedValueOnce(storedRow({ cutoffHour: 9, version: 4 })); // fresh re-read
     prismaMock.deliveryScheduleConfig.updateMany.mockResolvedValue({ count: 0 });
 
-    const result = await upsertScheduleRules(SHOP, { cutoffHour: 12 }, { expectedVersion: 3 });
+    const result = await upsertScheduleRules(SHOP, store, { cutoffHour: 12 }, { expectedVersion: 3 });
 
     expect(result).toMatchObject({ ok: false, code: "stale_config", version: 4 });
   });
@@ -152,7 +154,7 @@ describe("upsertScheduleRules — strict validation + optimistic version guard",
       storedRow({ cutoffHour: 12, version: 1 }),
     );
 
-    const result = await upsertScheduleRules(SHOP, { cutoffHour: 12 });
+    const result = await upsertScheduleRules(SHOP, store, { cutoffHour: 12 });
 
     expect(prismaMock.deliveryScheduleConfig.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -171,7 +173,7 @@ describe("upsertScheduleRules — strict validation + optimistic version guard",
       Object.assign(new Error("unique"), { code: "P2002" }),
     );
 
-    const result = await upsertScheduleRules(SHOP, { cutoffHour: 12 });
+    const result = await upsertScheduleRules(SHOP, store, { cutoffHour: 12 });
 
     expect(result).toMatchObject({ ok: false, code: "stale_config", version: 1 });
   });
@@ -183,7 +185,7 @@ describe("upsertScheduleRules — strict validation + optimistic version guard",
       .mockResolvedValueOnce(storedRow({ version: 4 }));
     prismaMock.deliveryScheduleConfig.updateMany.mockResolvedValue({ count: 1 });
 
-    await upsertScheduleRules(SHOP, { cutoffHour: 12 });
+    await upsertScheduleRules(SHOP, store, { cutoffHour: 12 });
 
     expect(bookingsMock.invalidateDeliveryBookingsCache).toHaveBeenCalledWith(SHOP);
   });
@@ -201,7 +203,7 @@ describe("getScheduleRulesDetailed — booked counts overlay + countsMeta (desig
   it("reports 'untracked' without touching the Admin API when no capacity is configured", async () => {
     prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(storedRow());
 
-    const result = await getScheduleRulesDetailed(SHOP, admin);
+    const result = await getScheduleRulesDetailed(SHOP, admin, { store });
 
     expect(result.countsMeta).toEqual({
       status: "untracked",
@@ -214,7 +216,7 @@ describe("getScheduleRulesDetailed — booked counts overlay + countsMeta (desig
   it("reports 'skipped' when no admin client is available", async () => {
     prismaMock.deliveryScheduleConfig.findUnique.mockResolvedValue(CAPACITY_ROW());
 
-    const result = await getScheduleRulesDetailed(SHOP, undefined);
+    const result = await getScheduleRulesDetailed(SHOP, undefined, { store });
 
     expect(result.countsMeta.status).toBe("skipped");
     expect(bookingsMock.getDeliveryBookingsSnapshot).not.toHaveBeenCalled();
@@ -234,6 +236,7 @@ describe("getScheduleRulesDetailed — booked counts overlay + countsMeta (desig
     });
 
     const result = await getScheduleRulesDetailed(SHOP, admin, {
+      store,
       excludeOrderId: "gid://shopify/Order/9",
     });
 
@@ -270,7 +273,7 @@ describe("getScheduleRulesDetailed — booked counts overlay + countsMeta (desig
       "2026-07-18": { "9AM-12PM": 4 },
     });
 
-    const result = await getScheduleRulesDetailed(SHOP, admin);
+    const result = await getScheduleRulesDetailed(SHOP, admin, { store });
 
     expect(result.countsMeta).toEqual({
       status: "partial",
@@ -295,7 +298,7 @@ describe("getScheduleRulesDetailed — booked counts overlay + countsMeta (desig
     });
     bookingsMock.deriveBookedCounts.mockReturnValue({});
 
-    const result = await getScheduleRulesDetailed(SHOP, admin);
+    const result = await getScheduleRulesDetailed(SHOP, admin, { store });
 
     expect(result.countsMeta.status).toBe("partial");
     expect(result.countsMeta.truncation).toEqual({
@@ -314,7 +317,7 @@ describe("getScheduleRulesDetailed — booked counts overlay + countsMeta (desig
     });
     bookingsMock.deriveBookedCounts.mockReturnValue({});
 
-    const result = await getScheduleRulesDetailed(SHOP, admin);
+    const result = await getScheduleRulesDetailed(SHOP, admin, { store });
 
     expect(result.countsMeta.status).toBe("ok");
     expect(result.countsMeta.truncation).toBeUndefined();
@@ -325,7 +328,7 @@ describe("getScheduleRulesDetailed — booked counts overlay + countsMeta (desig
     bookingsMock.getDeliveryBookingsSnapshot.mockRejectedValue(new Error("THROTTLED"));
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await getScheduleRulesDetailed(SHOP, admin);
+    const result = await getScheduleRulesDetailed(SHOP, admin, { store });
 
     expect(result.countsMeta.status).toBe("error");
     // fail-open: persisted (vestigial 0) booked values remain

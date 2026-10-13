@@ -1,0 +1,10 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "t:name"
+handle = "app-home"
+type = "ui_extension"
+
+[[extensions.targeting]]
+module = "./src/AppHome.jsx"
+target = "admin.app.home.render"

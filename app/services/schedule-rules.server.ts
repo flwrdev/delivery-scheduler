@@ -1,4 +1,3 @@
-import prisma from "../db.server";
 import {
   DEFAULT_DELIVERY_SCHEDULE_RULES,
   cloneDeliveryScheduleRules,
@@ -46,7 +45,7 @@ export type UpsertScheduleRulesResult =
       version: number;
     };
 
-type StoredConfigRow = {
+export type StoredConfigRow = {
   timezone: string;
   cutoffHour: number;
   prepHours: number;
@@ -58,9 +57,19 @@ type StoredConfigRow = {
   version: number;
 };
 
-function serializeScheduleRules(shop: string, rules: DeliveryScheduleRules) {
+/**
+ * Persistence for one shop's config row. `create` resolves null when a row
+ * already exists; `update` resolves false when the stored version is not
+ * `expectedVersion`.
+ */
+export interface ScheduleRulesStore {
+  read(): Promise<StoredConfigRow | null>;
+  create(row: StoredConfigRow): Promise<StoredConfigRow | null>;
+  update(row: StoredConfigRow, expectedVersion: number): Promise<boolean>;
+}
+
+function serializeScheduleRules(rules: DeliveryScheduleRules) {
   return {
-    shop,
     timezone: rules.timezone,
     cutoffHour: rules.cutoffHour,
     prepHours: rules.prepHours,
@@ -104,8 +113,9 @@ function readStoredRules(shop: string, row: StoredConfigRow): ScheduleRulesWithH
  */
 export async function getScheduleRulesWithHealth(
   shop?: string,
+  store?: ScheduleRulesStore,
 ): Promise<ScheduleRulesWithHealth> {
-  if (!shop) {
+  if (!shop || !store) {
     return {
       rules: cloneScheduleRules(DEFAULT_SCHEDULE_RULES),
       configHealth: [],
@@ -113,7 +123,7 @@ export async function getScheduleRulesWithHealth(
     };
   }
 
-  const row = await prisma.deliveryScheduleConfig.findUnique({ where: { shop } });
+  const row = await store.read();
   if (!row) {
     return {
       rules: cloneScheduleRules(DEFAULT_SCHEDULE_RULES),
@@ -125,8 +135,11 @@ export async function getScheduleRulesWithHealth(
   return readStoredRules(shop, row);
 }
 
-export async function getScheduleRules(shop?: string): Promise<DeliveryScheduleRules> {
-  const { rules } = await getScheduleRulesWithHealth(shop);
+export async function getScheduleRules(
+  shop?: string,
+  store?: ScheduleRulesStore,
+): Promise<DeliveryScheduleRules> {
+  const { rules } = await getScheduleRulesWithHealth(shop, store);
   return rules;
 }
 
@@ -190,6 +203,7 @@ export interface ScheduleRulesDetailed {
 }
 
 export interface BookedCountsOptions {
+  store?: ScheduleRulesStore;
   /** Exclude this order (GID or numeric id) from counts — reschedule self-exclusion (DEF-14). */
   excludeOrderId?: string;
   /** Force a fresh Admin scan (the admin "Refresh counts" path). */
@@ -226,7 +240,10 @@ export async function getScheduleRulesDetailed(
   admin?: AdminGraphQLClient,
   options: BookedCountsOptions = {},
 ): Promise<ScheduleRulesDetailed> {
-  const { rules, configHealth, version } = await getScheduleRulesWithHealth(shop);
+  const { rules, configHealth, version } = await getScheduleRulesWithHealth(
+    shop,
+    options.store,
+  );
   const base = { rules, configHealth, version };
 
   if (!Object.keys(rules.slotCapacity).length) {
@@ -293,10 +310,11 @@ export async function getScheduleRulesWithBookedCounts(
  */
 export async function upsertScheduleRules(
   shop: string,
+  store: ScheduleRulesStore,
   patch: Partial<DeliveryScheduleRules>,
   options: { expectedVersion?: number } = {},
 ): Promise<UpsertScheduleRulesResult> {
-  const current = await getScheduleRulesWithHealth(shop);
+  const current = await getScheduleRulesWithHealth(shop, store);
 
   const validation = validateScheduleRulesPatch(patch, current.rules.slots);
   if (!validation.ok) {
@@ -309,51 +327,44 @@ export async function upsertScheduleRules(
     ...validation.patch,
   };
 
-  const existingRow = await prisma.deliveryScheduleConfig.findUnique({
-    where: { shop },
-    select: { version: true },
-  });
+  const existingRow = await store.read();
 
   if (!existingRow) {
     if (guardVersion !== 0) {
       return { ok: false, code: "stale_config", rules: current.rules, version: 0 };
     }
 
-    try {
-      const created = await prisma.deliveryScheduleConfig.create({
-        data: { ...serializeScheduleRules(shop, nextRules), version: 1 },
-      });
-      // A rules change can alter the tracked-date set; drop the memoized
-      // bookings so the next read re-scans against the new config.
-      invalidateDeliveryBookingsCache(shop);
+    const created = await store.create({
+      ...serializeScheduleRules(nextRules),
+      version: 1,
+    });
+    if (!created) {
+      // Another writer created the row between our read and this create.
+      const fresh = await getScheduleRulesWithHealth(shop, store);
       return {
-        ok: true,
-        rules: readStoredRules(shop, created).rules,
-        version: created.version,
+        ok: false,
+        code: "stale_config",
+        rules: fresh.rules,
+        version: fresh.version,
       };
-    } catch (error) {
-      // Unique-constraint race: another writer created the row between our read
-      // and this create. Surface it as a stale save instead of a 500.
-      if ((error as { code?: string })?.code === "P2002") {
-        const fresh = await getScheduleRulesWithHealth(shop);
-        return {
-          ok: false,
-          code: "stale_config",
-          rules: fresh.rules,
-          version: fresh.version,
-        };
-      }
-      throw error;
     }
+    // A rules change can alter the tracked-date set; drop the memoized
+    // bookings so the next read re-scans against the new config.
+    invalidateDeliveryBookingsCache(shop);
+    return {
+      ok: true,
+      rules: readStoredRules(shop, created).rules,
+      version: created.version,
+    };
   }
 
-  const updated = await prisma.deliveryScheduleConfig.updateMany({
-    where: { shop, version: guardVersion },
-    data: { ...serializeScheduleRules(shop, nextRules), version: guardVersion + 1 },
-  });
+  const updated = await store.update(
+    { ...serializeScheduleRules(nextRules), version: guardVersion + 1 },
+    guardVersion,
+  );
 
-  if (updated.count === 0) {
-    const fresh = await getScheduleRulesWithHealth(shop);
+  if (!updated) {
+    const fresh = await getScheduleRulesWithHealth(shop, store);
     return {
       ok: false,
       code: "stale_config",
@@ -363,6 +374,6 @@ export async function upsertScheduleRules(
   }
 
   invalidateDeliveryBookingsCache(shop);
-  const fresh = await getScheduleRulesWithHealth(shop);
+  const fresh = await getScheduleRulesWithHealth(shop, store);
   return { ok: true, rules: fresh.rules, version: fresh.version };
 }

@@ -21,6 +21,7 @@ import { normalizeSlotValueForMatch } from "../lib/slot-value";
 import {
   getScheduleRulesWithHealth,
   upsertScheduleRules,
+  type ScheduleRulesStore,
   type UpsertScheduleRulesResult,
 } from "./schedule-rules.server";
 
@@ -419,6 +420,7 @@ function mapUpsertResult(result: UpsertScheduleRulesResult): SchedulerOpResult {
  */
 export async function runSchedulerOp(
   shop: string,
+  store: ScheduleRulesStore,
   op: string,
   input: Record<string, unknown>,
   expectedVersion: number,
@@ -429,7 +431,7 @@ export async function runSchedulerOp(
     return { ok: false, code: "unknown_op" };
   }
 
-  const { rules, version } = await getScheduleRulesWithHealth(shop);
+  const { rules, version } = await getScheduleRulesWithHealth(shop, store);
   const context: OpContext = {
     rules: cloneDeliveryScheduleRules(rules),
     today: getTodayInTimezone(rules.timezone, now),
@@ -447,7 +449,7 @@ export async function runSchedulerOp(
     return { ok: false, code: "stale_config", rules, version };
   }
 
-  const result = await upsertScheduleRules(shop, outcome.patch, {
+  const result = await upsertScheduleRules(shop, store, outcome.patch, {
     expectedVersion,
   });
   return mapUpsertResult(result);

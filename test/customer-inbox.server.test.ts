@@ -203,7 +203,7 @@ describe("listUnseenReplies", () => {
     const result = await listUnseenReplies(admin, new Date("2026-09-28T04:00:00Z"));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.map((r) => [r.name, r.matchedBy, r.preview])).toEqual([
+    expect(result.data.map((r) => [r.name, r.matchedBy, r.text])).toEqual([
       ["#4600", "sender", "Magkano po delivery?"],
       ["#4539", "subject", "Pwede po ba Friday?"],
     ]);

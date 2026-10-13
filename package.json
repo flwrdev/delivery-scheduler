@@ -37,13 +37,9 @@
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
-    "@react-router/dev": "^7.12.0",
     "@react-router/fs-routes": "^7.12.0",
     "@react-router/node": "^7.12.0",
     "@react-router/serve": "^7.12.0",
-    "@shopify/app-bridge-react": "^4.2.4",
-    "@shopify/polaris": "^13.9.5",
-    "@shopify/polaris-icons": "^9.3.1",
     "@shopify/shopify-api": "^14.0.1",
     "@shopify/shopify-app-react-router": "^1.1.0",
     "dotenv": "^16.6.1",
@@ -54,12 +50,15 @@
     "prisma": "^7.10.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router": "^7.12.0",
-    "vite-tsconfig-paths": "^5.1.4"
+    "react-router": "^7.12.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
+    "@react-router/dev": "^7.12.0",
     "@shopify/api-codegen-preset": "^2.0.0",
+    "@shopify/app-bridge-react": "^4.2.4",
+    "@shopify/polaris": "^13.9.5",
+    "@shopify/polaris-icons": "^9.3.1",
     "@shopify/polaris-types": "1.0.1",
     "@shopify/ui-extensions-tester": "2026.4.4",
     "@types/mailparser": "^3.4.6",
@@ -72,6 +71,7 @@
     "jsdom": "^29.1.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
+    "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^4.1.8"
   }
 }

@@ -32,37 +32,3 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
-
-// Customer Email send log (E-5 revisit, ): logs
-// that a merchant sent a customer email via the in-app compose modal, purely
-// for the order panel's DeliveryTimeline display. An app-side log row, never
-// Shopify delivery state, so it does not join the order write-path contract in
-// docs/api.md.
-model EmailSendLog {
-  id             String   @id @default(cuid())
-  shop           String
-  shopifyOrderId String
-  to             String
-  subject        String
-  sentAt         DateTime @default(now())
-
-  @@index([shop, shopifyOrderId])
-}
-
-model DeliveryScheduleConfig {
-  id                String   @id @default(cuid())
-  shop              String   @unique
-  timezone          String
-  cutoffHour        Int
-  prepHours         Int
-  maxDays           Int
-  slotsJson         String
-  disabledDatesJson String
-  disabledSlotsJson String
-  slotCapacityJson  String
-  // Optimistic-concurrency guard for granular section saves (Scheduler V2 §4.4):
-  // writes send the version they loaded; a mismatch means another writer won.
-  version           Int      @default(0)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-}
