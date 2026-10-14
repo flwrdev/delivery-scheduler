@@ -71,7 +71,6 @@ import { RescheduleModal } from "../components/orders/RescheduleModal";
 import { SendEmailModal } from "../components/orders/SendEmailModal";
 import { EmailViewModal } from "../components/orders/EmailViewModal";
 import { EditDetailsModal } from "../components/orders/EditDetailsModal";
-import { RecentReschedulesBanner } from "../components/orders/RecentReschedulesBanner";
 import { NotificationsBell } from "../components/orders/NotificationsBell";
 import type {
   EmailReplyNotification,
@@ -1206,14 +1205,10 @@ function Extension() {
     },
     [rescheduleSeenFetcher],
   );
-  const markRescheduleSeen = useCallback(
-    (item: RecentRescheduleItem) => submitReschedulesSeen([item]),
-    [submitReschedulesSeen],
-  );
 
-  // Every inbox read is a fresh IMAP login, so it follows the list's own
-  // refresh cadence plus bell opens (at most once a minute) instead of
-  // re-running after every action on the page.
+  // The inbox reloads with the list's own refresh and on bell opens (at most
+  // once a minute), not after every action on the page. The server also
+  // reuses its mailbox read for a minute.
   const inboxFetcher = useFetcher<InboxRepliesData>();
   const loadInbox = inboxFetcher.load;
   const inboxLoadedAtRef = useRef(0);
@@ -1898,23 +1893,6 @@ function Extension() {
             <Text as="p">{error}</Text>
           </Banner>
         )}
-
-        {/* ── Recent customer reschedules (2026-09-04) — on EVERY tab, because
-            the moved order has by definition just left the view being looked
-            at. Rows clear on Seen or after 48 h; no dismiss on purpose. ──── */}
-        <RecentReschedulesBanner
-          items={loaderData.recentReschedules}
-          pendingSeenIds={pendingSeenIds}
-          errorMessage={
-            rescheduleSeenFetcher.state === "idle" &&
-            rescheduleSeenFetcher.data?.ok === false
-              ? rescheduleSeenFetcher.data.message
-              : null
-          }
-          onOpen={openRecentReschedule}
-          onSeen={markRescheduleSeen}
-          onSeenAll={submitReschedulesSeen}
-        />
 
         {/* ── Search hit hidden by the dated tab / date-slot filter ───────── */}
         {hiddenSearchMatches.length > 0 && (
