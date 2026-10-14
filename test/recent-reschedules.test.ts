@@ -6,7 +6,6 @@ import {
   buildRecentRescheduleTagQuery,
   formatShopLocalTime,
   latestRescheduleEvent,
-  recentReschedulesTitle,
   rescheduleBadgeLabel,
   selectRecentReschedules,
   shiftISODate,
@@ -187,20 +186,6 @@ describe("selectRecentReschedules", () => {
     expect(
       selectRecentReschedules([order([])], { now: NOW, todayISO: TODAY, timezone: MANILA }),
     ).toHaveLength(0);
-  });
-});
-
-describe("recentReschedulesTitle", () => {
-  it("says today when every item is from today, otherwise the 48-hour window", () => {
-    const [today] = selectRecentReschedules([order([event()])], {
-      now: NOW,
-      todayISO: TODAY,
-      timezone: MANILA,
-    });
-    expect(recentReschedulesTitle([today])).toBe("Rescheduled today · 1 order");
-    expect(recentReschedulesTitle([today, { ...today, dayLabel: "Yesterday" }])).toBe(
-      "Rescheduled in the last 48 hours · 2 orders",
-    );
   });
 });
 

@@ -1,7 +1,8 @@
 // Reads customer emails from the shop's mailbox over IMAP (imapflow) and matches replies to
 // orders. listUnseenReplies feeds the notifications bell; getOrderThread returns the
 // conversation of one order. Mailboxes are opened read-only, so the app never changes the
-// merchant's read/unread state.
+// merchant's read/unread state. The recent-inbox read behind the bell is kept in memory for
+// one minute, and callers that arrive at the same time share one read.
 
 import { ImapFlow } from "imapflow";
 import type { FetchMessageObject, SearchObject } from "imapflow";
@@ -149,6 +150,64 @@ async function withMailbox<T>(
   } finally {
     clearTimeout(timer);
   }
+}
+
+// How long the recent-inbox read stays in memory before the mailbox is read again.
+const INBOX_CACHE_TTL_MS = 60_000;
+
+interface InboxSnapshot {
+  key: string;
+  messages: MailboxMessage[];
+  readAt: number;
+}
+
+// The last good read, and the read that is running right now (if any).
+// Both live in this server instance only, and both are tied to one mailbox.
+let inboxSnapshot: InboxSnapshot | null = null;
+let inboxInFlight: { key: string; promise: Promise<MailboxMessage[]> } | null = null;
+
+// Forgets the saved read, so the next call reads the mailbox again.
+export function clearInboxCache(): void {
+  inboxSnapshot = null;
+  inboxInFlight = null;
+}
+
+// Returns the recent inbox messages. A read younger than the TTL is reused.
+// If a read is already running, the caller waits for it instead of opening
+// a second connection. A failed read is not saved, so the next call tries again.
+async function readRecentInbox(cfg: ImapConfig, now: Date): Promise<MailboxMessage[]> {
+  const key = `${cfg.user}@${cfg.host}:${cfg.port}`;
+  if (
+    inboxSnapshot?.key === key &&
+    Date.now() - inboxSnapshot.readAt < INBOX_CACHE_TTL_MS
+  ) {
+    return inboxSnapshot.messages;
+  }
+  if (inboxInFlight?.key === key) return inboxInFlight.promise;
+
+  const promise: Promise<MailboxMessage[]> = withMailbox(cfg, (client) =>
+    readMailbox(
+      client,
+      "INBOX",
+      "inbox",
+      {
+        since: daysAgo(EMAIL_REPLY_WINDOW_DAYS, now),
+        // Skips the BCC copies of our own sends before they are downloaded.
+        not: { from: cfg.user },
+      },
+      MAX_RECENT_MESSAGES,
+      cfg.user,
+    ),
+  )
+    .then((messages) => {
+      inboxSnapshot = { key, messages, readAt: Date.now() };
+      return messages;
+    })
+    .finally(() => {
+      if (inboxInFlight?.promise === promise) inboxInFlight = null;
+    });
+  inboxInFlight = { key, promise };
+  return promise;
 }
 
 // A repeated header comes back as an array in top-down order; the first entry
@@ -398,6 +457,8 @@ export async function matchRepliesToOrders(
 
 // ─── Entry points for the resource routes ──────────────────────────────────
 
+// The mailbox part comes from readRecentInbox (cached). Matching to orders and the
+// seen check run on every call, so a reply marked as seen disappears right away.
 export async function listUnseenReplies(
   admin: AdminGraphQLClient,
   now: Date = new Date(),
@@ -408,20 +469,7 @@ export async function listUnseenReplies(
   }
   let messages: MailboxMessage[];
   try {
-    messages = await withMailbox(cfg, (client) =>
-      readMailbox(
-        client,
-        "INBOX",
-        "inbox",
-        {
-          since: daysAgo(EMAIL_REPLY_WINDOW_DAYS, now),
-          // Skips the BCC copies of our own sends before they are downloaded.
-          not: { from: cfg.user },
-        },
-        MAX_RECENT_MESSAGES,
-        cfg.user,
-      ),
-    );
+    messages = await readRecentInbox(cfg, now);
   } catch (e) {
     return { ok: false, error: humanizeImapError(e) };
   }

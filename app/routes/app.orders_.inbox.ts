@@ -19,8 +19,8 @@ export type InboxRepliesData =
 
 const REVALIDATING_ACTIONS = new Set(["markEmailReplySeen", "sendEmail"]);
 
-// Every read is a fresh IMAP login (1–2 s). Re-reading after unrelated
-// actions like tagging would add that to every click on the page.
+// Only these two actions reload the bell. The matching step is quick, and the
+// mailbox read behind it is reused for a minute, so other actions skip the bell.
 export function shouldRevalidate({ formData }: ShouldRevalidateFunctionArgs) {
   if (!formData) return false;
   return REVALIDATING_ACTIONS.has(String(formData.get("_action") ?? ""));
