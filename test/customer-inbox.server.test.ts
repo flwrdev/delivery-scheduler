@@ -66,6 +66,7 @@ vi.mock("imapflow", () => ({ ImapFlow: imap.ImapFlow }));
 
 import {
   EMAIL_REPLY_SEEN_OP,
+  clearInboxCache,
   getOrderThread,
   listUnseenReplies,
 } from "../app/services/customer-inbox.server";
@@ -113,6 +114,7 @@ function adminReturning(...responses: unknown[]) {
 }
 
 beforeEach(() => {
+  clearInboxCache();
   imap.state.mailboxes = {};
   imap.state.folders = [{ path: "INBOX" }, { path: "Sent", specialUse: "\\Sent" }];
   imap.state.searches = [];
@@ -275,6 +277,101 @@ describe("listUnseenReplies", () => {
       ok: false,
       error: "Couldn't reach the mail server. Try again in a moment.",
     });
+  });
+});
+
+describe("listUnseenReplies mailbox cache", () => {
+  const NOW = new Date("2026-09-28T04:00:00Z");
+
+  function oneReply() {
+    imap.state.mailboxes.INBOX = [
+      {
+        uid: 1,
+        source: raw({
+          from: "juan@example.com",
+          subject: "Re: Order #4539",
+          id: "<r1@example.com>",
+          body: "ok",
+        }),
+      },
+    ];
+  }
+
+  function orderNode(seenAt: string | null) {
+    return {
+      data: {
+        orders: {
+          nodes: [
+            {
+              id: "gid://shopify/Order/10",
+              name: "#4539",
+              emailReplySeenAt: seenAt ? { value: seenAt } : null,
+            },
+          ],
+        },
+      },
+    };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reads the mailbox once for calls inside the TTL", async () => {
+    oneReply();
+    await listUnseenReplies(adminReturning(orderNode(null)), NOW);
+    await listUnseenReplies(adminReturning(orderNode(null)), NOW);
+    expect(imap.state.searches).toHaveLength(1);
+    expect(imap.state.loggedOut).toBe(1);
+  });
+
+  it("reads the mailbox again once the TTL has passed", async () => {
+    oneReply();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    await listUnseenReplies(adminReturning(orderNode(null)), NOW);
+    clock.mockReturnValue(1_000_000 + 61_000);
+    await listUnseenReplies(adminReturning(orderNode(null)), NOW);
+    expect(imap.state.searches).toHaveLength(2);
+  });
+
+  it("still applies the seen timestamp to cached messages", async () => {
+    oneReply();
+    const first = await listUnseenReplies(adminReturning(orderNode(null)), NOW);
+    expect(first.ok && first.data).toHaveLength(1);
+    const second = await listUnseenReplies(
+      adminReturning(orderNode("2026-09-28T03:00:00Z")),
+      NOW,
+    );
+    expect(second).toEqual({ ok: true, data: [] });
+    expect(imap.state.searches).toHaveLength(1);
+  });
+
+  it("does not save a failed read", async () => {
+    oneReply();
+    imap.state.connectError = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+    const failed = await listUnseenReplies(adminReturning(), NOW);
+    expect(failed.ok).toBe(false);
+    imap.state.connectError = null;
+    const retried = await listUnseenReplies(adminReturning(orderNode(null)), NOW);
+    expect(retried.ok && retried.data).toHaveLength(1);
+  });
+
+  it("lets calls that overlap share one mailbox read", async () => {
+    oneReply();
+    await Promise.all([
+      listUnseenReplies(adminReturning(orderNode(null)), NOW),
+      listUnseenReplies(adminReturning(orderNode(null)), NOW),
+      listUnseenReplies(adminReturning(orderNode(null)), NOW),
+    ]);
+    expect(imap.state.searches).toHaveLength(1);
+  });
+
+  it("starts a new read after clearInboxCache", async () => {
+    oneReply();
+    await listUnseenReplies(adminReturning(orderNode(null)), NOW);
+    clearInboxCache();
+    await listUnseenReplies(adminReturning(orderNode(null)), NOW);
+    expect(imap.state.searches).toHaveLength(2);
   });
 });
 

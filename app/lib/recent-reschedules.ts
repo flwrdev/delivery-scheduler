@@ -1,11 +1,9 @@
-// Pure helpers behind two Orders Ops surfaces added 2026-09-04:
-//   · the "Rescheduled today" banner (customer self-service reschedules the
-//     merchant has not yet marked Seen, up to 48 hours old), and
+// Pure helpers behind two Orders page surfaces:
+//   · the reschedule rows in the Notifications bell (reschedules the merchant
+//     has not yet marked Seen, up to 48 hours old), and
 //   · the row/panel badge that carries the reschedule time.
-// Both exist because a customer reschedule silently moved an order out of the
-// merchant's Today list and nothing on the page said so. Everything here is
-// shop-local: the loader passes the shop timezone + its own todayISO, so a VA
-// on a non-Manila machine reads the same labels as the merchant.
+// Everything here is shop-local: the loader passes the shop timezone and its
+// own todayISO, so a VA on a non-Manila machine reads the same labels as the merchant.
 
 import { getShopLocalDate } from "./delivery-availability";
 import { buildOrderEventTag } from "./order-tags";
@@ -23,7 +21,7 @@ export const RECENT_RESCHEDULE_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const RECENT_RESCHEDULE_TAG_DAYS = 3;
 
 /**
- * Shopify orders-search string for the banner's loader query. Tag search is
+ * Shopify orders-search string for the recent-reschedules loader query. Tag search is
  * the only server-side handle available — metafield terms are ignored by the
  * orders search — and the event tag is stamped on BOTH reschedule paths. The
  * exact window, the source filter, and the Seen marker are applied afterwards
@@ -42,11 +40,8 @@ export function buildRecentRescheduleTagQuery(
 }
 
 /**
- * The full orders-search string the banner's loader query sends: the event-tag
- * OR plus `-status:closed`. Archived orders are hidden from every main view of
- * the page, so an archived reschedule must not linger in the banner — and its
- * Open would land on an empty All view (#4313, archived 10:09 AM while still
- * on the banner, 2026-09-04).
+ * The full orders-search string the recent-reschedules loader query sends: the
+ * event-tag OR plus `-status:closed`, so archived orders are left out.
  */
 export function buildRecentRescheduleSearchQuery(
   todayISO: string,
@@ -56,9 +51,8 @@ export function buildRecentRescheduleSearchQuery(
   return tags ? `(${tags}) -status:closed` : "";
 }
 
-// Both sources by merchant request (2026-09-04): the banner doubles as the
-// day's reschedule log, so a VA's merchant-side move is visible to the owner
-// too. Narrow with the `sources` option if that ever gets noisy.
+// Reschedule sources that are listed: customer and merchant moves.
+// The `sources` option can narrow this list.
 export const RECENT_RESCHEDULE_SOURCES: ReadonlyArray<string> = [
   "customer",
   "merchant",
@@ -114,7 +108,7 @@ export function formatShortMonthDay(iso: string): string {
   });
 }
 
-/** "Fri, Sep 4" from "2026-09-04" — the banner's from/to dates. */
+/** "Fri, Sep 4" from "2026-09-04" — the from/to dates of a reschedule. */
 export function formatWeekdayMonthDay(iso: string): string {
   if (!ISO_DATE_RE.test(iso)) return iso;
   const [y, m, d] = iso.split("-").map(Number);
@@ -213,17 +207,6 @@ export function selectRecentReschedules(
 
   items.sort((a, b) => b.ts - a.ts);
   return items.map((entry) => entry.item);
-}
-
-export function recentReschedulesTitle(
-  items: ReadonlyArray<RecentRescheduleItem>,
-): string {
-  const n = items.length;
-  const noun = n === 1 ? "order" : "orders";
-  const allToday = n > 0 && items.every((item) => item.dayLabel === "Today");
-  return allToday
-    ? `Rescheduled today · ${n} ${noun}`
-    : `Rescheduled in the last 48 hours · ${n} ${noun}`;
 }
 
 /**
