@@ -40,7 +40,7 @@ export const loader = async ({ request }) => {
     );
   }
 
-  // eslint-disable-next-line no-undef
+  // Give the page the Shopify API key so the app can load inside the Shopify admin.
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };
 };
 
