@@ -44,7 +44,7 @@ The database behind `DATABASE_URL` and `DIRECT_DATABASE_URL` had no applied migr
 | `app/routes` | pages, resource routes, app proxy endpoints, webhooks (file-system routing) |
 | `app/services` | everything that talks to Shopify, Postgres or the mailbox (`*.server.ts`) |
 | `app/lib` | pure logic: rules engine, tag vocabulary, order helpers, email parsing |
-| `app/components` | Polaris screens for the Orders page and the Scheduler page |
+| `app/components` | Polaris web components (Polaris 2.0) screens for the Orders page and the Scheduler page |
 | `app/hooks` | refresh, diff, bulk-modal and clipboard hooks |
 | `app/data` | the Metro Manila ZIP and barangay list for the fee checker |
 | `extensions` | Shopify extensions (checkout, order status, customer account, admin, COD function) |

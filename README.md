@@ -42,7 +42,7 @@ Delivery Scheduler helps merchants:
 - Notify customers or staff when order timing changes
 
 ### Merchant experience
-- Built with Shopify Polaris for a familiar Shopify admin experience
+- Built with Shopify Polaris web components (Polaris 2.0) for a familiar Shopify admin experience
 - Designed for fast decision-making in a merchant operations workflow
 
 ## How it works
@@ -55,7 +55,7 @@ Delivery Scheduler helps merchants:
 
 ## Tech stack
 
-- Frontend: React + Shopify Polaris
+- Frontend: React + Shopify Polaris web components (Polaris 2.0)
 - Backend: Node.js / TypeScript
 - Database: Neon Postgres
 - Email: Nodemailer
