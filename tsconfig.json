@@ -2,10 +2,8 @@
   "include": ["env.d.ts", "**/*.ts", "**/*.tsx", ".react-router/types/**/*"],
   "exclude": [
     "extensions/**",
-    "e2e/**",
     "test/**",
-    "tests/**",
-    "playwright/**"
+    "tests/**"
   ],
   "compilerOptions": {
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
