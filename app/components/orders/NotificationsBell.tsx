@@ -182,7 +182,7 @@ function RowActions({ onOpen, onSeen }: { onOpen: () => void; onSeen: () => void
   );
 }
 
-// One notification for a new customer email reply.
+// One notification for a new customer email reply: the icon on the left, the text on the right.
 function ReplyRow({
   item,
   when,
@@ -195,7 +195,7 @@ function ReplyRow({
   onSeen: () => void;
 }) {
   return (
-    <s-stack direction="inline" gap="small" alignItems="start">
+    <s-grid gridTemplateColumns="auto 1fr" gap="small" alignItems="start">
       <s-icon type="chat" tone="info" />
       <s-stack gap="small-300">
         <s-stack direction="inline" gap="small-200" alignItems="center">
@@ -216,11 +216,12 @@ function ReplyRow({
         </s-text>
         <RowActions onOpen={onOpen} onSeen={onSeen} />
       </s-stack>
-    </s-stack>
+    </s-grid>
   );
 }
 
-// One notification for an order the customer rescheduled.
+// One notification for an order the customer rescheduled: the icon on the left, the text on the
+// right.
 function RescheduleRow({
   item,
   when,
@@ -233,7 +234,7 @@ function RescheduleRow({
   onSeen: () => void;
 }) {
   return (
-    <s-stack direction="inline" gap="small" alignItems="start">
+    <s-grid gridTemplateColumns="auto 1fr" gap="small" alignItems="start">
       <s-icon type="calendar" tone="critical" />
       <s-stack gap="small-300">
         <s-text fontWeight="semibold">Order {item.name} rescheduled</s-text>
@@ -244,6 +245,6 @@ function RescheduleRow({
         </s-text>
         <RowActions onOpen={onOpen} onSeen={onSeen} />
       </s-stack>
-    </s-stack>
+    </s-grid>
   );
 }

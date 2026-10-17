@@ -13,9 +13,8 @@ export function SectionHeader({
   action?: ReactNode;
 }) {
   return (
-    <s-stack
-      direction="inline"
-      justifyContent="space-between"
+    <s-grid
+      gridTemplateColumns={action ? "1fr auto" : "1fr"}
       alignItems="center"
       gap="base"
     >
@@ -24,6 +23,6 @@ export function SectionHeader({
         {description && <s-paragraph color="subdued">{description}</s-paragraph>}
       </s-stack>
       {action}
-    </s-stack>
+    </s-grid>
   );
 }

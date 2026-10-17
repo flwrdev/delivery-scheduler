@@ -1,8 +1,10 @@
 // A modal dialog built on the Polaris `<s-modal>` element. The parent keeps a simple `open`
 // flag. This component shows and hides the dialog to match the flag, and calls `onClose` when
 // the merchant closes it with the X button, the Escape key or a click outside the dialog.
+// Each dialog gets its own id, because Shopify admin finds a dialog by its id when it shows or
+// hides it.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useWebComponentEvent } from "../../hooks/useWebComponentEvent";
 import { flag } from "../../lib/web-component-props";
 
@@ -37,6 +39,8 @@ export function AppModal({
   children,
 }: AppModalProps) {
   const modalRef = useRef<HTMLElementTagNameMap["s-modal"]>(null);
+  // The id of this dialog. React's generated ids contain colons, so those are removed.
+  const modalId = `app-modal-${useId().replace(/:/g, "")}`;
   const openRef = useRef(open);
   const wasOpenRef = useRef(false);
   const [contentMounted, setContentMounted] = useState(open);
@@ -74,7 +78,7 @@ export function AppModal({
   const showContent = open || contentMounted;
 
   return (
-    <s-modal ref={modalRef} heading={title} size={size}>
+    <s-modal ref={modalRef} id={modalId} heading={title} size={size}>
       {showContent && children}
       {showContent && primaryAction && (
         <s-button

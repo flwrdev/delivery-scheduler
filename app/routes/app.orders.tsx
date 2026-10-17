@@ -12,11 +12,11 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense } from "react";
 
-// Lazy-loaded: the panel only mounts when a merchant opens an order, so it
-// ships as a separate chunk off the initial bundle.
 // Reads the id of an order. Defined outside the component so its identity never changes.
 const getOrderId = (order: { id: string }) => order.id;
 
+// Lazy-loaded: the panel only mounts when a merchant opens an order, so it
+// ships as a separate chunk off the initial bundle.
 const OrderDetailsPanel = lazy(() =>
   import("../components/orders/OrderDetailsPanel").then((m) => ({
     default: m.OrderDetailsPanel,
