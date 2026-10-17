@@ -5,8 +5,7 @@
 ```bash
 npm run dev               # shopify app dev with shopify.app.production.toml, the only app config; does NOT auto-apply migrations
 npm run typecheck         # react-router typegen + tsc
-npm run lint
-npm test                  # vitest: test/**/*.test.{ts,tsx} only; e2e/ runs separately
+npm test                  # vitest: test/**/*.test.{ts,tsx}
 npm run test:extensions   # vitest: extensions/*/tests/**/*.test.{ts,tsx}
 npm run setup             # prisma generate && prisma migrate deploy
 npm run deploy:prod       # app config + extensions to the PROD app (explicit go required)
@@ -49,7 +48,7 @@ The database behind `DATABASE_URL` and `DIRECT_DATABASE_URL` had no applied migr
 | `app/data` | the Metro Manila ZIP and barangay list for the fee checker |
 | `extensions` | Shopify extensions (checkout, order status, customer account, admin, COD function) |
 | `prisma` | schema and migrations |
-| `test`, `e2e` | unit tests (vitest) and an end-to-end reschedule test (Playwright) |
+| `test` | unit tests (vitest) |
 
 Where to look first
 - A new order arrives: `app/routes/webhooks.orders.create.ts`.
