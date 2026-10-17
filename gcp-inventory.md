@@ -1,6 +1,6 @@
 # Google Cloud inventory
 
-Project `jhay-510919` (number `1030649952056`), billing account "Delivery Scheduler" (`017072-6E7F55-594170`, USD). Verified 2026-10-12 with read-only `gcloud` commands and the Artifact Registry API.
+Project `jhay-510919` (number `1030649952056`), billing account "Delivery Scheduler" (`017072-6E7F55-594170`, USD). Verified 2026-10-12 with read-only `gcloud` commands and the Artifact Registry API. The Cloud Run, Secret Manager, Artifact Registry, Cloud Build and Cloud Storage sections were checked again on 2026-10-17.
 Secret values are never recorded here, names only.
 
 ## Project IAM: principals and roles
@@ -25,19 +25,20 @@ Secret values are never recorded here, names only.
 
 ## Cloud Run
 Service `delivery-scheduler`, region `us-central1`, URL `https://delivery-scheduler-1030649952056.us-central1.run.app`.
-- Revisions: `delivery-scheduler-00004-2qx` (serving 100% of traffic, created 2026-10-12 18:20 UTC, image `0f1ddfb8…`), `delivery-scheduler-host-fix-1013` (13:45 UTC), `delivery-scheduler-00002-2t6` (12:02 UTC) and `delivery-scheduler-00001-9mz` (09:27 UTC). The last three run the earlier image `88183196…`.
-- Image: `us-central1-docker.pkg.dev/jhay-510919/cloud-run-source-deploy/delivery-scheduler@sha256:0f1ddfb8bc02c53e572b2041e03f7542d83c1af101db393297d2a3b77f54a9cf`.
+- Revisions: `delivery-scheduler-00007-xgr` (serving 100% of traffic, 2026-10-17 13:09 UTC, digest ending `891cb82bb28b`; Polaris 2.0 UI fixes and the `GOOGLE_MAPS_API_KEY` secret), `00006-xxv` (2026-10-17 07:56 UTC, `d74cdebc2010`; Polaris 2.0 UI), `00005-8h6` (2026-10-14 19:57 UTC, `3333c85d84a8`; the last revision before the Polaris 2.0 UI), `00004-2qx` (2026-10-12 18:20 UTC, `a3b77f54a9cf`), and `host-fix-1013` (13:45 UTC), `00002-2t6` (12:02 UTC), `00001-9mz` (09:27 UTC) on 2026-10-12, digest ending `ae42ba412495`.
+- Image: `us-central1-docker.pkg.dev/jhay-510919/cloud-run-source-deploy/delivery-scheduler`, tag `latest` on the digest ending `891cb82bb28b`.
 - Runtime service account: `delivery-scheduler-runtime@jhay-510919.iam.gserviceaccount.com`.
 - Scaling: minimum 0 instances, maximum 2, concurrency 80, startup CPU boost on. Resources: 1 CPU, 512Mi. Request timeout 300 s. Container port 8080. Ingress: all.
 - Service IAM: `roles/run.invoker` for `allUsers` (public). Requests are verified by Shopify signatures and session tokens in the app.
 
 ## Secret Manager
-All nine secrets are readable only by `delivery-scheduler-runtime` (`roles/secretmanager.secretAccessor`, set on the secret, not on the project). The service reads `latest` when an instance starts, so a changed secret applies only to a new revision.
+All ten secrets are readable by `delivery-scheduler-runtime` (`roles/secretmanager.secretAccessor`, set on the secret, not on the project). On 2026-10-17 the default Compute Engine service account also held that role on `GOOGLE_MAPS_API_KEY` and `SHOPIFY_API_SECRET`; the other eight secrets were not checked. The service reads `latest` when an instance starts, so a changed secret applies only to a new revision.
 
 | Secret | Versions |
 |---|---|
 | `EMAIL_SMTP_HOST` | v2 enabled; v1 disabled (it ended with a hidden character) |
 | `SMPT_PASSWORD` | v2 enabled; v1 destroyed (wrong password) |
+| `GOOGLE_MAPS_API_KEY` | v1 enabled (created 2026-10-12 19:27 UTC) |
 | the other seven | v1 enabled |
 
 | Secret | Environment variable |
@@ -51,8 +52,9 @@ All nine secrets are readable only by `delivery-scheduler-runtime` (`roles/secre
 | `EMAIL_SMTP_PORT` | `EMAIL_SMTP_PORT` |
 | `EMAIL_SMTP_USER` | `EMAIL_SMTP_USER` |
 | `EMAIL_FROM_NAME` | `EMAIL_FROM_NAME` |
+| `GOOGLE_MAPS_API_KEY` | `GOOGLE_MAPS_API_KEY` |
 
-`GOOGLE_MAPS_API_KEY` is optional and is set by the merchant when ready.
+`GOOGLE_MAPS_API_KEY` is mapped from revision `00007-xgr` on. The browser uses it for the address suggestions in the Edit details modal.
 
 ## Plain environment variables on the service
 `SHOPIFY_API_KEY` (`192d50677bb4239697e25fd7ad097c50`), `SHOPIFY_APP_URL` (`https://delivery-scheduler-1030649952056.us-central1.run.app`), `SHOP_DOMAIN` (`hsrwva-nr.myshopify.com`), `SCOPES`. `SHOP_CUSTOM_DOMAIN` is unset.
@@ -60,9 +62,9 @@ All nine secrets are readable only by `delivery-scheduler-runtime` (`roles/secre
 ## Artifact Registry
 Repository `cloud-run-source-deploy` (docker, standard, `us-central1`). Cleanup policy: keep the 2 most recent versions, delete the rest.
 
-Image `delivery-scheduler` has two digests. Current: `sha256:0f1ddfb8bc02c53e572b2041e03f7542d83c1af101db393297d2a3b77f54a9cf`, tag `latest`, created 2026-10-12 18:20 UTC (the 20-minute refresh change). Previous: `sha256:88183196c5d696b54eccdfa48398df9562324d1334ef8c607435ae42ba412495`, created 09:27 UTC, 183 MB as reported by Artifact Registry; revisions 00001, 00002 and host-fix-1013 still use it.
+Image `delivery-scheduler` has ten entries in the listing, from four deploys (2026-10-12 18:20, 2026-10-14 19:57, 2026-10-17 07:56 and 13:09 UTC). Current: tag `latest`, digest ending `891cb82bb28b`. The digest ending `ae42ba412495` (revisions 00001, 00002, host-fix-1013) is no longer listed.
 
-Contents of the previous digest (`linux/amd64`, 11 layers, 174 MB compressed). The current image is built from the same Dockerfile; its size was not measured:
+Contents of the image built on 2026-10-12 09:27 UTC (digest ending `ae42ba412495`, no longer listed). Later images are built from the same Dockerfile; their size was not measured:
 | Layer | Compressed size | What it is |
 |---|---|---|
 | 1 | 3.7 MB | Alpine 3.24 base |
@@ -77,10 +79,10 @@ Image settings: working directory `/app`; environment `PATH`, `NODE_VERSION`, `Y
 The image holds no source of `app/`, `extensions/` or `test/`, no `.env` file and no secret value.
 
 ## Cloud Build
-Two builds, both SUCCESS, region `us-central1` (each is a `gcloud run deploy --source` build): `d5c2c6d9` (2026-10-12 09:23 UTC) and `bc228380` (2026-10-12 18:15 UTC).
+Nine builds in `us-central1`. SUCCESS: `d5c2c6d9` (2026-10-12 09:23), `bc228380` (2026-10-12 18:15), `20be46d4` (2026-10-14 19:52), `c2133271` (2026-10-17 07:52), `ec4cc011` (2026-10-17 13:05) UTC. FAILURE: `2b2efdf6` (15:24), `85a4c8b6` (15:48), `d4a46ebc` (15:57), `b7ef4e40` (16:28) UTC on 2026-10-14. The causes of the failures were not looked into.
 
 ## Cloud Storage
-Bucket `run-sources-jhay-510919-us-central1` (`us-central1`): the uploaded source of each deploy, 2 objects, 1.84 MiB in total.
+Bucket `run-sources-jhay-510919-us-central1` (`us-central1`): one source zip per deploy, 9 objects, 8.24 MiB in total.
 
 ## Enabled APIs
 Enabled for this work: `run`, `cloudbuild`, `artifactregistry`, `iam`, `secretmanager`, `billingbudgets`.

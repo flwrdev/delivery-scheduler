@@ -9,7 +9,7 @@ A Shopify embedded app for one merchant, The Flowercart (Metro Manila). It does 
 2. **Order operations.** A workspace in the Shopify admin (`/app/orders`) where the merchant sees orders by delivery day, reschedules, tags, fulfils, cancels, edits the shipping address and emails customers.
 3. **Checkout helpers.** Cash on delivery (COD) rules and a COD fee, plus delivery information in the checkout, the order status page, the customer account and the admin order page.
 
-It is built on React Router 7, the Shopify app toolkit (`@shopify/shopify-app-react-router`), Polaris, Prisma and Postgres, and runs on Google Cloud Run.
+It is built on React Router 7, the Shopify app toolkit (`@shopify/shopify-app-react-router`), Polaris web components (Polaris 2.0), Prisma and Postgres, and runs on Google Cloud Run. The Polaris script is loaded from a URL kept in `app/lib/polaris-url.ts`, not from an npm package.
 
 ## The main idea
 **The Shopify order is the source of truth.** The app writes the delivery information onto the order itself and reads it back from there. The database only holds three things: Shopify sessions, the schedule rules, and a log of emails sent.
@@ -115,12 +115,12 @@ Migrations in `prisma/migrations` run when the container starts (`prisma migrate
 | `app/routes` | pages, resource routes, app proxy endpoints, webhooks (file-system routing) |
 | `app/services` | everything that talks to Shopify, Postgres or the mailbox (`*.server.ts`) |
 | `app/lib` | pure logic: rules engine, tag vocabulary, order helpers, email parsing |
-| `app/components` | Polaris UI for the Orders page and the Scheduler page |
+| `app/components` | Polaris web components (Polaris 2.0) for the Orders page and the Scheduler page; `ui/` holds the shared modal, banner, checkbox and section header |
 | `app/hooks` | refresh, diff, bulk-modal and clipboard hooks |
 | `app/data` | the Metro Manila ZIP and barangay list for the fee checker |
 | `extensions` | Shopify extensions (below) |
 | `prisma` | schema and migrations |
-| `test`, `e2e` | unit tests (vitest) and an end-to-end reschedule test (Playwright) |
+| `test` | unit tests (vitest) |
 
 ## Extensions
 | Extension | Type | Where it shows | What it does |
@@ -144,7 +144,7 @@ npm run setup          # prisma generate and migrate deploy (needs DIRECT_DATABA
 npm run dev            # shopify app dev with shopify.app.production.toml
 npm test               # unit tests
 npm run test:extensions
-npm run typecheck && npm run lint && npm run build
+npm run typecheck && npm run build
 ```
 
 ## Known leftovers
