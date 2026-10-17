@@ -1,39 +1,32 @@
 // Modal titled "Attributes" that lists the tags passed to it.
 
-import { InlineStack, Modal, Tag, Text } from "@shopify/polaris";
 import { tagDisplayLabel } from "../../lib/order-utils";
+import { AppModal } from "../ui/AppModal";
 
-// Shared row-level tags/attributes modal — one instance reused by every table
-// row's "+N" button (Polaris React). Visibility is controlled by the parent
-// via `open`/`onClose`; the old counter-prop + ref show() hack is gone
-// (audit B1: third modal-trigger pattern).
 export interface SharedTagsModalProps {
   open: boolean;
   onClose: () => void;
   tags: string[];
 }
 
+// One modal shared by every table row. It shows the tags of the row the merchant picked.
 export function SharedTagsModal({ open, onClose, tags }: SharedTagsModalProps) {
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title="Attributes"
       primaryAction={{ content: "Close", onAction: onClose }}
     >
-      <Modal.Section>
-        {tags.length === 0 ? (
-          <Text as="p" tone="subdued">
-            No tags on this order.
-          </Text>
-        ) : (
-          <InlineStack gap="100" wrap>
-            {tags.map((tag) => (
-              <Tag key={tag}>{tagDisplayLabel(tag)}</Tag>
-            ))}
-          </InlineStack>
-        )}
-      </Modal.Section>
-    </Modal>
+      {tags.length === 0 ? (
+        <s-paragraph color="subdued">No tags on this order.</s-paragraph>
+      ) : (
+        <s-stack direction="inline" gap="small-300">
+          {tags.map((tag) => (
+            <s-chip key={tag}>{tagDisplayLabel(tag)}</s-chip>
+          ))}
+        </s-stack>
+      )}
+    </AppModal>
   );
 }

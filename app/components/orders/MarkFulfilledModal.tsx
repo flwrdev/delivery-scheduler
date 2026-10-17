@@ -1,18 +1,9 @@
 // Modal for fulfilling the selected orders, with an optional tracking URL and a choice to notify
 // the customers (the `markFulfilled` bulk action).
 
-import {
-  Banner,
-  BlockStack,
-  Checkbox,
-  Modal,
-  Text,
-  TextField,
-} from "@shopify/polaris";
+import { flag } from "../../lib/web-component-props";
+import { AppModal } from "../ui/AppModal";
 
-// Bulk "Mark as fulfilled" modal (Polaris React): tracking fields + notify
-// toggle. Visibility is controlled by the parent via `open`/`onClose`; all
-// form state lives in useBulkActions.
 export interface MarkFulfilledModalProps {
   open: boolean;
   onClose: () => void;
@@ -25,6 +16,7 @@ export interface MarkFulfilledModalProps {
   onConfirm: () => void;
 }
 
+// Shows the tracking URL field and the notify checkbox. The parent keeps the form values.
 export function MarkFulfilledModal({
   open,
   onClose,
@@ -37,7 +29,7 @@ export function MarkFulfilledModal({
   onConfirm,
 }: MarkFulfilledModalProps) {
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title="Mark orders as fulfilled?"
@@ -53,28 +45,24 @@ export function MarkFulfilledModal({
         { content: "Cancel", onAction: onClose, disabled: isSubmitting },
       ]}
     >
-      <Modal.Section>
-        <BlockStack gap="400">
-          <Banner tone="warning">
-            <Text as="p">
-              This creates a Shopify fulfillment for {selectedCount}{" "}
-              {selectedCount === 1 ? "order" : "orders"}.
-            </Text>
-          </Banner>
-          <TextField
-            label="Tracking URL (optional)"
-            placeholder="https://tracking.example.com/…"
-            value={fulfillTrackingUrl}
-            onChange={setFulfillTrackingUrl}
-            autoComplete="off"
-          />
-          <Checkbox
-            label="Notify customer by email"
-            checked={fulfillNotify}
-            onChange={setFulfillNotify}
-          />
-        </BlockStack>
-      </Modal.Section>
-    </Modal>
+      <s-stack gap="base">
+        <s-banner tone="warning">
+          This creates a Shopify fulfillment for {selectedCount}{" "}
+          {selectedCount === 1 ? "order" : "orders"}.
+        </s-banner>
+        <s-text-field
+          label="Tracking URL (optional)"
+          placeholder="https://tracking.example.com/…"
+          autocomplete="off"
+          value={fulfillTrackingUrl}
+          onInput={(e) => setFulfillTrackingUrl(e.currentTarget.value)}
+        />
+        <s-checkbox
+          label="Notify customer by email"
+          checked={flag(fulfillNotify)}
+          onInput={(e) => setFulfillNotify(e.currentTarget.checked)}
+        />
+      </s-stack>
+    </AppModal>
   );
 }

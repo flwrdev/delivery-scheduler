@@ -5,18 +5,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import {
-  ActionList,
-  Badge,
-  BlockStack,
-  Button,
-  Divider,
-  InlineStack,
-  Popover,
-  Tag,
-  Text,
-  TextField,
-} from "@shopify/polaris";
-import {
   type Order,
   formatMoney,
   financialStatusTone,
@@ -31,10 +19,12 @@ import { MAX_ORDER_TAG_LENGTH } from "../../lib/order-tags";
 import type { MailboxMessage } from "../../lib/email-replies";
 import type { QuickReply } from "../../lib/quick-replies";
 import { buildMessengerInboxUrl, getMessengerPsid } from "../../lib/messenger-conversation";
-import { polarisBadgeTone } from "./panel/badge-tone";
+import { flag } from "../../lib/web-component-props";
 import { DeliverySection } from "./panel/DeliverySection";
 import { DeliveryTimeline } from "./panel/DeliveryTimeline";
 import { ItemsSection } from "./panel/ItemsSection";
+
+const ACTIONS_MENU_ID = "odp-actions-menu";
 
 export interface OrderDetailsPanelProps {
   order: Order;
@@ -61,10 +51,9 @@ export interface OrderDetailsPanelProps {
 }
 
 /**
- * Read-only, right-docked order details panel (Polaris React). Replaces
- * OrderDrawer. The open order is URL-driven (?order=) — this component only
- * renders; open/close state lives in the route. Its single write is the
- * existing freeform tagsAdd op on the route action (same as the old drawer).
+ * Right-docked panel with the details of one order. The open order comes from the `?order=`
+ * URL parameter, and the route decides when the panel opens or closes. The only change it can
+ * make is adding a tag, through the `tagsAdd` action of the Orders route.
  */
 export function OrderDetailsPanel({
   order,
@@ -84,7 +73,6 @@ export function OrderDetailsPanel({
     summary?: { ok: number; failed: number };
   }>();
   const [tagInput, setTagInput] = useState("");
-  const [actionsOpen, setActionsOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const orderId = order.id.split("/").pop() || order.id;
@@ -138,70 +126,16 @@ export function OrderDetailsPanel({
   const messengerPsid = getMessengerPsid(order);
   const messengerUrl =
     metaPageId && messengerPsid ? buildMessengerInboxUrl(metaPageId, messengerPsid) : null;
-  const actionItems = [
-    {
-      content: "Update delivery slot",
-      disabled: !onReschedule,
-      onAction: () => {
-        setActionsOpen(false);
-        onReschedule?.();
-      },
-    },
-    {
-      content: "Edit details",
-      // Shipping address + receiver phone only. The address is rewritten by
-      // an overwrite mutation, so the server re-reads and carries forward the
-      // fields this form does not expose — see update-order-contact.server.ts.
-      disabled: !onEditDetails,
-      onAction: () => {
-        setActionsOpen(false);
-        onEditDetails?.();
-      },
-    },
-    {
-      content: "Send email",
-      disabled: !customerEmail || !onSendEmail,
-      // In-app compose modal sent server-side through the business mailbox
-      // (customer-email-design.md) — replaces the S9 Gmail-compose-tab link.
-      // mailto stays off the table: the merchant machine's OS handler chain
-      // silently drops it (audit §G).
-      onAction: () => {
-        setActionsOpen(false);
-        onSendEmail?.();
-      },
-    },
-    {
-      content: "Lalabook",
-      // Shortcut link only — courier dispatch stays in the official Lalamove
-      // connector (ADR-1). Opens the Lalamove Place Order page (shop pickup
-      // pre-filled); the SPA has no per-order deep-link, so the URL is the
-      // same for every order.
-      url: "https://web.lalamove.com/",
-      external: true,
-      onAction: () => setActionsOpen(false),
-    },
-    {
-      content: "View order status page",
-      disabled: !statusPageUrl,
-      url: statusPageUrl ?? undefined,
-      external: true,
-      onAction: () => setActionsOpen(false),
-    },
-    {
-      content: "Open in Shopify Admin",
-      url: adminUrl,
-      onAction: () => setActionsOpen(false),
-    },
-    {
-      content: "Open Messenger conversation",
-      // Business Suite inbox deep link; needs the Meta Page ID and the
-      // customer's PSID stored on the order by the agent draft endpoint.
-      disabled: !messengerUrl,
-      url: messengerUrl ?? undefined,
-      external: true,
-      onAction: () => setActionsOpen(false),
-    },
-  ];
+  const tagBusy = tagFetcher.state !== "idle";
+
+  // Sends the typed tag to the Orders route. Nothing is sent when the field is empty.
+  const submitTag = () => {
+    if (!tagInput.trim() || tagBusy) return;
+    tagFetcher.submit(
+      { _action: "tagsAdd", orderId: order.id, tags: tagInput },
+      { method: "post" },
+    );
+  };
 
   return (
     <>
@@ -217,43 +151,56 @@ export function OrderDetailsPanel({
       >
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <div className="odp-head">
-          <BlockStack gap="150">
-            <InlineStack align="space-between" blockAlign="start" wrap={false}>
-              <InlineStack gap="200" blockAlign="center" wrap>
-                <Text as="h2" variant="headingMd">
-                  {order.name}
-                </Text>
-                <Badge
-                  tone={polarisBadgeTone(
-                    financialStatusTone(order.displayFinancialStatus),
-                  )}
-                  size="small"
-                >
+          <s-stack gap="small-300">
+            <s-stack
+              direction="inline"
+              justifyContent="space-between"
+              alignItems="start"
+              gap="small-200"
+            >
+              <s-stack direction="inline" gap="small-200" alignItems="center">
+                <s-heading>{order.name}</s-heading>
+                <s-badge tone={financialStatusTone(order.displayFinancialStatus)}>
                   {formatStatusLabel(order.displayFinancialStatus)}
-                </Badge>
-                <Badge
-                  tone={polarisBadgeTone(fulfillmentBadge(order).tone)}
-                  size="small"
-                >
+                </s-badge>
+                <s-badge tone={fulfillmentBadge(order).tone}>
                   {fulfillmentBadge(order).label}
-                </Badge>
-              </InlineStack>
-              <InlineStack gap="150" blockAlign="center" wrap={false}>
-                <Popover
-                  active={actionsOpen}
-                  activator={
-                    <Button
-                      disclosure
-                      size="slim"
-                      onClick={() => setActionsOpen((open) => !open)}
-                    >
-                      Actions
-                    </Button>
-                  }
-                  onClose={() => setActionsOpen(false)}
-                >
-                  <ActionList actionRole="menuitem" items={actionItems} />
-                </Popover>
+                </s-badge>
+              </s-stack>
+              <s-stack direction="inline" gap="small-300" alignItems="center">
+                <s-button commandFor={ACTIONS_MENU_ID}>Actions</s-button>
+                <s-menu id={ACTIONS_MENU_ID} accessibilityLabel="Order actions">
+                  <s-button disabled={flag(!onReschedule)} onClick={() => onReschedule?.()}>
+                    Update delivery slot
+                  </s-button>
+                  <s-button disabled={flag(!onEditDetails)} onClick={() => onEditDetails?.()}>
+                    Edit details
+                  </s-button>
+                  <s-button
+                    disabled={flag(!customerEmail || !onSendEmail)}
+                    onClick={() => onSendEmail?.()}
+                  >
+                    Send email
+                  </s-button>
+                  <s-button href="https://web.lalamove.com/" target="_blank">
+                    Lalabook
+                  </s-button>
+                  <s-button
+                    disabled={flag(!statusPageUrl)}
+                    href={statusPageUrl ?? undefined}
+                    target="_blank"
+                  >
+                    View order status page
+                  </s-button>
+                  <s-button href={adminUrl}>Open in Shopify Admin</s-button>
+                  <s-button
+                    disabled={flag(!messengerUrl)}
+                    href={messengerUrl ?? undefined}
+                    target="_blank"
+                  >
+                    Open Messenger conversation
+                  </s-button>
+                </s-menu>
                 <button
                   type="button"
                   className="odp-close"
@@ -262,130 +209,121 @@ export function OrderDetailsPanel({
                 >
                   ×
                 </button>
-              </InlineStack>
-            </InlineStack>
-            <Text as="p" variant="bodySm" tone="subdued">
+              </s-stack>
+            </s-stack>
+            <s-text color="subdued" fontSize="small">
               {customerName}
               {order.customer?.numberOfOrders != null &&
                 order.customer.numberOfOrders > 0 &&
                 ` · ${order.customer.numberOfOrders} orders`}
-            </Text>
-            <Text as="p" variant="headingLg">
+            </s-text>
+            <s-paragraph fontSize="large" fontWeight="semibold">
               {total}
-            </Text>
-          </BlockStack>
+            </s-paragraph>
+          </s-stack>
         </div>
 
         {/* ── Body ───────────────────────────────────────────────────────── */}
         <div className="odp-body">
           {notInView && (
-            <Text as="p" variant="bodySm" tone="subdued">
+            <s-paragraph color="subdued" fontSize="small">
               This order is no longer in this view. Showing the last loaded
               details.
-            </Text>
+            </s-paragraph>
           )}
           <DeliverySection order={order} todayISO={todayISO} />
 
-          <Divider />
+          <s-divider />
           <ItemsSection order={order} />
 
-          <Divider />
+          <s-divider />
 
           {/* Order history */}
-          <BlockStack gap="300">
-            <Text as="h3" variant="headingSm">
-              Order history
-            </Text>
-            <BlockStack gap="100">
-              <Text as="p" variant="bodySm" tone="subdued">
+          <s-stack gap="small">
+            <s-heading>Order history</s-heading>
+            <s-stack gap="small-300">
+              <s-text color="subdued" fontSize="small">
                 Placed
-              </Text>
-              <Text as="p">{placedLabel}</Text>
+              </s-text>
+              <s-text>{placedLabel}</s-text>
               {rescheduleCount > 0 && (
-                <Text as="p" variant="bodySm" tone="subdued">
+                <s-text color="subdued" fontSize="small">
                   Rescheduled {rescheduleCount}×
-                </Text>
+                </s-text>
               )}
-            </BlockStack>
-            <InlineStack gap="300">
-              <Button
-                variant="plain"
-                url={statusPageUrl ?? undefined}
-                disabled={!statusPageUrl}
-                external
+            </s-stack>
+            <s-stack direction="inline" gap="small">
+              <s-button
+                variant="tertiary"
+                href={statusPageUrl ?? undefined}
+                disabled={flag(!statusPageUrl)}
+                target="_blank"
               >
                 Order status page
-              </Button>
-              <Button variant="plain" url={adminUrl}>
+              </s-button>
+              <s-button variant="tertiary" href={adminUrl}>
                 Open in Shopify Admin
-              </Button>
-            </InlineStack>
-          </BlockStack>
+              </s-button>
+            </s-stack>
+          </s-stack>
 
-          <Divider />
+          <s-divider />
 
           {/* Tags */}
-          <BlockStack gap="300">
-            <Text as="h3" variant="headingSm">
-              Tags
-            </Text>
+          <s-stack gap="small">
+            <s-heading>Tags</s-heading>
             {meaningfulTags.length === 0 ? (
-              <Text as="p" tone="subdued">
-                No tags
-              </Text>
+              <s-paragraph color="subdued">No tags</s-paragraph>
             ) : (
-              <InlineStack gap="150" wrap>
+              <s-stack direction="inline" gap="small-300">
                 {meaningfulTags.map((tag) => (
-                  <Tag key={tag}>{tagDisplayLabel(tag)}</Tag>
+                  <s-chip key={tag}>{tagDisplayLabel(tag)}</s-chip>
                 ))}
-              </InlineStack>
+              </s-stack>
             )}
-            <tagFetcher.Form
-              method="post"
-              onSubmit={(e) => {
-                if (!tagInput.trim()) {
-                  e.preventDefault();
-                }
-              }}
+            <s-stack
+              direction="inline"
+              gap="small-300"
+              alignItems="end"
             >
-              <input type="hidden" name="_action" value="tagsAdd" />
-              <input type="hidden" name="orderId" value={order.id} />
-              <InlineStack gap="150" blockAlign="end" wrap={false}>
-                <div style={{ flex: "1 1 auto" }}>
-                  <TextField
-                    label="Add a tag"
-                    labelHidden
-                    placeholder="Add a tag…"
-                    name="tags"
-                    value={tagInput}
-                    onChange={setTagInput}
-                    disabled={tagFetcher.state !== "idle"}
-                    // Shopify's real per-tag cap (live-verified 40; the old
-                    // 255 let a long tag pass here and fail at the server).
-                    maxLength={MAX_ORDER_TAG_LENGTH}
-                    autoComplete="off"
-                  />
-                </div>
-                <Button
-                  submit
-                  disabled={!tagInput.trim() || tagFetcher.state !== "idle"}
-                  loading={tagFetcher.state !== "idle"}
-                >
-                  Add
-                </Button>
-              </InlineStack>
-            </tagFetcher.Form>
+              <div
+                style={{ flex: "1 1 auto" }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    submitTag();
+                  }
+                }}
+              >
+                <s-text-field
+                  label="Add a tag"
+                  labelAccessibilityVisibility="exclusive"
+                  placeholder="Add a tag…"
+                  value={tagInput}
+                  disabled={flag(tagBusy)}
+                  maxLength={MAX_ORDER_TAG_LENGTH}
+                  autocomplete="off"
+                  onInput={(e) => setTagInput(e.currentTarget.value)}
+                />
+              </div>
+              <s-button
+                disabled={flag(!tagInput.trim() || tagBusy)}
+                loading={flag(tagBusy)}
+                onClick={submitTag}
+              >
+                Add
+              </s-button>
+            </s-stack>
             {tagFetcher.state === "idle" &&
               tagFetcher.data &&
               !tagFetcher.data.ok && (
-                <Text as="p" variant="bodySm" tone="critical">
+                <s-text tone="critical" fontSize="small">
                   {tagFetcher.data.message ?? "Failed to add tag."}
-                </Text>
+                </s-text>
               )}
-          </BlockStack>
+          </s-stack>
 
-          {/* Rendered last: its own leading Divider + heading show up only
-              when the order actually has reschedule/activity signal. */}
+          {/* The timeline shows its own divider and heading only when the order has activity. */}
           <DeliveryTimeline order={order} onViewEmail={onViewEmail} />
         </div>
       </div>

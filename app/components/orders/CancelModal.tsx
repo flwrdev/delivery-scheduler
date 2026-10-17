@@ -1,19 +1,9 @@
 // Modal for cancelling the selected orders (the `cancel` bulk action). Asks for the reason and
 // whether to restock the items and notify the customers by email.
 
-import {
-  Banner,
-  BlockStack,
-  Checkbox,
-  Modal,
-  Select,
-  Text,
-  TextField,
-} from "@shopify/polaris";
+import { flag } from "../../lib/web-component-props";
+import { AppModal } from "../ui/AppModal";
 
-// Bulk "Cancel selected orders" confirmation modal (Polaris React).
-// Visibility is controlled by the parent via `open`/`onClose` — closing on
-// action success is plain React state in useBulkActions (fixes audit S2).
 export interface CancelModalProps {
   open: boolean;
   onClose: () => void;
@@ -39,6 +29,7 @@ const CANCEL_REASON_OPTIONS = [
   { label: "Other", value: "OTHER" },
 ];
 
+// Shows a warning and the cancel options. The parent keeps the form values.
 export function CancelModal({
   open,
   onClose,
@@ -55,7 +46,7 @@ export function CancelModal({
   onConfirm,
 }: CancelModalProps) {
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title="Cancel orders?"
@@ -72,40 +63,40 @@ export function CancelModal({
         { content: "Keep orders", onAction: onClose, disabled: isSubmitting },
       ]}
     >
-      <Modal.Section>
-        <BlockStack gap="400">
-          <Banner tone="critical">
-            <Text as="p">
-              {selectedCount} {selectedCount === 1 ? "order" : "orders"} will
-              be cancelled. You can’t undo this.
-            </Text>
-          </Banner>
-          <Select
-            label="Reason"
-            options={CANCEL_REASON_OPTIONS}
-            value={cancelReason}
-            onChange={setCancelReason}
-          />
-          <Checkbox
-            label="Restock items"
-            checked={cancelRestock}
-            onChange={setCancelRestock}
-          />
-          <Checkbox
-            label="Notify customers by email"
-            checked={cancelNotify}
-            onChange={setCancelNotify}
-          />
-          <TextField
-            label="Staff note (optional)"
-            value={cancelStaffNote}
-            onChange={setCancelStaffNote}
-            maxLength={255}
-            showCharacterCount
-            autoComplete="off"
-          />
-        </BlockStack>
-      </Modal.Section>
-    </Modal>
+      <s-stack gap="base">
+        <s-banner tone="critical">
+          {selectedCount} {selectedCount === 1 ? "order" : "orders"} will be
+          cancelled. You can’t undo this.
+        </s-banner>
+        <s-select
+          label="Reason"
+          value={cancelReason}
+          onInput={(e) => setCancelReason(e.currentTarget.value)}
+        >
+          {CANCEL_REASON_OPTIONS.map((option) => (
+            <s-option key={option.value} value={option.value}>
+              {option.label}
+            </s-option>
+          ))}
+        </s-select>
+        <s-checkbox
+          label="Restock items"
+          checked={flag(cancelRestock)}
+          onInput={(e) => setCancelRestock(e.currentTarget.checked)}
+        />
+        <s-checkbox
+          label="Notify customers by email"
+          checked={flag(cancelNotify)}
+          onInput={(e) => setCancelNotify(e.currentTarget.checked)}
+        />
+        <s-text-field
+          label="Staff note (optional)"
+          autocomplete="off"
+          maxLength={255}
+          value={cancelStaffNote}
+          onInput={(e) => setCancelStaffNote(e.currentTarget.value)}
+        />
+      </s-stack>
+    </AppModal>
   );
 }

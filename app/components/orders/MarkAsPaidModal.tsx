@@ -1,9 +1,7 @@
 // Confirmation modal for marking the selected orders as paid (the `markAsPaid` bulk action).
 
-import { Banner, Modal, Text } from "@shopify/polaris";
+import { AppModal } from "../ui/AppModal";
 
-// Bulk "Mark selected orders as paid" confirmation modal (Polaris React).
-// Visibility is controlled by the parent via `open`/`onClose`.
 export interface MarkAsPaidModalProps {
   open: boolean;
   onClose: () => void;
@@ -12,6 +10,7 @@ export interface MarkAsPaidModalProps {
   onConfirm: () => void;
 }
 
+// Asks the merchant to confirm before the selected orders are marked as paid.
 export function MarkAsPaidModal({
   open,
   onClose,
@@ -20,7 +19,7 @@ export function MarkAsPaidModal({
   onConfirm,
 }: MarkAsPaidModalProps) {
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title="Mark orders as paid?"
@@ -36,14 +35,10 @@ export function MarkAsPaidModal({
         { content: "Cancel", onAction: onClose, disabled: isSubmitting },
       ]}
     >
-      <Modal.Section>
-        <Banner tone="warning">
-          <Text as="p">
-            {selectedCount} {selectedCount === 1 ? "order" : "orders"} will be
-            marked as paid. You can’t undo this here.
-          </Text>
-        </Banner>
-      </Modal.Section>
-    </Modal>
+      <s-banner tone="warning">
+        {selectedCount} {selectedCount === 1 ? "order" : "orders"} will be
+        marked as paid. You can’t undo this here.
+      </s-banner>
+    </AppModal>
   );
 }

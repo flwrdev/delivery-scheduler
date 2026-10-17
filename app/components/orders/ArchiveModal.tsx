@@ -1,10 +1,7 @@
 // Confirmation modal for archiving the selected orders (the `archive` bulk action).
 
-import { Banner, Modal, Text } from "@shopify/polaris";
+import { AppModal } from "../ui/AppModal";
 
-// Bulk "Archive selected orders" confirmation modal (Polaris React).
-// Visibility is controlled by the parent via `open`/`onClose` — no DOM ids,
-// no command API (fixes audit S1: the imperative s-modal open path).
 export interface ArchiveModalProps {
   open: boolean;
   onClose: () => void;
@@ -13,6 +10,7 @@ export interface ArchiveModalProps {
   onConfirm: () => void;
 }
 
+// Asks the merchant to confirm before the selected orders move to Archived.
 export function ArchiveModal({
   open,
   onClose,
@@ -21,7 +19,7 @@ export function ArchiveModal({
   onConfirm,
 }: ArchiveModalProps) {
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title="Archive orders?"
@@ -37,14 +35,10 @@ export function ArchiveModal({
         { content: "Cancel", onAction: onClose, disabled: isSubmitting },
       ]}
     >
-      <Modal.Section>
-        <Banner tone="warning">
-          <Text as="p">
-            {selectedCount} {selectedCount === 1 ? "order" : "orders"} will move
-            to Archived. You can unarchive them anytime.
-          </Text>
-        </Banner>
-      </Modal.Section>
-    </Modal>
+      <s-banner tone="warning">
+        {selectedCount} {selectedCount === 1 ? "order" : "orders"} will move to
+        Archived. You can unarchive them anytime.
+      </s-banner>
+    </AppModal>
   );
 }

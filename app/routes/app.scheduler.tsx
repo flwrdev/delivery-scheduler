@@ -1,7 +1,8 @@
-// Merged Delivery Scheduler page (Scheduler V2 §3/§7 — docs/scheduler-v2-ux.md).
-// Canonical config surface: overview + settings + time slots + date overrides,
-// server-authoritative through granular ops (scheduler-ops.server.ts) under
-// the optimistic version guard. Every op response is 200 + {ok, …} (ADR-11).
+// Delivery Scheduler page (/app/scheduler). It shows the overview, delivery settings, time
+// slots, date overrides and quick replies as cards.
+// Loader: reads the schedule rules and the booked counts.
+// Action: runs one small save operation at a time (scheduler-ops.server.ts). Each save carries
+// the version the page loaded, and every answer is a 200 response with an `ok` flag.
 
 import { useCallback, useEffect, useState } from "react";
 import type {
@@ -11,7 +12,6 @@ import type {
 } from "react-router";
 import { useLoaderData, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { Banner, BlockStack, Page } from "@shopify/polaris";
 
 import { authenticate } from "../shopify.server";
 import {
@@ -290,36 +290,38 @@ export default function SchedulerPage() {
   })}`;
 
   return (
-    <Page title="Delivery Scheduler" narrowWidth>
-      <BlockStack gap="400">
+    <s-page heading="Delivery Scheduler" inlineSize="small">
+      <s-stack gap="base">
         {state.configHealth.length > 0 && (
-          <Banner tone="critical" title="Stored settings need attention">
-            <BlockStack gap="100">
+          <s-banner tone="critical" heading="Stored settings need attention">
+            <s-stack gap="small-500">
               {state.configHealth.map((issue) => (
-                <p key={`${issue.column}-${issue.message}`}>
+                <s-paragraph key={`${issue.column}-${issue.message}`}>
                   {issue.column}: {issue.message}
-                </p>
+                </s-paragraph>
               ))}
-            </BlockStack>
-          </Banner>
+            </s-stack>
+          </s-banner>
         )}
         {state.countsMeta.status === "error" && (
-          <Banner tone="warning" title="Live booked counts are unavailable">
+          <s-banner tone="warning" heading="Live booked counts are unavailable">
             Capacity limits are not being checked against live orders right
             now. Counts will recover automatically — or press “Refresh counts”.
-          </Banner>
+          </s-banner>
         )}
         {state.countsMeta.status === "partial" && (
-          <Banner tone="warning" title="Live booked counts are incomplete">
-            <BlockStack gap="100">
-              <p>
+          <s-banner tone="warning" heading="Live booked counts are incomplete">
+            <s-stack gap="small-500">
+              <s-paragraph>
                 {`The order scan hit a limit${
                   countsCapsLabel ? ` (${countsCapsLabel})` : ""
                 }, so booked counts are a lower bound right now — a window that is already full can still show as open, and checkouts into it are not being blocked.`}
-              </p>
-              {countsAffectedLabel && <p>{countsAffectedLabel}</p>}
-            </BlockStack>
-          </Banner>
+              </s-paragraph>
+              {countsAffectedLabel && (
+                <s-paragraph>{countsAffectedLabel}</s-paragraph>
+              )}
+            </s-stack>
+          </s-banner>
         )}
 
         <OverviewCard
@@ -339,8 +341,8 @@ export default function SchedulerPage() {
           />
         </div>
         <QuickRepliesCard />
-      </BlockStack>
-    </Page>
+      </s-stack>
+    </s-page>
   );
 }
 

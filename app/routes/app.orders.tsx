@@ -14,22 +14,14 @@ import { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense } fro
 
 // Lazy-loaded: the panel only mounts when a merchant opens an order, so it
 // ships as a separate chunk off the initial bundle.
+// Reads the id of an order. Defined outside the component so its identity never changes.
+const getOrderId = (order: { id: string }) => order.id;
+
 const OrderDetailsPanel = lazy(() =>
   import("../components/orders/OrderDetailsPanel").then((m) => ({
     default: m.OrderDetailsPanel,
   })),
 );
-import {
-  Banner,
-  BlockStack,
-  Button,
-  Card,
-  InlineGrid,
-  InlineStack,
-  Page,
-  Text,
-  useIndexResourceState,
-} from "@shopify/polaris";
 import {
   type Order,
   toLocalISODate,
@@ -52,6 +44,9 @@ import type { RescheduleTarget } from "../components/orders/RescheduleModal";
 import type { RescheduleRulesData } from "./app.orders_.reschedule-rules";
 import type { InboxRepliesData } from "./app.orders_.inbox";
 import { useBulkActions } from "../hooks/useBulkActions";
+import { useRowSelection } from "../hooks/useRowSelection";
+import { flag } from "../lib/web-component-props";
+import { DismissibleBanner } from "../components/ui/DismissibleBanner";
 import { useSmartRefresh } from "../hooks/useSmartRefresh";
 import { useOrdersDiff } from "../hooks/useOrdersDiff";
 import {
@@ -1065,37 +1060,29 @@ function Extension() {
     return list;
   }, [orders, tabParam, dateRefs, sortParam, deliveryDateFilter, timeWindowParam]);
 
-  // ── Row selection — Polaris useIndexResourceState replaces the manual
-  //    selectedIds Set (+ useFilteredSelection) ───────────────────────────────
+  // ── Row selection — which orders are ticked in the table ───────────────────
 
   const {
     selectedResources,
-    allResourcesSelected,
-    handleSelectionChange,
+    selectAllState,
+    selectRow,
+    selectAll,
     clearSelection,
     removeSelectedResources,
-  } = useIndexResourceState(
-    displayedOrders as unknown as { [key: string]: unknown }[],
-    { resourceIDResolver: (resource) => String(resource.id) },
-  );
+  } = useRowSelection(displayedOrders, getOrderId);
 
-  // Prune selected ids that are no longer in the displayed set (filter/tab/
-  // pagination/revalidation changes) — same behavior as the old
-  // useFilteredSelection.
+  // Removes selected ids that are no longer in the displayed list (after a filter, tab, page or
+  // refresh change).
   useEffect(() => {
     const visible = new Set(displayedOrders.map((o) => o.id));
     const gone = selectedResources.filter((id) => !visible.has(id));
     if (gone.length > 0) removeSelectedResources(gone);
   }, [displayedOrders, selectedResources, removeSelectedResources]);
 
-  // Clear selection when tab changes (tabParam is URL-driven). clearSelection
-  // comes from useIndexResourceState with no stable-identity guarantee, so it
-  // is read through a ref to keep this effect keyed on tabParam only.
-  const clearSelectionRef = useRef(clearSelection);
-  clearSelectionRef.current = clearSelection;
+  // Clears the selection when the tab changes.
   useEffect(() => {
-    clearSelectionRef.current();
-  }, [tabParam]);
+    clearSelection();
+  }, [tabParam, clearSelection]);
 
   // ── Bulk actions (archive / unarchive / cancel / tags / fulfill) ───────────
   //    Submission, toast handling, and modal visibility live in useBulkActions.
@@ -1856,111 +1843,117 @@ function Extension() {
   const selectedCount = selectedResources.length;
 
   return (
-    <Page
-      title="Order operations"
-      fullWidth
-      primaryAction={
-        <NotificationsBell
-          replies={inboxFetcher.data?.replies ?? []}
-          repliesLoading={inboxFetcher.state !== "idle"}
-          repliesError={
-            inboxFetcher.data && !inboxFetcher.data.ok
-              ? inboxFetcher.data.error
-              : null
-          }
-          reschedules={loaderData.recentReschedules}
-          pendingReplySeenIds={pendingReplySeenIds}
-          pendingRescheduleSeenIds={pendingSeenIds}
-          seenErrorMessage={bellSeenError}
-          timezone={loaderData.shopTimezone}
-          todayISO={loaderData.todayISO}
-          onOpen={() => reloadInbox(60_000)}
-          onOpenReply={openRecentReschedule}
-          onReplySeen={submitRepliesSeen}
-          onOpenReschedule={openRecentReschedule}
-          onRescheduleSeen={submitReschedulesSeen}
-        />
-      }
-    >
-      <BlockStack gap="400">
+    <s-page heading="Order operations" inlineSize="large">
+      <s-stack gap="base">
+        {/* The notifications bell sits at the top right of the page. */}
+        <s-stack direction="inline" justifyContent="end">
+          <NotificationsBell
+            replies={inboxFetcher.data?.replies ?? []}
+            repliesLoading={inboxFetcher.state !== "idle"}
+            repliesError={
+              inboxFetcher.data && !inboxFetcher.data.ok
+                ? inboxFetcher.data.error
+                : null
+            }
+            reschedules={loaderData.recentReschedules}
+            pendingReplySeenIds={pendingReplySeenIds}
+            pendingRescheduleSeenIds={pendingSeenIds}
+            seenErrorMessage={bellSeenError}
+            timezone={loaderData.shopTimezone}
+            todayISO={loaderData.todayISO}
+            onOpen={() => reloadInbox(60_000)}
+            onOpenReply={openRecentReschedule}
+            onReplySeen={submitRepliesSeen}
+            onOpenReschedule={openRecentReschedule}
+            onRescheduleSeen={submitReschedulesSeen}
+          />
+        </s-stack>
+
         {/* ── Error banner ──────────────────────────────────────────────────── */}
         {error && !errorDismissed && (
-          <Banner
-            title="Couldn't load orders"
+          <DismissibleBanner
+            heading="Couldn't load orders"
             tone="critical"
             onDismiss={() => setErrorDismissed(true)}
           >
-            <Text as="p">{error}</Text>
-          </Banner>
+            <s-paragraph>{error}</s-paragraph>
+          </DismissibleBanner>
         )}
 
         {/* ── Search hit hidden by the dated tab / date-slot filter ───────── */}
         {hiddenSearchMatches.length > 0 && (
-          <Banner
+          <DismissibleBanner
             tone="info"
-            title="No match in this view"
+            heading="No match in this view"
             action={{ content: "Show in All", onAction: showSearchInAll }}
           >
-            <Text as="p">
+            <s-paragraph>
               Found in All:{" "}
               {hiddenSearchMatches.map((m) => `${m.name} · ${m.when}`).join(", ")}
               {orders.length > hiddenSearchMatches.length ? " and more" : ""}.
-            </Text>
-          </Banner>
+            </s-paragraph>
+          </DismissibleBanner>
         )}
 
-        {/* ── Background-refresh nudge (§6) — new/changed rows are also badged
-            in the table below; dismissing clears the badges ─────────────── */}
+        {/* ── Notice after a background refresh — new and changed rows are also
+            badged in the table below; dismissing clears the badges ──────── */}
         {ordersDiffTitle && (
-          <Banner tone="info" title={ordersDiffTitle} onDismiss={dismissOrdersDiff}>
-            <Text as="p">
+          <DismissibleBanner
+            tone="info"
+            heading={ordersDiffTitle}
+            onDismiss={dismissOrdersDiff}
+          >
+            <s-paragraph>
               This view changed since the last refresh — new and updated rows
               are marked in the table below.
-            </Text>
-          </Banner>
+            </s-paragraph>
+          </DismissibleBanner>
         )}
 
-        {/* ── KPI band — values are computed from the loaded page only (REC-8) ── */}
-        <InlineGrid columns={{ xs: 1, sm: 2, md: 5 }} gap="300">
-          <Card>
-            <BlockStack gap="100">
-              <Text as="p" variant="bodySm" tone="subdued">
+        {/* ── Summary cards — numbers are worked out from the loaded page only ── */}
+        <s-grid
+          gridTemplateColumns="repeat(auto-fit, minmax(180px, 1fr))"
+          gap="small"
+        >
+          <s-section>
+            <s-stack gap="small-300">
+              <s-text color="subdued" fontSize="small">
                 Orders · this page
-              </Text>
-              <Text as="p" variant="headingLg">
+              </s-text>
+              <s-paragraph fontSize="large" fontWeight="semibold">
                 {kpiOrderCount}
-              </Text>
-              <InlineStack gap="200" blockAlign="center">
+              </s-paragraph>
+              <s-stack direction="inline" gap="small-200" alignItems="center">
                 {tabCounts.today > 0 && (
-                  <Text as="span" variant="bodySm" tone="subdued">
+                  <s-text color="subdued" fontSize="small">
                     {tabCounts.today} delivering today
-                  </Text>
+                  </s-text>
                 )}
-                <Button
-                  variant="plain"
+                <s-button
+                  variant="tertiary"
                   onClick={() => setKpiProductsOpen(true)}
                 >
                   Items to prepare
-                </Button>
-              </InlineStack>
-            </BlockStack>
-          </Card>
+                </s-button>
+              </s-stack>
+            </s-stack>
+          </s-section>
 
-          <Card>
-            <BlockStack gap="100">
-              <Text as="p" variant="bodySm" tone="subdued">
+          <s-section>
+            <s-stack gap="small-300">
+              <s-text color="subdued" fontSize="small">
                 Revenue · this page
-              </Text>
-              <Text as="p" variant="headingLg">
+              </s-text>
+              <s-paragraph fontSize="large" fontWeight="semibold">
                 {kpiRevenue}
-              </Text>
+              </s-paragraph>
               {kpiAvgRevenue && (
-                <Text as="p" variant="bodySm" tone="subdued">
+                <s-text color="subdued" fontSize="small">
                   {kpiAvgRevenue}
-                </Text>
+                </s-text>
               )}
-            </BlockStack>
-          </Card>
+            </s-stack>
+          </s-section>
 
           <div
             role="button"
@@ -1972,29 +1965,29 @@ function Extension() {
             }
             style={{ cursor: "pointer" }}
           >
-            <Card>
-              <BlockStack gap="100">
-                <Text as="p" variant="bodySm" tone="subdued">
+            <s-section>
+              <s-stack gap="small-300">
+                <s-text color="subdued" fontSize="small">
                   Unpaid · this page
-                </Text>
-                <Text
-                  as="p"
-                  variant="headingLg"
+                </s-text>
+                <s-paragraph
+                  fontSize="large"
+                  fontWeight="semibold"
                   tone={kpiUnpaidCount > 0 ? "critical" : undefined}
                 >
                   {kpiUnpaidCount}
-                </Text>
+                </s-paragraph>
                 {kpiUnpaidTotal && (
-                  <Text
-                    as="p"
-                    variant="bodySm"
-                    tone={kpiUnpaidCount > 0 ? "critical" : "subdued"}
+                  <s-text
+                    fontSize="small"
+                    color={kpiUnpaidCount > 0 ? undefined : "subdued"}
+                    tone={kpiUnpaidCount > 0 ? "critical" : undefined}
                   >
                     {kpiUnpaidTotal}
-                  </Text>
+                  </s-text>
                 )}
-              </BlockStack>
-            </Card>
+              </s-stack>
+            </s-section>
           </div>
 
           <div
@@ -2008,91 +2001,97 @@ function Extension() {
             }
             style={{ cursor: "pointer" }}
           >
-            <Card>
-              <BlockStack gap="100">
-                <Text as="p" variant="bodySm" tone="subdued">
+            <s-section>
+              <s-stack gap="small-300">
+                <s-text color="subdued" fontSize="small">
                   Unfulfilled · this page
-                </Text>
-                <Text
-                  as="p"
-                  variant="headingLg"
+                </s-text>
+                <s-paragraph
+                  fontSize="large"
+                  fontWeight="semibold"
                   tone={kpiUnfulfilledCount > 0 ? "critical" : undefined}
                 >
                   {kpiUnfulfilledCount}
-                </Text>
+                </s-paragraph>
                 {kpiUnfulfilledDueToday > 0 && (
-                  <Text as="p" variant="bodySm" tone="critical">
+                  <s-text fontSize="small" tone="critical">
                     {kpiUnfulfilledDueToday} due today or earlier
-                  </Text>
+                  </s-text>
                 )}
-              </BlockStack>
-            </Card>
+              </s-stack>
+            </s-section>
           </div>
 
-          <Card>
-            <BlockStack gap="100">
-              <Text as="p" variant="bodySm" tone="subdued">
+          <s-section>
+            <s-stack gap="small-300">
+              <s-text color="subdued" fontSize="small">
                 Delivery Fees · this page
-              </Text>
-              <Text as="p" variant="headingLg">
+              </s-text>
+              <s-paragraph fontSize="large" fontWeight="semibold">
                 {kpiDeliveryFees}
-              </Text>
-            </BlockStack>
-          </Card>
-        </InlineGrid>
+              </s-paragraph>
+            </s-stack>
+          </s-section>
+        </s-grid>
 
         {/* ── Filters + table ───────────────────────────────────────────────── */}
-        <BlockStack gap="200">
-          <InlineStack align="end" gap="200" blockAlign="center">
-            <Text as="span" variant="bodySm" tone="subdued">
+        <s-stack gap="small-200">
+          <s-stack
+            direction="inline"
+            justifyContent="end"
+            gap="small-200"
+            alignItems="center"
+          >
+            <s-text color="subdued" fontSize="small">
               {lastUpdatedLabel}
-            </Text>
-            <Button
-              variant="plain"
+            </s-text>
+            <s-button
+              variant="tertiary"
               onClick={refresh}
-              loading={isRefreshing}
+              loading={flag(isRefreshing)}
               accessibilityLabel="Refresh orders"
             >
               Refresh
-            </Button>
-          </InlineStack>
-          <Card padding="0">
-          <OrdersIndexTable
-            orders={displayedOrders}
-            todayISO={dateRefs.todayISO}
-            metaPageId={loaderData.metaPageId}
-            loading={loading}
-            isSubmitting={isSubmitting}
-            hasNextPage={pageInfo?.hasNextPage || false}
-            hasPreviousPage={pageInfo?.hasPreviousPage || false}
-            onNextPage={handleNextPage}
-            onPreviousPage={handlePreviousPage}
-            tabs={tabDefs}
-            activeTab={tabParam}
-            onTabChange={handleTabChange}
-            queryValue={searchTerm}
-            onQueryChange={setSearchTerm}
-            onQueryClear={handleQueryClear}
-            deliveryDateFilter={deliveryDateFilter}
-            onDeliveryDateChange={handleDateChange}
-            timeWindow={timeWindowParam}
-            onTimeWindowChange={handleTimeWindowChange}
-            sortSelected={sortParam}
-            onSortChange={handleSortChange}
-            onClearFilters={handleClearFilters}
-            hasActiveFilters={hasActiveFilters}
-            selectedResources={selectedResources}
-            allResourcesSelected={allResourcesSelected}
-            onSelectionChange={handleSelectionChange}
-            onOpenOrder={openOrderPanel}
-            onShowTags={(orderId) => setTagsModalOrderId(orderId)}
-            onOpenBulkModal={openModal}
-            newOrderIds={newOrderIds}
-            changedOrderIds={changedOrderIds}
-          />
-          </Card>
-        </BlockStack>
-      </BlockStack>
+            </s-button>
+          </s-stack>
+          <s-section padding="none">
+            <OrdersIndexTable
+              orders={displayedOrders}
+              todayISO={dateRefs.todayISO}
+              metaPageId={loaderData.metaPageId}
+              loading={loading}
+              isSubmitting={isSubmitting}
+              hasNextPage={pageInfo?.hasNextPage || false}
+              hasPreviousPage={pageInfo?.hasPreviousPage || false}
+              onNextPage={handleNextPage}
+              onPreviousPage={handlePreviousPage}
+              tabs={tabDefs}
+              activeTab={tabParam}
+              onTabChange={handleTabChange}
+              queryValue={searchTerm}
+              onQueryChange={setSearchTerm}
+              onQueryClear={handleQueryClear}
+              deliveryDateFilter={deliveryDateFilter}
+              onDeliveryDateChange={handleDateChange}
+              timeWindow={timeWindowParam}
+              onTimeWindowChange={handleTimeWindowChange}
+              sortSelected={sortParam}
+              onSortChange={handleSortChange}
+              onClearFilters={handleClearFilters}
+              hasActiveFilters={hasActiveFilters}
+              selectedResources={selectedResources}
+              selectAllState={selectAllState}
+              onSelectRow={selectRow}
+              onSelectAll={selectAll}
+              onOpenOrder={openOrderPanel}
+              onShowTags={(orderId) => setTagsModalOrderId(orderId)}
+              onOpenBulkModal={openModal}
+              newOrderIds={newOrderIds}
+              changedOrderIds={changedOrderIds}
+            />
+          </s-section>
+        </s-stack>
+      </s-stack>
 
       {/* ── Bulk-action modals — visibility driven by useBulkActions state ──── */}
       <CancelModal
@@ -2230,7 +2229,7 @@ function Extension() {
           />
         </Suspense>
       )}
-    </Page>
+    </s-page>
   );
 }
 

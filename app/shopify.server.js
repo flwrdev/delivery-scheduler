@@ -1,6 +1,7 @@
 // Shopify app setup and the single shared `shopify` object used by every route.
 // Reads the API key, secret, scopes and app URL from environment variables, stores sessions
 // in Postgres through PrismaSessionStorage, and runs as a single-merchant app.
+// Also tells Shopify which Polaris script the pages load, so the browser can fetch it early.
 // Exports authenticate (admin, webhook, public app proxy), login, unauthenticated and
 // registerWebhooks. Routes call authenticate.* first; it rejects any request Shopify did not sign.
 
@@ -12,6 +13,7 @@ import {
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "./session-storage.server";
 import prisma from "./db.server";
+import { POLARIS_URL } from "./lib/polaris-url";
 
 const prismaSessionStorage = new PrismaSessionStorage(prisma);
 
@@ -27,9 +29,7 @@ const shopify = shopifyApp({
   future: {
     expiringOfflineAccessTokens: true,
   },
-  ...(process.env.SHOP_CUSTOM_DOMAIN
-    ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
-    : {}),
+  polarisUrl: POLARIS_URL,
 });
 
 export default shopify;

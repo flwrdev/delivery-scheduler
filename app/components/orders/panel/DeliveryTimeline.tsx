@@ -4,7 +4,6 @@
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
-import { Badge, BlockStack, Button, Divider, Text } from "@shopify/polaris";
 import type { MailboxMessage } from "../../../lib/email-replies";
 import type { QuickReply } from "../../../lib/quick-replies";
 import type { EmailThreadData } from "../../../routes/app.orders_.email-thread";
@@ -30,9 +29,9 @@ function TimelineRow({ time, children }: { time: string; children: ReactNode }) 
     <div className="odp-timeline-row">
       <div className="odp-timeline-body">{children}</div>
       <span className="odp-timeline-time">
-        <Text as="span" variant="bodyXs" tone="subdued">
+        <s-text color="subdued" fontSize="small-100">
           {time}
-        </Text>
+        </s-text>
       </span>
     </div>
   );
@@ -128,33 +127,33 @@ function RescheduleItem({ event }: { event: RescheduleTimelineEvent }) {
   const source = sourceLabel(event.source);
   return (
     <TimelineRow time={formatTimelineTime(event.requestedAt)}>
-      <Text as="span">
+      <s-text>
         Rescheduled to {to}
         {source && (
           <>
             {" "}
-            <Badge size="small" tone={source === "Merchant" ? "info" : undefined}>
+            <s-badge tone={source === "Merchant" ? "info" : undefined}>
               {source}
-            </Badge>
+            </s-badge>
           </>
         )}
-      </Text>
+      </s-text>
       {open && (
         <>
           {from !== "—" && (
-            <Text as="span" variant="bodySm" tone="subdued">
+            <s-text color="subdued" fontSize="small">
               From {from}
-            </Text>
+            </s-text>
           )}
-          <Text as="span" variant="bodySm" tone="subdued">
+          <s-text color="subdued" fontSize="small">
             {formatTimelineStatus(event.status)}
-          </Text>
+          </s-text>
         </>
       )}
       <span>
-        <Button variant="plain" size="slim" onClick={() => setOpen((v) => !v)}>
+        <s-button variant="tertiary" onClick={() => setOpen((v) => !v)}>
           {open ? "Hide details" : "Details"}
-        </Button>
+        </s-button>
       </span>
     </TimelineRow>
   );
@@ -170,25 +169,23 @@ function MailItem({
   const inbound = message.direction === "inbound";
   return (
     <TimelineRow time={formatTimelineTime(message.date)}>
-      <Text as="span">
+      <s-text>
         {inbound ? "Customer emailed" : `Email sent to ${message.toAddresses.join(", ")}`}
         {inbound && message.verdict === "fail" && (
           <>
             {" "}
-            <Badge size="small" tone="warning">
-              Unverified sender
-            </Badge>
+            <s-badge tone="warning">Unverified sender</s-badge>
           </>
         )}
-      </Text>
-      <Text as="p" variant="bodySm" tone="subdued" truncate>
-        {message.subject}
-      </Text>
+      </s-text>
+      <div className="odp-ellipsis">
+        <s-text color="subdued" fontSize="small">
+          {message.subject}
+        </s-text>
+      </div>
       {onView && (
         <span>
-          <Button size="slim" onClick={() => onView(message)}>
-            View email
-          </Button>
+          <s-button onClick={() => onView(message)}>View email</s-button>
         </span>
       )}
     </TimelineRow>
@@ -210,19 +207,19 @@ function ActivityItem({
     case "fulfilled":
       return (
         <TimelineRow time={formatTimelineTime(item.timestamp)}>
-          <Text as="span">Marked fulfilled</Text>
+          <s-text>Marked fulfilled</s-text>
         </TimelineRow>
       );
     case "delivered":
       return (
         <TimelineRow time={formatTimelineTime(item.timestamp)}>
-          <Text as="span">Delivered</Text>
+          <s-text>Delivered</s-text>
         </TimelineRow>
       );
     case "email":
       return (
         <TimelineRow time={formatTimelineTime(item.timestamp)}>
-          <Text as="span">Email sent to {item.to}</Text>
+          <s-text>Email sent to {item.to}</s-text>
         </TimelineRow>
       );
   }
@@ -309,48 +306,44 @@ export function DeliveryTimeline({ order, onViewEmail }: DeliveryTimelineProps) 
 
   return (
     <>
-      <Divider />
-      <BlockStack gap="300">
-        <Text as="h3" variant="headingSm">
-          Delivery timeline
-        </Text>
+      <s-divider />
+      <s-stack gap="small">
+        <s-heading>Delivery timeline</s-heading>
         <div className="odp-timeline-summary">
-          <BlockStack gap="100">
-            <BlockStack gap="050">
-              <Text as="span" variant="bodySm" tone="subdued">
+          <s-stack gap="small-300">
+            <s-stack gap="small-500">
+              <s-text color="subdued" fontSize="small">
                 Current schedule{currentStatus ? ` · ${currentStatus}` : ""}
-              </Text>
-              <Text as="span" fontWeight="medium">
-                {currentDelivery}
-              </Text>
-            </BlockStack>
+              </s-text>
+              <s-text fontWeight="medium">{currentDelivery}</s-text>
+            </s-stack>
             {showOriginalSchedule && (
-              <Text as="span" variant="bodySm" tone="subdued">
+              <s-text color="subdued" fontSize="small">
                 Original: {originalDelivery}
-              </Text>
+              </s-text>
             )}
             {historyMissing && (
-              <Text as="span" variant="bodySm" tone="subdued">
+              <s-text color="subdued" fontSize="small">
                 Rescheduled — history not yet recorded
-              </Text>
+              </s-text>
             )}
-          </BlockStack>
+          </s-stack>
         </div>
         {threadLoading && (
-          <Text as="p" variant="bodySm" tone="subdued">
+          <s-paragraph color="subdued" fontSize="small">
             Checking emails…
-          </Text>
+          </s-paragraph>
         )}
         {threadError && (
-          <Text as="p" variant="bodySm" tone="subdued">
+          <s-paragraph color="subdued" fontSize="small">
             Emails not shown: {threadError}
-          </Text>
+          </s-paragraph>
         )}
         {days.map((day) => (
-          <BlockStack key={day.label} gap="200">
-            <Text as="h4" variant="bodySm" tone="subdued" fontWeight="medium">
+          <s-stack key={day.label} gap="small-200">
+            <s-text color="subdued" fontSize="small" fontWeight="medium">
               {day.label}
-            </Text>
+            </s-text>
             <ul className="odp-timeline">
               {day.events.map((item, index) => (
                 <li
@@ -365,9 +358,9 @@ export function DeliveryTimeline({ order, onViewEmail }: DeliveryTimelineProps) 
                 </li>
               ))}
             </ul>
-          </BlockStack>
+          </s-stack>
         ))}
-      </BlockStack>
+      </s-stack>
     </>
   );
 }

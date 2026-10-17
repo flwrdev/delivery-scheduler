@@ -3,18 +3,12 @@
 // slots that would exceed their capacity. The parent submits the `reschedule` action.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Banner,
-  BlockStack,
-  Checkbox,
-  Modal,
-  Select,
-  Text,
-  TextField,
-} from "@shopify/polaris";
 import type { RescheduleRulesData } from "../../routes/app.orders_.reschedule-rules";
 import { findSlotOverrideKey, slotValuesMatch } from "../../lib/slot-value";
 import { getShopLocalDate } from "../../lib/delivery-availability";
+import { isCompleteIsoDate } from "../../lib/date-field";
+import { flag } from "../../lib/web-component-props";
+import { AppModal } from "../ui/AppModal";
 
 // "Update delivery slot" modal (Phase 4) — one date+slot applied to N target
 // orders. Serves both the bulk-actions bar (selection) and the details
@@ -182,8 +176,14 @@ export function RescheduleModal({
     onConfirm(date, slot, Boolean(capacityWarning), notifyCustomer);
   };
 
+  // Takes the date field's text. Only an empty value or a finished date is kept, so
+  // half-typed dates do not reach the rest of the form.
+  const handleDateInput = (value: string) => {
+    if (value === "" || isCompleteIsoDate(value)) setDate(value);
+  };
+
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title="Update delivery slot"
@@ -202,77 +202,73 @@ export function RescheduleModal({
         { content: "Cancel", onAction: onClose, disabled: isSubmitting },
       ]}
     >
-      <Modal.Section>
-        <BlockStack gap="400">
-          <Text as="p">
-            Set a new delivery date and time slot for {targetLabel}.
-          </Text>
-          {rulesLoading && (
-            <Text as="p" tone="subdued">
-              Loading delivery settings…
-            </Text>
-          )}
-          {!rulesLoading && rules === null && (
-            <Banner tone="critical">
-              <Text as="p">
-                Couldn’t load the delivery settings. Close this dialog and try
-                again.
-              </Text>
-            </Banner>
-          )}
-          <TextField
-            label="Delivery date"
-            type="date"
-            value={date}
-            onChange={setDate}
-            autoComplete="off"
-            error={
-              dateBlocked
-                ? "That date is blocked in the delivery settings."
-                : undefined
-            }
-            helpText="Customer limits (cutoff, lead time, reschedule lock) don’t apply here."
-          />
-          {dateInPast && (
-            <Banner tone="warning" title="This date is in the past">
-              <Text as="p">
-                {date} is before today ({shopTodayISO}). The order will show as
-                overdue. Check the year before you confirm.
-              </Text>
-            </Banner>
-          )}
-          <Select
-            label="Time slot"
-            options={slotOptions}
-            value={slot}
-            onChange={setSlot}
-            disabled={rules === null}
-            error={
-              slotBlocked
-                ? "That time slot is blocked for the selected date."
-                : undefined
-            }
-          />
-          {capacityWarning && (
-            <Banner tone="warning" title="This slot will exceed its capacity">
-              <Text as="p">
-                {date} {slot} is at {capacityWarning.booked}/
-                {capacityWarning.capacity}. Moving {capacityWarning.moving}{" "}
-                {capacityWarning.moving === 1 ? "order" : "orders"} puts it at{" "}
-                {capacityWarning.projected}/{capacityWarning.capacity}.
-                Confirm to go over the limit.
-              </Text>
-            </Banner>
-          )}
-          <Checkbox
-            label="Email the customer about the new schedule"
-            checked={notifyCustomer}
-            onChange={setNotifyCustomer}
-            disabled={isSubmitting}
-            helpText="Sent from your business mailbox. Orders without an email are skipped."
-          />
-        </BlockStack>
-      </Modal.Section>
-    </Modal>
+      <s-stack gap="base">
+        <s-paragraph>
+          Set a new delivery date and time slot for {targetLabel}.
+        </s-paragraph>
+        {rulesLoading && (
+          <s-paragraph color="subdued">Loading delivery settings…</s-paragraph>
+        )}
+        {!rulesLoading && rules === null && (
+          <s-banner tone="critical">
+            Couldn’t load the delivery settings. Close this dialog and try again.
+          </s-banner>
+        )}
+        <s-date-field
+          label="Delivery date"
+          value={date}
+          error={
+            dateBlocked
+              ? "That date is blocked in the delivery settings."
+              : undefined
+          }
+          details="Customer limits (cutoff, lead time, reschedule lock) don’t apply here."
+          onInput={(e) => handleDateInput(e.currentTarget.value)}
+        />
+        {dateInPast && (
+          <s-banner tone="warning" heading="This date is in the past">
+            {date} is before today ({shopTodayISO}). The order will show as
+            overdue. Check the year before you confirm.
+          </s-banner>
+        )}
+        <s-select
+          label="Time slot"
+          value={slot}
+          disabled={flag(rules === null)}
+          error={
+            slotBlocked
+              ? "That time slot is blocked for the selected date."
+              : undefined
+          }
+          onInput={(e) => setSlot(e.currentTarget.value)}
+        >
+          {slotOptions.map((option) => (
+            <s-option
+              key={option.value}
+              value={option.value}
+              disabled={flag(option.disabled)}
+            >
+              {option.label}
+            </s-option>
+          ))}
+        </s-select>
+        {capacityWarning && (
+          <s-banner tone="warning" heading="This slot will exceed its capacity">
+            {date} {slot} is at {capacityWarning.booked}/
+            {capacityWarning.capacity}. Moving {capacityWarning.moving}{" "}
+            {capacityWarning.moving === 1 ? "order" : "orders"} puts it at{" "}
+            {capacityWarning.projected}/{capacityWarning.capacity}. Confirm to
+            go over the limit.
+          </s-banner>
+        )}
+        <s-checkbox
+          label="Email the customer about the new schedule"
+          checked={flag(notifyCustomer)}
+          disabled={flag(isSubmitting)}
+          details="Sent from your business mailbox. Orders without an email are skipped."
+          onInput={(e) => setNotifyCustomer(e.currentTarget.checked)}
+        />
+      </s-stack>
+    </AppModal>
   );
 }

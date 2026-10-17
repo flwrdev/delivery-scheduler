@@ -1,9 +1,7 @@
 // Confirmation modal for unarchiving the selected orders (the `unarchive` bulk action).
 
-import { Banner, Modal, Text } from "@shopify/polaris";
+import { AppModal } from "../ui/AppModal";
 
-// Bulk "Unarchive selected orders" confirmation modal (Polaris React).
-// Visibility is controlled by the parent via `open`/`onClose`.
 export interface UnarchiveModalProps {
   open: boolean;
   onClose: () => void;
@@ -12,6 +10,7 @@ export interface UnarchiveModalProps {
   onConfirm: () => void;
 }
 
+// Asks the merchant to confirm before the selected orders return to the main list.
 export function UnarchiveModal({
   open,
   onClose,
@@ -20,7 +19,7 @@ export function UnarchiveModal({
   onConfirm,
 }: UnarchiveModalProps) {
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title="Unarchive orders?"
@@ -36,14 +35,10 @@ export function UnarchiveModal({
         { content: "Cancel", onAction: onClose, disabled: isSubmitting },
       ]}
     >
-      <Modal.Section>
-        <Banner tone="info">
-          <Text as="p">
-            {selectedCount} {selectedCount === 1 ? "order" : "orders"} will show
-            in the main list again.
-          </Text>
-        </Banner>
-      </Modal.Section>
-    </Modal>
+      <s-banner tone="info">
+        {selectedCount} {selectedCount === 1 ? "order" : "orders"} will show in
+        the main list again.
+      </s-banner>
+    </AppModal>
   );
 }

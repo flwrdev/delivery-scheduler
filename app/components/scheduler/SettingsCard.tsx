@@ -2,19 +2,13 @@
 // booking window in days.
 
 import { useMemo, useState } from "react";
-import {
-  BlockStack,
-  Button,
-  Card,
-  InlineGrid,
-  Select,
-  Text,
-  TextField,
-} from "@shopify/polaris";
 
+import { flag } from "../../lib/web-component-props";
+import { SectionHeader } from "../ui/SectionHeader";
 import type { SchedulerPageState } from "./op-plumbing";
 import { formatHourLabel, useSchedulerOp } from "./op-plumbing";
 
+// Lists every timezone the browser knows. The saved timezone is added if it is missing.
 function listTimezones(current: string): string[] {
   const supported =
     typeof Intl.supportedValuesOf === "function"
@@ -68,6 +62,11 @@ export function SettingsCard({
     draft.prepHours !== String(rules.prepHours) ||
     draft.maxDays !== String(rules.maxDays);
 
+  // Changes one field of the draft. The value is read before the state update runs.
+  function updateDraft(field: keyof typeof draft, value: string) {
+    setDraft((d) => ({ ...d, [field]: value }));
+  }
+
   function handleSave() {
     submitOp("saveSettings", {
       version,
@@ -79,68 +78,74 @@ export function SettingsCard({
   }
 
   return (
-    <Card>
-      <BlockStack gap="400">
-        <BlockStack gap="100">
-          <Text as="h2" variant="headingMd">
-            Delivery settings
-          </Text>
-          <Text as="p" tone="subdued" variant="bodySm">
-            Store timezone, same-day cutoff, preparation time, and how far ahead
-            customers can book.
-          </Text>
-        </BlockStack>
+    <s-section>
+      <s-stack gap="base">
+        <SectionHeader
+          title="Delivery settings"
+          description="Store timezone, same-day cutoff, preparation time, and how far ahead customers can book."
+        />
 
-        <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
-          <Select
+        <s-grid
+          gridTemplateColumns="repeat(auto-fit, minmax(240px, 1fr))"
+          gap="base"
+        >
+          <s-select
             label="Timezone"
-            options={timezoneOptions}
             value={draft.timezone}
-            onChange={(timezone) => setDraft((d) => ({ ...d, timezone }))}
             error={fieldErrors.timezone}
-          />
-          <Select
+            onInput={(e) => updateDraft("timezone", e.currentTarget.value)}
+          >
+            {timezoneOptions.map((option) => (
+              <s-option key={option.value} value={option.value}>
+                {option.label}
+              </s-option>
+            ))}
+          </s-select>
+          <s-select
             label="Same-day cutoff"
-            options={cutoffOptions}
             value={draft.cutoffHour}
-            onChange={(cutoffHour) => setDraft((d) => ({ ...d, cutoffHour }))}
             error={fieldErrors.cutoffHour}
-            helpText="Orders after this time start from tomorrow."
-          />
-          <TextField
+            details="Orders after this time start from tomorrow."
+            onInput={(e) => updateDraft("cutoffHour", e.currentTarget.value)}
+          >
+            {cutoffOptions.map((option) => (
+              <s-option key={option.value} value={option.value}>
+                {option.label}
+              </s-option>
+            ))}
+          </s-select>
+          <s-number-field
             label="Preparation time (hours)"
-            type="number"
             min={0}
             max={72}
-            autoComplete="off"
+            autocomplete="off"
             value={draft.prepHours}
-            onChange={(prepHours) => setDraft((d) => ({ ...d, prepHours }))}
             error={fieldErrors.prepHours}
+            onInput={(e) => updateDraft("prepHours", e.currentTarget.value)}
           />
-          <TextField
+          <s-number-field
             label="Booking window (days)"
-            type="number"
             min={1}
             max={120}
-            autoComplete="off"
+            autocomplete="off"
             value={draft.maxDays}
-            onChange={(maxDays) => setDraft((d) => ({ ...d, maxDays }))}
             error={fieldErrors.maxDays}
-            helpText="How many days ahead customers can choose."
+            details="How many days ahead customers can choose."
+            onInput={(e) => updateDraft("maxDays", e.currentTarget.value)}
           />
-        </InlineGrid>
+        </s-grid>
 
-        <div>
-          <Button
+        <s-stack direction="inline">
+          <s-button
             variant="primary"
             onClick={handleSave}
-            loading={submitting}
-            disabled={!dirty || submitting}
+            loading={flag(submitting)}
+            disabled={flag(!dirty || submitting)}
           >
             Save settings
-          </Button>
-        </div>
-      </BlockStack>
-    </Card>
+          </s-button>
+        </s-stack>
+      </s-stack>
+    </s-section>
   );
 }

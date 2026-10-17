@@ -1,6 +1,5 @@
-/* Order Details Panel (odp-) — thin right-docked overlay consuming Polaris
-   tokens. This is deliberately NOT a design system: layout + chrome only;
-   all typography/badges/buttons inside come from Polaris React components. */
+/* Styles for the order details panel (odp-) and the notifications bell. They set the layout and
+   the panel frame only. The text, badges and buttons inside are Polaris web components. */
 
 .odp-backdrop {
   position: fixed;
@@ -17,8 +16,8 @@
   width: min(480px, 100vw);
   display: flex;
   flex-direction: column;
-  background: var(--p-color-bg-surface, #fff);
-  box-shadow: var(--p-shadow-600, -4px 0 32px rgba(0, 0, 0, 0.18));
+  background: #fff;
+  box-shadow: -4px 0 32px rgba(0, 0, 0, 0.18);
   z-index: 100;
   outline: none;
   animation: odp-slide-in 0.18s ease-out;
@@ -42,9 +41,9 @@
 }
 
 .odp-head {
-  padding: var(--p-space-400, 16px) var(--p-space-500, 20px)
-    var(--p-space-300, 12px);
-  border-bottom: 1px solid var(--p-color-border, #e1e3e5);
+  padding: 16px 20px
+    12px;
+  border-bottom: 1px solid #e1e3e5;
   flex: 0 0 auto;
 }
 
@@ -54,33 +53,33 @@
   background: transparent;
   width: 32px;
   height: 32px;
-  border-radius: var(--p-border-radius-200, 8px);
+  border-radius: 8px;
   font-size: 18px;
   line-height: 1;
-  color: var(--p-color-text-secondary, #6d7175);
+  color: #6d7175;
   cursor: pointer;
 }
 
 .odp-close:hover {
-  background: var(--p-color-bg-surface-hover, #f6f6f7);
-  color: var(--p-color-text, #202223);
+  background: #f6f6f7;
+  color: #202223;
 }
 
 .odp-body {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: var(--p-space-400, 16px) var(--p-space-500, 20px)
-    var(--p-space-800, 32px);
+  padding: 16px 20px
+    32px;
   display: flex;
   flex-direction: column;
-  gap: var(--p-space-400, 16px);
+  gap: 16px;
 }
 
 /* Label/value rows */
 .odp-dl {
   display: grid;
   grid-template-columns: 120px 1fr;
-  gap: var(--p-space-150, 6px) var(--p-space-300, 12px);
+  gap: 6px 12px;
   margin: 0;
   align-items: baseline;
 }
@@ -103,18 +102,18 @@
 /* Copyable values */
 .odp-copyable {
   cursor: pointer;
-  border-radius: var(--p-border-radius-100, 4px);
+  border-radius: 4px;
   display: inline-flex;
   align-items: baseline;
-  gap: var(--p-space-100, 4px);
+  gap: 4px;
 }
 
 .odp-copyable:hover {
-  background: var(--p-color-bg-surface-hover, #f6f6f7);
+  background: #f6f6f7;
 }
 
 .odp-copyable--copied {
-  background: var(--p-color-bg-fill-success-secondary, #cdfee1);
+  background: #cdfee1;
 }
 
 /* Timeline */
@@ -124,12 +123,12 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--p-space-300, 12px);
+  gap: 12px;
 }
 
 .odp-timeline-item {
   position: relative;
-  padding-left: var(--p-space-500, 20px);
+  padding-left: 20px;
 }
 
 .odp-timeline-item::before {
@@ -140,16 +139,16 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--p-color-border, #c9cccf);
+  background: #c9cccf;
   z-index: 1;
 }
 
 .odp-timeline-item--current::before {
-  background: var(--p-color-text-success, #29845a);
+  background: #29845a;
 }
 
 .odp-timeline-item--reply::before {
-  background: var(--p-color-icon-emphasis, #005bd3);
+  background: #005bd3;
 }
 
 .orders-bell {
@@ -165,8 +164,8 @@
   height: 18px;
   padding: 0 5px;
   border-radius: 9px;
-  background: var(--p-color-bg-fill-critical, #c70a24);
-  color: var(--p-color-text-on-color, #fff);
+  background: #c70a24;
+  color: #fff;
   font-size: 11px;
   font-weight: 600;
   line-height: 18px;
@@ -181,17 +180,17 @@
 }
 
 .odp-timeline-summary {
-  padding: var(--p-space-200, 8px) var(--p-space-300, 12px);
-  border: 1px solid var(--p-color-border-secondary, #ebebeb);
-  border-radius: var(--p-border-radius-200, 8px);
-  background: var(--p-color-bg-surface-secondary, #f7f7f7);
+  padding: 8px 12px;
+  border: 1px solid #ebebeb;
+  border-radius: 8px;
+  background: #f7f7f7;
 }
 
 .odp-timeline-row {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: var(--p-space-200, 8px);
+  gap: 8px;
 }
 
 /* min-width: 0 lets a long subject truncate instead of pushing the time
@@ -202,11 +201,24 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--p-space-050, 2px);
+  gap: 2px;
 }
 
-.odp-timeline-body > p {
+.odp-timeline-body > * {
   max-width: 100%;
+}
+
+/* One line of text that ends in "..." when it is too long. */
+.odp-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Rows of the Orders table open the order panel when clicked. */
+s-table-row {
+  cursor: pointer;
 }
 
 .odp-email-text {
@@ -222,9 +234,9 @@
   position: absolute;
   left: 7px;
   top: 14px;
-  bottom: calc(-1 * var(--p-space-300, 12px));
+  bottom: calc(-1 * 12px);
   width: 2px;
-  background: var(--p-color-border-secondary, #ebebeb);
+  background: #ebebeb;
 }
 
 /* Timestamp column: kept apart from the event copy so it never wraps or
@@ -239,9 +251,9 @@
 .odp-item-row {
   display: flex;
   align-items: center;
-  gap: var(--p-space-300, 12px);
-  padding: var(--p-space-200, 8px) 0;
-  border-bottom: 1px solid var(--p-color-border-secondary, #ebebeb);
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #ebebeb;
 }
 
 .odp-item-row:last-of-type {
@@ -252,17 +264,17 @@
   width: 40px;
   height: 40px;
   object-fit: cover;
-  border-radius: var(--p-border-radius-200, 8px);
-  border: 1px solid var(--p-color-border, #e1e3e5);
+  border-radius: 8px;
+  border: 1px solid #e1e3e5;
   flex: 0 0 auto;
 }
 
 .odp-item-thumb-placeholder {
   width: 40px;
   height: 40px;
-  border-radius: var(--p-border-radius-200, 8px);
-  border: 1px solid var(--p-color-border, #e1e3e5);
-  background: var(--p-color-bg-surface-secondary, #f7f7f7);
+  border-radius: 8px;
+  border: 1px solid #e1e3e5;
+  background: #f7f7f7;
   flex: 0 0 auto;
 }
 
@@ -272,12 +284,12 @@
 }
 
 .odp-totals {
-  margin-top: var(--p-space-300, 12px);
-  border-top: 1px solid var(--p-color-border, #e1e3e5);
-  padding-top: var(--p-space-300, 12px);
+  margin-top: 12px;
+  border-top: 1px solid #e1e3e5;
+  padding-top: 12px;
   display: flex;
   flex-direction: column;
-  gap: var(--p-space-100, 4px);
+  gap: 4px;
 }
 
 .odp-totals-row {

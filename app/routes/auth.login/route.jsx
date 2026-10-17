@@ -4,13 +4,15 @@
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { useState } from "react";
 import { Form, useActionData, useLoaderData } from "react-router";
+import { POLARIS_URL } from "../../lib/polaris-url";
 import { login } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
 export const loader = async ({ request }) => {
   const errors = loginErrorMessage(await login(request));
 
-  return { errors };
+  // eslint-disable-next-line no-undef
+  return { errors, apiKey: process.env.SHOPIFY_API_KEY || "" };
 };
 
 export const action = async ({ request }) => {
@@ -26,9 +28,10 @@ export default function Auth() {
   const actionData = useActionData();
   const [shop, setShop] = useState("");
   const { errors } = actionData || loaderData;
+  const apiKey = loaderData.apiKey;
 
   return (
-    <AppProvider embedded={false}>
+    <AppProvider apiKey={apiKey} polarisUrl={POLARIS_URL}>
       <s-page>
         <Form method="post">
           <s-section heading="Log in">
@@ -37,7 +40,7 @@ export default function Auth() {
               label="Shop domain"
               details="example.myshopify.com"
               value={shop}
-              onChange={(e) => setShop(e.currentTarget.value)}
+              onInput={(e) => setShop(e.currentTarget.value)}
               autocomplete="on"
               error={errors.shop}
             ></s-text-field>

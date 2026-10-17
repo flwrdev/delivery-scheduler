@@ -5,16 +5,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import {
-  Autocomplete,
-  Banner,
-  BlockStack,
-  FormLayout,
-  InlineStack,
-  Modal,
-  Text,
-  TextField,
-} from "@shopify/polaris";
 import { type Order, isCancelled } from "../../lib/order-utils";
 import type { EditDetailsResponse } from "../../services/update-order-contact.server";
 import {
@@ -24,6 +14,8 @@ import {
   resolvePlace,
   type AddressSuggestion,
 } from "../../lib/google-places.client";
+import { flag } from "../../lib/web-component-props";
+import { AppModal } from "../ui/AppModal";
 
 // "Edit details" modal — opened from the details panel's Actions menu, single
 // order only. Rewrites the shipping address: street, apartment, city, ZIP, and
@@ -271,7 +263,7 @@ export function EditDetailsModal({
   };
 
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title={order ? `Edit details · ${order.name}` : "Edit details"}
@@ -285,110 +277,115 @@ export function EditDetailsModal({
         { content: "Cancel", onAction: onClose, disabled: isSubmitting },
       ]}
     >
-      <Modal.Section>
-        <BlockStack gap="400">
-          {error && (
-            <Banner tone="critical" title="The details were not saved">
-              <p>{error}</p>
-            </Banner>
-          )}
+      <s-stack gap="base">
+        {error && (
+          <s-banner tone="critical" heading="The details were not saved">
+            {error}
+          </s-banner>
+        )}
 
-          {inTransit && (
-            <Banner tone="warning" title="This order is already on its way">
-              <p>
-                Changing the address here updates the order record, but it does
-                not move a parcel the rider already has. Contact the courier
-                directly if the delivery needs to be redirected.
-              </p>
-            </Banner>
-          )}
+        {inTransit && (
+          <s-banner tone="warning" heading="This order is already on its way">
+            Changing the address here updates the order record, but it does not
+            move a parcel the rider already has. Contact the courier directly if
+            the delivery needs to be redirected.
+          </s-banner>
+        )}
 
-          {cityChanged && (
-            <Banner tone="warning" title="The delivery fee will not change">
-              <p>
-                Shipping on this order was priced by the courier at checkout.
-                Moving the order to a different city does not re-price it — you
-                will need to collect or refund any difference yourself.
-              </p>
-            </Banner>
-          )}
+        {cityChanged && (
+          <s-banner tone="warning" heading="The delivery fee will not change">
+            Shipping on this order was priced by the courier at checkout. Moving
+            the order to a different city does not re-price it — you will need
+            to collect or refund any difference yourself.
+          </s-banner>
+        )}
 
-          {placesReady && (
-            <Autocomplete
-              options={searchOptions}
-              selected={[]}
-              onSelect={handleSearchSelect}
-              loading={searchLoading}
-              textField={
-                <Autocomplete.TextField
-                  label="Search address"
-                  value={searchValue}
-                  onChange={handleSearchChange}
-                  placeholder="e.g. 11 Kalayaan Ave, Quezon City"
-                  helpText="Pick a suggestion to fill in the fields below automatically. The ZIP updates with it."
-                  error={searchError ?? undefined}
-                  autoComplete="off"
-                  disabled={isSubmitting}
-                />
-              }
+        {placesReady && (
+          <s-stack gap="small-200">
+            <s-text-field
+              label="Search address"
+              value={searchValue}
+              placeholder="e.g. 11 Kalayaan Ave, Quezon City"
+              details="Pick a suggestion to fill in the fields below automatically. The ZIP updates with it."
+              error={searchError ?? undefined}
+              autocomplete="off"
+              disabled={flag(isSubmitting)}
+              onInput={(e) => handleSearchChange(e.currentTarget.value)}
             />
-          )}
+            {searchLoading && (
+              <s-stack direction="inline" gap="small-200" alignItems="center">
+                <s-spinner size="base" accessibilityLabel="Searching addresses" />
+                <s-text color="subdued">Searching…</s-text>
+              </s-stack>
+            )}
+            {searchOptions.length > 0 && (
+              <s-box border="base" borderRadius="base">
+                <s-stack>
+                  {searchOptions.map((option) => (
+                    <s-clickable
+                      key={option.value}
+                      padding="small"
+                      accessibilityLabel={`Use address ${option.label}`}
+                      onClick={() => void handleSearchSelect([option.value])}
+                    >
+                      {option.label}
+                    </s-clickable>
+                  ))}
+                </s-stack>
+              </s-box>
+            )}
+          </s-stack>
+        )}
 
-          <FormLayout>
-            <TextField
-              label="Street address"
-              value={address1}
-              onChange={setAddress1}
-              maxLength={MAX_ADDRESS_LINE}
-              autoComplete="address-line1"
-              requiredIndicator
-              disabled={isSubmitting}
-            />
-            <TextField
-              label="Apartment, suite, unit"
-              value={address2}
-              onChange={setAddress2}
-              maxLength={MAX_ADDRESS_LINE}
-              autoComplete="address-line2"
-              disabled={isSubmitting}
-            />
-            <TextField
-              label="City"
-              value={city}
-              onChange={setCity}
-              maxLength={MAX_CITY}
-              autoComplete="address-level2"
-              requiredIndicator
-              disabled={isSubmitting}
-            />
-            <TextField
-              label="Receiver phone"
-              type="tel"
-              value={phone}
-              onChange={setPhone}
-              maxLength={MAX_PHONE}
-              autoComplete="tel"
-              helpText="The number the rider calls on arrival. The customer's own phone on file is not changed."
-              disabled={isSubmitting}
-            />
-          </FormLayout>
+        <s-stack gap="base">
+          <s-text-field
+            label="Street address"
+            value={address1}
+            maxLength={MAX_ADDRESS_LINE}
+            autocomplete="address-line1"
+            required
+            disabled={flag(isSubmitting)}
+            onInput={(e) => setAddress1(e.currentTarget.value)}
+          />
+          <s-text-field
+            label="Apartment, suite, unit"
+            value={address2}
+            maxLength={MAX_ADDRESS_LINE}
+            autocomplete="address-line2"
+            disabled={flag(isSubmitting)}
+            onInput={(e) => setAddress2(e.currentTarget.value)}
+          />
+          <s-text-field
+            label="City"
+            value={city}
+            maxLength={MAX_CITY}
+            autocomplete="address-level2"
+            required
+            disabled={flag(isSubmitting)}
+            onInput={(e) => setCity(e.currentTarget.value)}
+          />
+          <s-text-field
+            label="Receiver phone"
+            value={phone}
+            maxLength={MAX_PHONE}
+            autocomplete="off"
+            details="The number the rider calls on arrival. The customer's own phone on file is not changed."
+            disabled={flag(isSubmitting)}
+            onInput={(e) => setPhone(e.currentTarget.value)}
+          />
+        </s-stack>
 
-          {preserved.length > 0 && (
-            <BlockStack gap="100">
-              <Text as="p" variant="bodySm" tone="subdued">
-                Kept as is
-              </Text>
-              <InlineStack gap="300" wrap>
-                {preserved.map((line) => (
-                  <Text key={line} as="span" variant="bodySm">
-                    {line}
-                  </Text>
-                ))}
-              </InlineStack>
-            </BlockStack>
-          )}
-        </BlockStack>
-      </Modal.Section>
-    </Modal>
+        {preserved.length > 0 && (
+          <s-stack gap="small-300">
+            <s-text color="subdued">Kept as is</s-text>
+            <s-stack direction="inline" gap="base">
+              {preserved.map((line) => (
+                <s-text key={line}>{line}</s-text>
+              ))}
+            </s-stack>
+          </s-stack>
+        )}
+      </s-stack>
+    </AppModal>
   );
 }

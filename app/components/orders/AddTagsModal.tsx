@@ -1,9 +1,7 @@
 // Modal to add tags to the selected orders. The parent submits the `tagsAdd` bulk action.
 
-import { BlockStack, Modal, Text, TextField } from "@shopify/polaris";
+import { AppModal } from "../ui/AppModal";
 
-// Bulk "Add tags" modal (Polaris React). Visibility is controlled by the
-// parent via `open`/`onClose`.
 export interface AddTagsModalProps {
   open: boolean;
   onClose: () => void;
@@ -14,6 +12,7 @@ export interface AddTagsModalProps {
   onConfirm: () => void;
 }
 
+// Shows one text field where the merchant types the tags, separated by commas.
 export function AddTagsModal({
   open,
   onClose,
@@ -24,7 +23,7 @@ export function AddTagsModal({
   onConfirm,
 }: AddTagsModalProps) {
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title="Add tags to selected orders"
@@ -38,21 +37,19 @@ export function AddTagsModal({
         { content: "Cancel", onAction: onClose, disabled: isSubmitting },
       ]}
     >
-      <Modal.Section>
-        <BlockStack gap="400">
-          <Text as="p">
-            Add the tags below to {selectedCount}{" "}
-            {selectedCount === 1 ? "order" : "orders"}.
-          </Text>
-          <TextField
-            label="Tags (comma-separated)"
-            placeholder="e.g. priority, vip, holiday"
-            value={addTagsInput}
-            onChange={setAddTagsInput}
-            autoComplete="off"
-          />
-        </BlockStack>
-      </Modal.Section>
-    </Modal>
+      <s-stack gap="base">
+        <s-paragraph>
+          Add the tags below to {selectedCount}{" "}
+          {selectedCount === 1 ? "order" : "orders"}.
+        </s-paragraph>
+        <s-text-field
+          label="Tags (comma-separated)"
+          placeholder="e.g. priority, vip, holiday"
+          autocomplete="off"
+          value={addTagsInput}
+          onInput={(e) => setAddTagsInput(e.currentTarget.value)}
+        />
+      </s-stack>
+    </AppModal>
   );
 }

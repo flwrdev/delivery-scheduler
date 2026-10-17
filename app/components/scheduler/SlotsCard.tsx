@@ -2,21 +2,6 @@
 // A slot's time range cannot be edited; to change times, add a new slot and delete the old one.
 
 import { useMemo, useState } from "react";
-import {
-  Badge,
-  Banner,
-  BlockStack,
-  Button,
-  ButtonGroup,
-  Card,
-  Divider,
-  InlineGrid,
-  InlineStack,
-  Modal,
-  Select,
-  Text,
-  TextField,
-} from "@shopify/polaris";
 
 import type { DeliveryScheduleRules } from "../../lib/delivery-availability";
 import {
@@ -25,21 +10,15 @@ import {
   parseSlotValueToTimes,
   type SlotTimePart,
 } from "../../lib/slot-times";
+import { flag } from "../../lib/web-component-props";
+import { AppModal } from "../ui/AppModal";
+import { SectionHeader } from "../ui/SectionHeader";
 import type { SchedulerPageState } from "./op-plumbing";
 import { formatDateLabel, useSchedulerOp } from "./op-plumbing";
 
-const HOUR_OPTIONS = Array.from({ length: 12 }, (_, i) => ({
-  label: String(i + 1),
-  value: String(i + 1),
-}));
-const MINUTE_OPTIONS = ["00", "15", "30", "45"].map((minute) => ({
-  label: minute,
-  value: minute,
-}));
-const MERIDIEM_OPTIONS = [
-  { label: "AM", value: "AM" },
-  { label: "PM", value: "PM" },
-];
+const HOUR_OPTIONS = Array.from({ length: 12 }, (_, i) => String(i + 1));
+const MINUTE_OPTIONS = ["00", "15", "30", "45"];
+const MERIDIEM_OPTIONS = ["AM", "PM"];
 
 interface TimeDraft {
   hour: string;
@@ -47,6 +26,7 @@ interface TimeDraft {
   meridiem: "AM" | "PM";
 }
 
+// Turns the text drafted in the pickers into the time parts the slot helpers expect.
 function toTimePart(draft: TimeDraft): SlotTimePart {
   return {
     hour: Number(draft.hour),
@@ -55,6 +35,7 @@ function toTimePart(draft: TimeDraft): SlotTimePart {
   };
 }
 
+// Three drop-downs (hour, minute, AM/PM) that together pick one time.
 function TimePartPicker({
   label,
   draft,
@@ -65,39 +46,56 @@ function TimePartPicker({
   onChange: (draft: TimeDraft) => void;
 }) {
   return (
-    <BlockStack gap="100">
-      <Text as="span" variant="bodySm" tone="subdued">
-        {label}
-      </Text>
-      <InlineStack gap="100" wrap={false}>
-        <Select
+    <s-stack gap="small-500">
+      <s-text color="subdued">{label}</s-text>
+      <s-stack direction="inline" gap="small-200">
+        <s-select
           label={`${label} hour`}
-          labelHidden
-          options={HOUR_OPTIONS}
+          labelAccessibilityVisibility="exclusive"
           value={draft.hour}
-          onChange={(hour) => onChange({ ...draft, hour })}
-        />
-        <Select
+          onInput={(e) => onChange({ ...draft, hour: e.currentTarget.value })}
+        >
+          {HOUR_OPTIONS.map((hour) => (
+            <s-option key={hour} value={hour}>
+              {hour}
+            </s-option>
+          ))}
+        </s-select>
+        <s-select
           label={`${label} minute`}
-          labelHidden
-          options={MINUTE_OPTIONS}
+          labelAccessibilityVisibility="exclusive"
           value={draft.minute}
-          onChange={(minute) => onChange({ ...draft, minute })}
-        />
-        <Select
+          onInput={(e) => onChange({ ...draft, minute: e.currentTarget.value })}
+        >
+          {MINUTE_OPTIONS.map((minute) => (
+            <s-option key={minute} value={minute}>
+              {minute}
+            </s-option>
+          ))}
+        </s-select>
+        <s-select
           label={`${label} meridiem`}
-          labelHidden
-          options={MERIDIEM_OPTIONS}
+          labelAccessibilityVisibility="exclusive"
           value={draft.meridiem}
-          onChange={(meridiem) =>
-            onChange({ ...draft, meridiem: meridiem as "AM" | "PM" })
+          onInput={(e) =>
+            onChange({
+              ...draft,
+              meridiem: e.currentTarget.value as "AM" | "PM",
+            })
           }
-        />
-      </InlineStack>
-    </BlockStack>
+        >
+          {MERIDIEM_OPTIONS.map((meridiem) => (
+            <s-option key={meridiem} value={meridiem}>
+              {meridiem}
+            </s-option>
+          ))}
+        </s-select>
+      </s-stack>
+    </s-stack>
   );
 }
 
+// Lists the dates from today on that have a blocked-slot or capacity setting for this slot.
 function affectedOverrides(
   rules: DeliveryScheduleRules,
   slotValue: string,
@@ -169,28 +167,33 @@ export function SlotsCard({
     ? affectedOverrides(rules, deleteTarget, today)
     : [];
 
+  // Moves the slot at `index` one place up (-1) or down (1) and saves the new order.
+  function moveSlot(index: number, delta: -1 | 1) {
+    const order = rules.slots.map((s) => s.value);
+    [order[index], order[index + delta]] = [order[index + delta], order[index]];
+    submitOp("reorderSlots", { version, order });
+  }
+
   return (
-    <Card>
-      <BlockStack gap="400">
-        <InlineStack align="space-between" blockAlign="center">
-          <BlockStack gap="100">
-            <Text as="h2" variant="headingMd">
-              Time slots
-            </Text>
-            <Text as="p" tone="subdued" variant="bodySm">
-              Checkout shows these windows in this order. Times are fixed once
-              created — to change times, add a new slot and delete the old one.
-            </Text>
-          </BlockStack>
-          <Button onClick={() => setAddOpen((open) => !open)}>
-            {addOpen ? "Cancel" : "Add slot"}
-          </Button>
-        </InlineStack>
+    <s-section>
+      <s-stack gap="base">
+        <SectionHeader
+          title="Time slots"
+          description="Checkout shows these windows in this order. Times are fixed once created — to change times, add a new slot and delete the old one."
+          action={
+            <s-button onClick={() => setAddOpen((open) => !open)}>
+              {addOpen ? "Cancel" : "Add slot"}
+            </s-button>
+          }
+        />
 
         {addOpen && (
-          <Card background="bg-surface-secondary">
-            <BlockStack gap="300">
-              <InlineGrid columns={{ xs: 1, sm: 2 }} gap="300">
+          <s-box background="subdued" padding="base" borderRadius="base">
+            <s-stack gap="small">
+              <s-grid
+                gridTemplateColumns="repeat(auto-fit, minmax(240px, 1fr))"
+                gap="base"
+              >
                 <TimePartPicker
                   label="Start"
                   draft={addDraft.start}
@@ -201,28 +204,31 @@ export function SlotsCard({
                   draft={addDraft.end}
                   onChange={(end) => setAddDraft((d) => ({ ...d, end }))}
                 />
-              </InlineGrid>
-              <TextField
+              </s-grid>
+              <s-text-field
                 label="Display label"
-                autoComplete="off"
+                autocomplete="off"
                 value={addDraft.display}
                 placeholder={addPreview}
-                onChange={(display) => setAddDraft((d) => ({ ...d, display }))}
                 error={fieldErrors.display}
-                helpText={`Slot value will be ${addPreview}`}
+                details={`Slot value will be ${addPreview}`}
+                onInput={(e) => {
+                  const display = e.currentTarget.value;
+                  setAddDraft((d) => ({ ...d, display }));
+                }}
               />
               {(addRangeInvalid || fieldErrors.start || fieldErrors.end) && (
-                <Text as="p" tone="critical" variant="bodySm">
+                <s-text tone="critical">
                   {fieldErrors.start ??
                     fieldErrors.end ??
                     "End time must be after the start time."}
-                </Text>
+                </s-text>
               )}
-              <div>
-                <Button
+              <s-stack direction="inline">
+                <s-button
                   variant="primary"
-                  loading={submitting}
-                  disabled={addRangeInvalid || submitting}
+                  loading={flag(submitting)}
+                  disabled={flag(addRangeInvalid || submitting)}
                   onClick={() =>
                     submitOp("createSlot", {
                       version,
@@ -233,110 +239,103 @@ export function SlotsCard({
                   }
                 >
                   Add slot
-                </Button>
-              </div>
-            </BlockStack>
-          </Card>
+                </s-button>
+              </s-stack>
+            </s-stack>
+          </s-box>
         )}
 
-        <BlockStack gap="300">
+        <s-stack gap="small">
           {rules.slots.map((slot, index) => {
             const structured = parseSlotValueToTimes(slot.value);
             const draft = displayDrafts[slot.value] ?? slot.display;
             const displayDirty = draft !== slot.display;
 
             return (
-              <BlockStack key={slot.value} gap="200">
-                {index > 0 && <Divider />}
+              <s-stack key={slot.value} gap="small-200">
+                {index > 0 && <s-divider />}
                 {!structured && (
-                  <Banner tone="warning">
+                  <s-banner tone="warning">
                     The value “{slot.value}” can’t be read as a time range, so
                     customers can never book it. Delete it and add a structured
                     slot in its place.
-                  </Banner>
+                  </s-banner>
                 )}
-                <InlineStack gap="300" blockAlign="end" wrap>
-                  <div style={{ minWidth: "200px", flexGrow: 1 }}>
-                    <TextField
-                      label="Display label"
-                      labelHidden={false}
-                      autoComplete="off"
-                      value={draft}
-                      onChange={(value) =>
-                        setDisplayDrafts((drafts) => ({
-                          ...drafts,
-                          [slot.value]: value,
-                        }))
-                      }
-                      error={displayDirty ? fieldErrors.display : undefined}
-                      connectedRight={
-                        displayDirty ? (
-                          <Button
-                            loading={submitting}
-                            onClick={() =>
-                              submitOp("updateSlotDisplay", {
-                                version,
-                                value: slot.value,
-                                display: draft,
-                              })
-                            }
-                          >
-                            Save
-                          </Button>
-                        ) : undefined
-                      }
-                    />
-                  </div>
-                  <InlineStack gap="200" blockAlign="center">
-                    <Badge tone={structured ? "info" : "critical"}>
-                      {slot.value}
-                    </Badge>
-                    <ButtonGroup>
-                      <Button
-                        accessibilityLabel={`Move ${slot.display} up`}
-                        disabled={index === 0 || submitting}
-                        onClick={() => {
-                          const order = rules.slots.map((s) => s.value);
-                          [order[index - 1], order[index]] = [
-                            order[index],
-                            order[index - 1],
-                          ];
-                          submitOp("reorderSlots", { version, order });
+                <s-stack
+                  direction="inline"
+                  gap="base"
+                  alignItems="end"
+                  justifyContent="space-between"
+                >
+                  <s-stack direction="inline" gap="small-200" alignItems="end">
+                    <div style={{ minWidth: "200px", flexGrow: 1 }}>
+                      <s-text-field
+                        label="Display label"
+                        autocomplete="off"
+                        value={draft}
+                        error={displayDirty ? fieldErrors.display : undefined}
+                        onInput={(e) => {
+                          const value = e.currentTarget.value;
+                          setDisplayDrafts((drafts) => ({
+                            ...drafts,
+                            [slot.value]: value,
+                          }));
                         }}
+                      />
+                    </div>
+                    {displayDirty && (
+                      <s-button
+                        loading={flag(submitting)}
+                        onClick={() =>
+                          submitOp("updateSlotDisplay", {
+                            version,
+                            value: slot.value,
+                            display: draft,
+                          })
+                        }
+                      >
+                        Save
+                      </s-button>
+                    )}
+                  </s-stack>
+                  <s-stack direction="inline" gap="small-200" alignItems="center">
+                    <s-badge tone={structured ? "info" : "critical"}>
+                      {slot.value}
+                    </s-badge>
+                    <s-stack direction="inline" gap="small-200">
+                      <s-button
+                        accessibilityLabel={`Move ${slot.display} up`}
+                        disabled={flag(index === 0 || submitting)}
+                        onClick={() => moveSlot(index, -1)}
                       >
                         ↑
-                      </Button>
-                      <Button
+                      </s-button>
+                      <s-button
                         accessibilityLabel={`Move ${slot.display} down`}
-                        disabled={index === rules.slots.length - 1 || submitting}
-                        onClick={() => {
-                          const order = rules.slots.map((s) => s.value);
-                          [order[index], order[index + 1]] = [
-                            order[index + 1],
-                            order[index],
-                          ];
-                          submitOp("reorderSlots", { version, order });
-                        }}
+                        disabled={flag(
+                          index === rules.slots.length - 1 || submitting,
+                        )}
+                        onClick={() => moveSlot(index, 1)}
                       >
                         ↓
-                      </Button>
-                      <Button
+                      </s-button>
+                      <s-button
                         tone="critical"
-                        disabled={rules.slots.length <= 1 || submitting}
+                        disabled={flag(rules.slots.length <= 1 || submitting)}
                         onClick={() => setDeleteTarget(slot.value)}
                       >
                         Delete
-                      </Button>
-                    </ButtonGroup>
-                  </InlineStack>
-                </InlineStack>
-              </BlockStack>
+                      </s-button>
+                    </s-stack>
+                  </s-stack>
+                </s-stack>
+              </s-stack>
             );
           })}
-        </BlockStack>
-      </BlockStack>
+        </s-stack>
+      </s-stack>
 
-      <Modal
+      <AppModal
         open={deleteTarget !== null}
         onClose={() => setDeleteTarget(null)}
         title={`Delete slot ${deleteTarget ?? ""}?`}
@@ -352,24 +351,22 @@ export function SlotsCard({
           { content: "Cancel", onAction: () => setDeleteTarget(null) },
         ]}
       >
-        <Modal.Section>
-          <BlockStack gap="200">
-            <Text as="p">
-              Customers will no longer see this window at checkout.
-            </Text>
-            {deleteDates.length > 0 ? (
-              <Text as="p" tone="caution">
-                This also removes its blocked-slot and capacity overrides on:{" "}
-                {deleteDates.map(formatDateLabel).join(", ")}.
-              </Text>
-            ) : (
-              <Text as="p" tone="subdued">
-                No date overrides reference this slot.
-              </Text>
-            )}
-          </BlockStack>
-        </Modal.Section>
-      </Modal>
-    </Card>
+        <s-stack gap="small-200">
+          <s-paragraph>
+            Customers will no longer see this window at checkout.
+          </s-paragraph>
+          {deleteDates.length > 0 ? (
+            <s-paragraph tone="caution">
+              This also removes its blocked-slot and capacity overrides on:{" "}
+              {deleteDates.map(formatDateLabel).join(", ")}.
+            </s-paragraph>
+          ) : (
+            <s-paragraph color="subdued">
+              No date overrides reference this slot.
+            </s-paragraph>
+          )}
+        </s-stack>
+      </AppModal>
+    </s-section>
   );
 }

@@ -4,17 +4,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import {
-  Banner,
-  BlockStack,
-  Button,
-  ButtonGroup,
-  Card,
-  Divider,
-  InlineStack,
-  Text,
-  TextField,
-} from "@shopify/polaris";
 
 import {
   MAX_QUICK_REPLIES,
@@ -23,7 +12,9 @@ import {
   type QuickReply,
   type QuickReplyFieldErrors,
 } from "../../lib/quick-replies";
+import { flag } from "../../lib/web-component-props";
 import type { QuickRepliesData } from "../../routes/app.scheduler_.quick-replies";
+import { SectionHeader } from "../ui/SectionHeader";
 
 const QUICK_REPLIES_URL = "/app/scheduler/quick-replies";
 
@@ -34,10 +25,12 @@ interface DraftReply extends QuickReply {
 
 let nextDraftKey = 0;
 
+// Turns saved replies into editable drafts, each with its own key.
 function toDrafts(replies: ReadonlyArray<QuickReply>): DraftReply[] {
   return replies.map((r) => ({ ...r, key: nextDraftKey++ }));
 }
 
+// True when both lists have the same replies in the same order.
 function sameReplies(a: ReadonlyArray<QuickReply>, b: ReadonlyArray<QuickReply>) {
   return (
     a.length === b.length &&
@@ -92,12 +85,14 @@ export function QuickRepliesCard() {
 
   const dirty = saved !== null && !sameReplies(saved, drafts);
 
-  // Row indexes shift on move/delete, so stale per-row errors are cleared.
+  // Replaces the drafts and clears the row errors, because row numbers change after a move
+  // or a delete.
   const updateDrafts = (next: DraftReply[]) => {
     setDrafts(next);
     setFieldErrors({});
   };
 
+  // Swaps the reply at `index` with its neighbour above (-1) or below (1).
   const move = (index: number, delta: -1 | 1) => {
     const next = [...drafts];
     [next[index], next[index + delta]] = [next[index + delta], next[index]];
@@ -112,123 +107,121 @@ export function QuickRepliesCard() {
   };
 
   return (
-    <Card>
-      <BlockStack gap="400">
-        <InlineStack align="space-between" blockAlign="center">
-          <BlockStack gap="100">
-            <Text as="h2" variant="headingMd">
-              Quick replies
-            </Text>
-            <Text as="p" tone="subdued" variant="bodySm">
-              Shown in the View email window on the Orders page. One click
-              copies the message.
-            </Text>
-          </BlockStack>
-          <Button
-            disabled={saved === null || drafts.length >= MAX_QUICK_REPLIES || saving}
-            onClick={() =>
-              setDrafts((d) => [...d, ...toDrafts([{ label: "", message: "" }])])
-            }
-          >
-            Add reply
-          </Button>
-        </InlineStack>
+    <s-section>
+      <s-stack gap="base">
+        <SectionHeader
+          title="Quick replies"
+          description="Shown in the View email window on the Orders page. One click copies the message."
+          action={
+            <s-button
+              disabled={flag(
+                saved === null || drafts.length >= MAX_QUICK_REPLIES || saving,
+              )}
+              onClick={() =>
+                setDrafts((d) => [...d, ...toDrafts([{ label: "", message: "" }])])
+              }
+            >
+              Add reply
+            </s-button>
+          }
+        />
 
-        {loadError && (
-          <Banner tone="critical">
-            <p>{loadError}</p>
-          </Banner>
-        )}
+        {loadError && <s-banner tone="critical">{loadError}</s-banner>}
 
         {saved === null && !loadError && (
-          <Text as="p" tone="subdued">
-            Loading quick replies…
-          </Text>
+          <s-paragraph color="subdued">Loading quick replies…</s-paragraph>
         )}
 
         {saved !== null && drafts.length === 0 && (
-          <Text as="p" tone="subdued">
-            No quick replies yet.
-          </Text>
+          <s-paragraph color="subdued">No quick replies yet.</s-paragraph>
         )}
 
         {drafts.length > 0 && (
-          <BlockStack gap="300">
+          <s-stack gap="small">
             {drafts.map((reply, index) => (
-              <BlockStack key={reply.key} gap="200">
-                {index > 0 && <Divider />}
-                <InlineStack align="space-between" blockAlign="end" gap="200">
+              <s-stack key={reply.key} gap="small-200">
+                {index > 0 && <s-divider />}
+                <s-stack
+                  direction="inline"
+                  justifyContent="space-between"
+                  alignItems="end"
+                  gap="small-200"
+                >
                   <div style={{ minWidth: "200px", flexGrow: 1 }}>
-                    <TextField
+                    <s-text-field
                       label="Label"
-                      autoComplete="off"
+                      autocomplete="off"
                       value={reply.label}
                       maxLength={MAX_QUICK_REPLY_LABEL}
                       error={fieldErrors[index]?.label}
-                      disabled={saving}
-                      onChange={(label) =>
+                      disabled={flag(saving)}
+                      onInput={(e) => {
+                        const label = e.currentTarget.value;
                         setDrafts((d) =>
                           d.map((r, i) => (i === index ? { ...r, label } : r)),
-                        )
-                      }
+                        );
+                      }}
                     />
                   </div>
-                  <ButtonGroup>
-                    <Button
+                  <s-stack direction="inline" gap="small-200">
+                    <s-button
                       accessibilityLabel={`Move ${reply.label || "reply"} up`}
-                      disabled={index === 0 || saving}
+                      disabled={flag(index === 0 || saving)}
                       onClick={() => move(index, -1)}
                     >
                       ↑
-                    </Button>
-                    <Button
+                    </s-button>
+                    <s-button
                       accessibilityLabel={`Move ${reply.label || "reply"} down`}
-                      disabled={index === drafts.length - 1 || saving}
+                      disabled={flag(index === drafts.length - 1 || saving)}
                       onClick={() => move(index, 1)}
                     >
                       ↓
-                    </Button>
-                    <Button
+                    </s-button>
+                    <s-button
                       tone="critical"
-                      disabled={saving}
-                      onClick={() => updateDrafts(drafts.filter((_, i) => i !== index))}
+                      disabled={flag(saving)}
+                      onClick={() =>
+                        updateDrafts(drafts.filter((_, i) => i !== index))
+                      }
                     >
                       Delete
-                    </Button>
-                  </ButtonGroup>
-                </InlineStack>
-                <TextField
+                    </s-button>
+                  </s-stack>
+                </s-stack>
+                <s-text-area
                   label="Message"
-                  autoComplete="off"
-                  multiline={3}
+                  autocomplete="off"
+                  rows={3}
                   value={reply.message}
                   maxLength={MAX_QUICK_REPLY_MESSAGE}
                   error={fieldErrors[index]?.message}
-                  disabled={saving}
-                  onChange={(message) =>
+                  disabled={flag(saving)}
+                  onInput={(e) => {
+                    const message = e.currentTarget.value;
                     setDrafts((d) =>
                       d.map((r, i) => (i === index ? { ...r, message } : r)),
-                    )
-                  }
+                    );
+                  }}
                 />
-              </BlockStack>
+              </s-stack>
             ))}
-          </BlockStack>
+          </s-stack>
         )}
 
         {saved !== null && (
-          <InlineStack align="end">
-            <Button
+          <s-stack direction="inline" justifyContent="end">
+            <s-button
               variant="primary"
-              loading={saving}
-              disabled={!dirty || saving}
+              loading={flag(saving)}
+              disabled={flag(!dirty || saving)}
               onClick={save}
             >
               Save replies
-            </Button>
-          </InlineStack>
+            </s-button>
+          </s-stack>
         )}
-      </BlockStack>
-    </Card>
+      </s-stack>
+    </s-section>
   );
 }

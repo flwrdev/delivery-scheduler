@@ -1,31 +1,21 @@
 // Scheduler card with the summary: number of slots, blocked dates, capacity-tracked days and
 // slots at or near capacity, and a button to refresh the booked counts.
 
-import {
-  Badge,
-  BlockStack,
-  Button,
-  Card,
-  InlineGrid,
-  InlineStack,
-  ProgressBar,
-  Text,
-} from "@shopify/polaris";
-
 import { buildSchedulerOverview } from "../../lib/scheduler-overview";
+import { flag } from "../../lib/web-component-props";
+import { SectionHeader } from "../ui/SectionHeader";
 import type { SchedulerPageState } from "./op-plumbing";
 import { formatDateLabel, useSchedulerOp } from "./op-plumbing";
 
+// One number with a small grey label above it.
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <BlockStack gap="050">
-      <Text as="p" tone="subdued" variant="bodySm">
-        {label}
-      </Text>
-      <Text as="p" variant="headingLg">
+    <s-stack gap="small-500">
+      <s-paragraph color="subdued">{label}</s-paragraph>
+      <s-paragraph fontSize="large" fontWeight="semibold">
         {value}
-      </Text>
-    </BlockStack>
+      </s-paragraph>
+    </s-stack>
   );
 }
 
@@ -45,12 +35,11 @@ export function OverviewCard({
     successMessage: () => "Live counts refreshed",
   });
 
+  // A short note about how fresh the booked counts are. Partial counts are never called "Live".
   const countsCaption =
     (countsMeta.status === "ok" || countsMeta.status === "partial") &&
     countsMeta.fetchedAt
-      ? // "partial" counts are real but clipped — never label them "live"; the
-        // page banner carries the detail.
-        `${countsMeta.status === "partial" ? "Partial" : "Live"} counts ${
+      ? `${countsMeta.status === "partial" ? "Partial" : "Live"} counts ${
           countsMeta.fromCache ? "cached" : "refreshed"
         } ${new Date(countsMeta.fetchedAt).toLocaleTimeString()}`
       : countsMeta.status === "untracked"
@@ -58,28 +47,29 @@ export function OverviewCard({
         : null;
 
   return (
-    <Card>
-      <BlockStack gap="400">
-        <InlineStack align="space-between" blockAlign="center">
-          <Text as="h2" variant="headingMd">
-            Overview
-          </Text>
-          <InlineStack gap="200" blockAlign="center">
-            {countsCaption && (
-              <Text as="span" tone="subdued" variant="bodySm">
-                {countsCaption}
-              </Text>
-            )}
-            <Button
-              loading={submitting}
-              onClick={() => submitOp("refreshCounts", {})}
-            >
-              Refresh counts
-            </Button>
-          </InlineStack>
-        </InlineStack>
+    <s-section>
+      <s-stack gap="base">
+        <SectionHeader
+          title="Overview"
+          action={
+            <s-stack direction="inline" alignItems="center" gap="small">
+              {countsCaption && (
+                <s-text color="subdued">{countsCaption}</s-text>
+              )}
+              <s-button
+                loading={flag(submitting)}
+                onClick={() => submitOp("refreshCounts", {})}
+              >
+                Refresh counts
+              </s-button>
+            </s-stack>
+          }
+        />
 
-        <InlineGrid columns={{ xs: 2, sm: 4 }} gap="300">
+        <s-grid
+          gridTemplateColumns="repeat(auto-fit, minmax(140px, 1fr))"
+          gap="base"
+        >
           <Stat label="Delivery slots" value={String(overview.slotCount)} />
           <Stat
             label="Blocked dates"
@@ -93,48 +83,45 @@ export function OverviewCard({
             label="At capacity"
             value={`${overview.fullCount} full / ${overview.nearLimitCount} near`}
           />
-        </InlineGrid>
+        </s-grid>
 
         {overview.watchlist.length > 0 && (
-          <BlockStack gap="200">
-            <Text as="h3" variant="headingSm">
-              Capacity watchlist
-            </Text>
-            <BlockStack gap="200">
+          <s-stack gap="small">
+            <s-heading>Capacity watchlist</s-heading>
+            <s-stack gap="small">
               {overview.watchlist.map((entry) => (
-                <InlineStack
+                <s-stack
                   key={`${entry.date}-${entry.slotValue}`}
-                  gap="300"
-                  blockAlign="center"
-                  wrap
+                  direction="inline"
+                  gap="base"
+                  alignItems="center"
                 >
                   <div style={{ minWidth: "150px" }}>
-                    <Button
-                      variant="plain"
+                    <s-button
+                      variant="tertiary"
                       onClick={() => onSelectDate(entry.date)}
                     >
                       {`${formatDateLabel(entry.date)} · ${entry.slotValue}`}
-                    </Button>
+                    </s-button>
                   </div>
-                  <Badge tone={entry.status.tone}>{entry.status.label}</Badge>
+                  <s-badge tone={entry.status.tone}>{entry.status.label}</s-badge>
                   <div style={{ flexGrow: 1, minWidth: "120px" }}>
-                    <ProgressBar
-                      progress={entry.utilizationPercent}
-                      size="small"
-                      tone={
-                        entry.status.label === "Full" ? "critical" : "primary"
-                      }
+                    <s-progress
+                      value={entry.utilizationPercent}
+                      max={100}
+                      tone={entry.status.label === "Full" ? "critical" : "auto"}
+                      accessibilityLabel={`${entry.booked} of ${entry.capacity} booked`}
                     />
                   </div>
-                  <Text as="span" tone="subdued" variant="bodySm">
+                  <s-text color="subdued">
                     {`${entry.booked} of ${entry.capacity} booked`}
-                  </Text>
-                </InlineStack>
+                  </s-text>
+                </s-stack>
               ))}
-            </BlockStack>
-          </BlockStack>
+            </s-stack>
+          </s-stack>
         )}
-      </BlockStack>
-    </Card>
+      </s-stack>
+    </s-section>
   );
 }

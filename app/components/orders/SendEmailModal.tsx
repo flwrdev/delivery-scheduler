@@ -4,19 +4,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import {
-  Banner,
-  BlockStack,
-  Button,
-  DropZone,
-  InlineStack,
-  Modal,
-  Text,
-  TextField,
-  Thumbnail,
-} from "@shopify/polaris";
 import type { SendEmailResponse } from "../../services/send-customer-email.server";
 import { replySubject } from "../../lib/email-replies";
+import { flag } from "../../lib/web-component-props";
+import { AppModal } from "../ui/AppModal";
 
 // "Send email" compose modal (customer-email-design.md §4) — opened from the
 // details panel's Actions menu, single order only. The To field is display
@@ -112,7 +103,8 @@ export function SendEmailModal({
     }
   }, [fetcher.data, fetcher.state, shopify, onClose]);
 
-  const handleDropPhotos = (_dropped: File[], accepted: File[]) => {
+  // Checks the photos the merchant picked or dropped and keeps the ones that pass the limits.
+  const handleDropPhotos = (accepted: File[]) => {
     setPhotoError(null);
     const next = [...photos];
     const rejected: string[] = [];
@@ -171,7 +163,7 @@ export function SendEmailModal({
   };
 
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title={replyTo ? "Reply to customer" : "Send email"}
@@ -185,95 +177,95 @@ export function SendEmailModal({
         { content: "Cancel", onAction: onClose, disabled: isSubmitting },
       ]}
     >
-      <Modal.Section>
-        <BlockStack gap="400">
-          {error && (
-            <Banner tone="critical" title="The email was not sent">
-              <p>{error}</p>
-            </Banner>
-          )}
-          <TextField
-            label="To"
-            value={customerEmail ?? ""}
-            disabled
-            autoComplete="off"
-          />
-          <TextField
-            label="Subject"
-            value={subject}
-            onChange={setSubject}
-            disabled={isSubmitting}
-            maxLength={MAX_SUBJECT}
-            autoComplete="off"
-          />
-          <TextField
-            label="Message"
-            value={body}
-            onChange={setBody}
-            disabled={isSubmitting}
-            multiline={6}
-            maxLength={MAX_BODY}
-            showCharacterCount
-            autoComplete="off"
-            helpText="Sent as plain text from your business mailbox. A copy is BCC'd to you."
-          />
-          <BlockStack gap="200">
-            {photoError && (
-              <Banner tone="warning">
-                <p>{photoError}</p>
-              </Banner>
-            )}
-            {photos.length < MAX_PHOTOS && (
-              <DropZone
+      <s-stack gap="base">
+        {error && (
+          <s-banner tone="critical" heading="The email was not sent">
+            {error}
+          </s-banner>
+        )}
+        <s-text-field
+          label="To"
+          value={customerEmail ?? ""}
+          disabled
+          autocomplete="off"
+        />
+        <s-text-field
+          label="Subject"
+          value={subject}
+          disabled={flag(isSubmitting)}
+          maxLength={MAX_SUBJECT}
+          autocomplete="off"
+          onInput={(e) => setSubject(e.currentTarget.value)}
+        />
+        <s-text-area
+          label="Message"
+          value={body}
+          disabled={flag(isSubmitting)}
+          rows={6}
+          maxLength={MAX_BODY}
+          autocomplete="off"
+          details={`${body.length}/${MAX_BODY} characters. Sent as plain text from your business mailbox. A copy is BCC'd to you.`}
+          onInput={(e) => setBody(e.currentTarget.value)}
+        />
+        <s-stack gap="small-200">
+          {photoError && <s-banner tone="warning">{photoError}</s-banner>}
+          {photos.length < MAX_PHOTOS && (
+            <s-stack gap="small-300">
+              <s-drop-zone
+                label="Add photos"
+                accessibilityLabel="Add photos"
                 accept={PHOTO_ACCEPT}
-                type="image"
-                allowMultiple
-                disabled={isSubmitting}
-                onDrop={handleDropPhotos}
-                variableHeight
+                multiple
+                disabled={flag(isSubmitting)}
+                onInput={(e) => {
+                  const zone = e.currentTarget;
+                  const picked = Array.from(zone.files);
+                  zone.value = "";
+                  handleDropPhotos(picked);
+                }}
+              />
+              <s-text color="subdued">
+                {`JPEG, PNG, or WebP · up to ${MAX_PHOTOS} photos, ${mb(MAX_PHOTO_BYTES)} each`}
+              </s-text>
+            </s-stack>
+          )}
+          {photos.map((photo, index) => (
+            <s-stack
+              key={`${photo.name}-${index}`}
+              direction="inline"
+              gap="small"
+              alignItems="center"
+            >
+              <s-thumbnail src={photoPreviews[index]} alt={photo.name} size="small" />
+              <div
+                style={{
+                  minWidth: 0,
+                  flex: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
               >
-                <DropZone.FileUpload
-                  actionTitle="Add photos"
-                  actionHint={`JPEG, PNG, or WebP · up to ${MAX_PHOTOS} photos, ${mb(MAX_PHOTO_BYTES)} each`}
-                />
-              </DropZone>
-            )}
-            {photos.map((photo, index) => (
-              <InlineStack
-                key={`${photo.name}-${index}`}
-                gap="300"
-                blockAlign="center"
-                wrap={false}
+                <s-text>{photo.name}</s-text>
+              </div>
+              <s-button
+                variant="tertiary"
+                tone="critical"
+                disabled={flag(isSubmitting)}
+                onClick={() => removePhoto(index)}
               >
-                <Thumbnail
-                  source={photoPreviews[index]}
-                  alt={photo.name}
-                  size="small"
-                />
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <Text as="span" variant="bodySm" truncate>
-                    {photo.name}
-                  </Text>
-                </div>
-                <Button
-                  variant="plain"
-                  tone="critical"
-                  onClick={() => removePhoto(index)}
-                  disabled={isSubmitting}
-                >
-                  Remove
-                </Button>
-              </InlineStack>
-            ))}
-            {photos.length > 0 && (
-              <Text as="p" variant="bodySm" tone="subdued">
-                Photos are sent to the customer only — your mailbox copy lists
-                them without the attachments to save storage space.
-              </Text>
-            )}
-          </BlockStack>
-        </BlockStack>
-      </Modal.Section>
-    </Modal>
+                Remove
+              </s-button>
+            </s-stack>
+          ))}
+          {photos.length > 0 && (
+            <s-text color="subdued">
+              Photos are sent to the customer only — your mailbox copy lists
+              them without the attachments to save storage space.
+            </s-text>
+          )}
+        </s-stack>
+      </s-stack>
+    </AppModal>
   );
 }

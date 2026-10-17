@@ -1,20 +1,7 @@
 // The bell on the Orders page. Lists unseen customer email replies and recent customer
 // reschedules, opens the related order or email, and lets the merchant mark items as seen.
 
-import { useState } from "react";
-import {
-  Badge,
-  BlockStack,
-  Box,
-  Button,
-  Divider,
-  Icon,
-  InlineStack,
-  Popover,
-  Spinner,
-  Text,
-} from "@shopify/polaris";
-import { CalendarIcon, ChatIcon, NotificationIcon } from "@shopify/polaris-icons";
+import { useRef } from "react";
 import { getShopLocalDate } from "../../lib/delivery-availability";
 import type { EmailReplyNotification } from "../../lib/email-replies";
 import {
@@ -23,6 +10,9 @@ import {
   formatShortMonthDay,
   shiftISODate,
 } from "../../lib/recent-reschedules";
+import { useWebComponentEvent } from "../../hooks/useWebComponentEvent";
+
+const BELL_POPOVER_ID = "orders-bell-popover";
 
 export interface NotificationsBellProps {
   replies: EmailReplyNotification[];
@@ -46,6 +36,7 @@ type BellItem =
   | { kind: "reply"; at: number; item: EmailReplyNotification }
   | { kind: "reschedule"; at: number; item: RecentRescheduleItem };
 
+// Turns a timestamp into "10:30 AM", "Yesterday · 10:30 AM" or "Oct 3 · 10:30 AM".
 function whenLabel(iso: string, timezone: string, todayISO: string): string {
   const time = formatShopLocalTime(iso, timezone);
   const day = getShopLocalDate(timezone, new Date(iso));
@@ -70,7 +61,7 @@ export function NotificationsBell({
   onOpenReschedule,
   onRescheduleSeen,
 }: NotificationsBellProps) {
-  const [active, setActive] = useState(false);
+  const popoverRef = useRef<HTMLElementTagNameMap["s-popover"]>(null);
 
   const visibleReplies = replies.filter((r) => !pendingReplySeenIds.has(r.orderId));
   const visibleReschedules = reschedules.filter(
@@ -90,131 +81,108 @@ export function NotificationsBell({
   ].sort((a, b) => b.at - a.at);
   const count = items.length;
 
-  const toggle = () => {
-    if (!active) onOpen();
-    setActive((v) => !v);
-  };
-  const close = () => setActive(false);
-
-  const activator = (
-    <span className="orders-bell">
-      <Button
-        variant="tertiary"
-        icon={NotificationIcon}
-        onClick={toggle}
-        accessibilityLabel={
-          count > 0 ? `Notifications, ${count} unseen` : "Notifications"
-        }
-        disclosure={false}
-      />
-      {count > 0 && (
-        <span className="orders-bell-count" aria-hidden="true">
-          {count > 99 ? "99+" : count}
-        </span>
-      )}
-    </span>
-  );
+  // Asks the parent to load the inbox each time the popover opens.
+  useWebComponentEvent(popoverRef, "show", () => onOpen());
 
   return (
-    <Popover
-      active={active}
-      activator={activator}
-      onClose={close}
-      preferredAlignment="right"
-      fluidContent
-    >
-      <Box padding="300" minWidth="340px" maxWidth="420px">
-        <BlockStack gap="300">
-          <InlineStack align="space-between" blockAlign="center">
-            <Text as="h2" variant="headingSm">
-              Notifications
-            </Text>
-            {count > 1 && (
-              <Button
-                variant="plain"
-                onClick={() => {
-                  onReplySeen(visibleReplies);
-                  onRescheduleSeen(visibleReschedules);
-                }}
-              >
-                Mark all as seen
-              </Button>
+    <>
+      <span className="orders-bell">
+        <s-button
+          variant="tertiary"
+          icon="notification"
+          commandFor={BELL_POPOVER_ID}
+          accessibilityLabel={
+            count > 0 ? `Notifications, ${count} unseen` : "Notifications"
+          }
+        />
+        {count > 0 && (
+          <span className="orders-bell-count" aria-hidden="true">
+            {count > 99 ? "99+" : count}
+          </span>
+        )}
+      </span>
+      <s-popover id={BELL_POPOVER_ID} ref={popoverRef} minInlineSize="340px" maxInlineSize="420px">
+        <s-box padding="base">
+          <s-stack gap="base">
+            <s-stack
+              direction="inline"
+              justifyContent="space-between"
+              alignItems="center"
+            >
+              <s-heading>Notifications</s-heading>
+              {count > 1 && (
+                <s-button
+                  variant="tertiary"
+                  onClick={() => {
+                    onReplySeen(visibleReplies);
+                    onRescheduleSeen(visibleReschedules);
+                  }}
+                >
+                  Mark all as seen
+                </s-button>
+              )}
+            </s-stack>
+            {repliesLoading && (
+              <s-stack direction="inline" gap="small-200" alignItems="center">
+                <s-spinner size="base" accessibilityLabel="Checking the inbox" />
+                <s-text color="subdued">Checking the inbox…</s-text>
+              </s-stack>
             )}
-          </InlineStack>
-          {repliesLoading && (
-            <InlineStack gap="200" blockAlign="center">
-              <Spinner size="small" accessibilityLabel="Checking the inbox" />
-              <Text as="span" variant="bodySm" tone="subdued">
-                Checking the inbox…
-              </Text>
-            </InlineStack>
-          )}
-          {repliesError && (
-            <Text as="p" variant="bodySm" tone="critical">
-              {repliesError}
-            </Text>
-          )}
-          {seenErrorMessage && (
-            <Text as="p" variant="bodySm" tone="critical">
-              {seenErrorMessage}
-            </Text>
-          )}
-          {count === 0 && !repliesLoading && (
-            <Text as="p" tone="subdued">
-              You're all caught up.
-            </Text>
-          )}
-          {count > 0 && (
-            <div className="orders-bell-list">
-              <BlockStack gap="200">
-                {items.map((entry, index) => (
-                  <BlockStack gap="200" key={`${entry.kind}-${entry.item.orderId}`}>
-                    {index > 0 && <Divider />}
-                    {entry.kind === "reply" ? (
-                      <ReplyRow
-                        item={entry.item}
-                        when={whenLabel(entry.item.receivedAt, timezone, todayISO)}
-                        onOpen={() => {
-                          close();
-                          onOpenReply(entry.item);
-                        }}
-                        onSeen={() => onReplySeen([entry.item])}
-                      />
-                    ) : (
-                      <RescheduleRow
-                        item={entry.item}
-                        when={whenLabel(entry.item.requestedAt, timezone, todayISO)}
-                        onOpen={() => {
-                          close();
-                          onOpenReschedule(entry.item);
-                        }}
-                        onSeen={() => onRescheduleSeen([entry.item])}
-                      />
-                    )}
-                  </BlockStack>
-                ))}
-              </BlockStack>
-            </div>
-          )}
-        </BlockStack>
-      </Box>
-    </Popover>
+            {repliesError && <s-text tone="critical">{repliesError}</s-text>}
+            {seenErrorMessage && (
+              <s-text tone="critical">{seenErrorMessage}</s-text>
+            )}
+            {count === 0 && !repliesLoading && (
+              <s-paragraph color="subdued">You're all caught up.</s-paragraph>
+            )}
+            {count > 0 && (
+              <div className="orders-bell-list">
+                <s-stack gap="small-200">
+                  {items.map((entry, index) => (
+                    <s-stack gap="small-200" key={`${entry.kind}-${entry.item.orderId}`}>
+                      {index > 0 && <s-divider />}
+                      {entry.kind === "reply" ? (
+                        <ReplyRow
+                          item={entry.item}
+                          when={whenLabel(entry.item.receivedAt, timezone, todayISO)}
+                          onOpen={() => onOpenReply(entry.item)}
+                          onSeen={() => onReplySeen([entry.item])}
+                        />
+                      ) : (
+                        <RescheduleRow
+                          item={entry.item}
+                          when={whenLabel(entry.item.requestedAt, timezone, todayISO)}
+                          onOpen={() => onOpenReschedule(entry.item)}
+                          onSeen={() => onRescheduleSeen([entry.item])}
+                        />
+                      )}
+                    </s-stack>
+                  ))}
+                </s-stack>
+              </div>
+            )}
+          </s-stack>
+        </s-box>
+      </s-popover>
+    </>
   );
 }
 
+// The "Open order" and "Seen" buttons under each notification. "Open order" also closes the popover.
 function RowActions({ onOpen, onSeen }: { onOpen: () => void; onSeen: () => void }) {
   return (
-    <InlineStack gap="200">
-      <Button size="slim" onClick={onOpen}>
+    <s-stack direction="inline" gap="small-200">
+      <s-button command="--hide" commandFor={BELL_POPOVER_ID} onClick={onOpen}>
         Open order
-      </Button>
-      <Button size="slim" variant="plain" onClick={onSeen}>
+      </s-button>
+      <s-button variant="tertiary" onClick={onSeen}>
         Seen
-      </Button>
-    </InlineStack>
+      </s-button>
+    </s-stack>
   );
 }
 
+// One notification for a new customer email reply.
 function ReplyRow({
   item,
   when,
@@ -227,35 +195,32 @@ function ReplyRow({
   onSeen: () => void;
 }) {
   return (
-    <InlineStack gap="300" wrap={false} blockAlign="start">
-      <Box>
-        <Icon source={ChatIcon} tone="info" />
-      </Box>
-      <BlockStack gap="100">
-        <InlineStack gap="200" blockAlign="center">
-          <Text as="span" fontWeight="semibold">
+    <s-stack direction="inline" gap="small" alignItems="start">
+      <s-icon type="chat" tone="info" />
+      <s-stack gap="small-300">
+        <s-stack direction="inline" gap="small-200" alignItems="center">
+          <s-text fontWeight="semibold">
             Customer replied to order {item.name}
-          </Text>
+          </s-text>
           {item.unseenCount > 1 && (
-            <Badge size="small">{`${item.unseenCount} new`}</Badge>
+            <s-badge>{`${item.unseenCount} new`}</s-badge>
           )}
           {item.verdict === "fail" && (
-            <Badge size="small" tone="warning">
-              Unverified sender
-            </Badge>
+            <s-badge tone="warning">Unverified sender</s-badge>
           )}
-        </InlineStack>
-        {item.preview && <Text as="p">“{item.preview}”</Text>}
-        <Text as="p" variant="bodySm" tone="subdued">
+        </s-stack>
+        {item.preview && <s-paragraph>“{item.preview}”</s-paragraph>}
+        <s-text color="subdued">
           {when} · {item.fromName}
           {item.matchedBy === "sender" ? " · matched by sender email" : ""}
-        </Text>
+        </s-text>
         <RowActions onOpen={onOpen} onSeen={onSeen} />
-      </BlockStack>
-    </InlineStack>
+      </s-stack>
+    </s-stack>
   );
 }
 
+// One notification for an order the customer rescheduled.
 function RescheduleRow({
   item,
   when,
@@ -268,21 +233,17 @@ function RescheduleRow({
   onSeen: () => void;
 }) {
   return (
-    <InlineStack gap="300" wrap={false} blockAlign="start">
-      <Box>
-        <Icon source={CalendarIcon} tone="critical" />
-      </Box>
-      <BlockStack gap="100">
-        <Text as="span" fontWeight="semibold">
-          Order {item.name} rescheduled
-        </Text>
-        <Text as="p">New date: {item.to}</Text>
-        <Text as="p" variant="bodySm" tone="subdued">
+    <s-stack direction="inline" gap="small" alignItems="start">
+      <s-icon type="calendar" tone="critical" />
+      <s-stack gap="small-300">
+        <s-text fontWeight="semibold">Order {item.name} rescheduled</s-text>
+        <s-paragraph>New date: {item.to}</s-paragraph>
+        <s-text color="subdued">
           {when}
           {item.customerName ? ` · ${item.customerName}` : ""}
-        </Text>
+        </s-text>
         <RowActions onOpen={onOpen} onSeen={onSeen} />
-      </BlockStack>
-    </InlineStack>
+      </s-stack>
+    </s-stack>
   );
 }

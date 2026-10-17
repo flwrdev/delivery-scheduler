@@ -2,17 +2,10 @@
 // and a Reply button for messages from the customer.
 
 import { useEffect, useState } from "react";
-import {
-  Badge,
-  BlockStack,
-  Button,
-  InlineStack,
-  Modal,
-  Text,
-} from "@shopify/polaris";
 import type { MailboxMessage } from "../../lib/email-replies";
 import type { QuickReply } from "../../lib/quick-replies";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { AppModal } from "../ui/AppModal";
 
 export interface EmailViewModalProps {
   open: boolean;
@@ -35,8 +28,8 @@ function formatFullDate(value: string): string {
   });
 }
 
-// The text is rendered as a React text node, never as HTML, so nothing a
-// sender writes can inject markup into the admin.
+// Shows the sender, the date, the message text and the quick replies. The message text is shown
+// as plain text, never as HTML.
 export function EmailViewModal({
   open,
   onClose,
@@ -57,7 +50,7 @@ export function EmailViewModal({
   const body = showQuoted && message.fullText ? message.fullText : message.text;
 
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title={message.subject}
@@ -66,76 +59,62 @@ export function EmailViewModal({
       }
       secondaryActions={[{ content: "Close", onAction: onClose }]}
     >
-      <Modal.Section>
-        <BlockStack gap="100">
-          <InlineStack gap="200" blockAlign="center">
-            <Text as="span" fontWeight="semibold">
-              {message.fromName}
-            </Text>
+      <s-stack gap="base">
+        <s-stack gap="small-500">
+          <s-stack direction="inline" gap="small-200" alignItems="center">
+            <s-text fontWeight="semibold">{message.fromName}</s-text>
             {message.fromName !== message.fromAddress && (
-              <Text as="span" tone="subdued">
-                &lt;{message.fromAddress}&gt;
-              </Text>
+              <s-text color="subdued">&lt;{message.fromAddress}&gt;</s-text>
             )}
             {inbound && message.verdict === "fail" && (
-              <Badge tone="warning">Unverified sender</Badge>
+              <s-badge tone="warning">Unverified sender</s-badge>
             )}
-          </InlineStack>
+          </s-stack>
           {message.toAddresses.length > 0 && (
-            <Text as="span" variant="bodySm" tone="subdued">
-              To: {message.toAddresses.join(", ")}
-            </Text>
+            <s-text color="subdued">To: {message.toAddresses.join(", ")}</s-text>
           )}
-          <Text as="span" variant="bodySm" tone="subdued">
-            {formatFullDate(message.date)}
-          </Text>
-        </BlockStack>
-      </Modal.Section>
-      <Modal.Section>
-        <BlockStack gap="200">
+          <s-text color="subdued">{formatFullDate(message.date)}</s-text>
+        </s-stack>
+        <s-divider />
+        <s-stack gap="small-200">
           <span className="odp-email-text">
-            <Text as="span">{body || "(no text)"}</Text>
+            <s-text>{body || "(no text)"}</s-text>
           </span>
           {message.fullText && (
-            <span>
-              <Button variant="plain" onClick={() => setShowQuoted((v) => !v)}>
+            <s-stack direction="inline">
+              <s-button variant="tertiary" onClick={() => setShowQuoted((v) => !v)}>
                 {showQuoted ? "Hide quoted text" : "Show quoted text"}
-              </Button>
-            </span>
+              </s-button>
+            </s-stack>
           )}
-        </BlockStack>
-      </Modal.Section>
-      {inbound && (
-        <Modal.Section>
-          <BlockStack gap="200">
-            <Text as="h3" variant="headingSm">
-              Quick replies
-            </Text>
+        </s-stack>
+        {inbound && (
+          <s-stack gap="small-200">
+            <s-divider />
+            <s-heading>Quick replies</s-heading>
             {quickReplies.length > 0 ? (
-              <InlineStack gap="200">
+              <s-stack direction="inline" gap="small-200">
                 {quickReplies.map((reply, index) => {
                   const key = `quick-reply-${index}`;
                   return (
-                    <Button
+                    <s-button
                       key={key}
-                      size="slim"
-                      pressed={fieldCopied === key}
                       accessibilityLabel={`Copy quick reply: ${reply.label}`}
                       onClick={() => copyField(key, reply.message)}
                     >
                       {fieldCopied === key ? "Copied" : reply.label}
-                    </Button>
+                    </s-button>
                   );
                 })}
-              </InlineStack>
+              </s-stack>
             ) : (
-              <Text as="p" variant="bodySm" tone="subdued">
+              <s-text color="subdued">
                 No quick replies yet. Add them on the Delivery Scheduler page.
-              </Text>
+              </s-text>
             )}
-          </BlockStack>
-        </Modal.Section>
-      )}
-    </Modal>
+          </s-stack>
+        )}
+      </s-stack>
+    </AppModal>
   );
 }

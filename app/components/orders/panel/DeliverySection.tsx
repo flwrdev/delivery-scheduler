@@ -2,7 +2,6 @@
 // each with a copy button, and a status chip (Today, Overdue) based on the shop-local date.
 
 import type { ReactNode } from "react";
-import { Badge, BlockStack, Button, InlineStack, Text } from "@shopify/polaris";
 import { useCopyToClipboard } from "../../../hooks/useCopyToClipboard";
 import {
   type Order,
@@ -24,7 +23,6 @@ import {
   findAttrValue,
   getAttr,
 } from "../../../lib/order-utils";
-import { polarisBadgeTone } from "./badge-tone";
 
 function CopyableValue({
   fieldKey,
@@ -38,11 +36,7 @@ function CopyableValue({
   onCopy: (fieldKey: string, value: string) => void;
 }) {
   if (value === "—") {
-    return (
-      <Text as="span" tone="subdued">
-        —
-      </Text>
-    );
+    return <s-text color="subdued">—</s-text>;
   }
   return (
     <span
@@ -53,7 +47,7 @@ function CopyableValue({
       onClick={() => onCopy(fieldKey, value)}
       onKeyDown={(e) => e.key === "Enter" && onCopy(fieldKey, value)}
     >
-      <Text as="span">{copied ? "Copied" : value}</Text>
+      <s-text>{copied ? "Copied" : value}</s-text>
     </span>
   );
 }
@@ -105,60 +99,50 @@ export function DeliverySection({
     {
       label: "Delivery date",
       content: (
-        <InlineStack gap="200" blockAlign="center" wrap={false}>
-          <Text as="span" fontWeight="medium">
-            {deliveryDate}
-          </Text>
+        <s-stack direction="inline" gap="small-200" alignItems="center">
+          <s-text fontWeight="medium">{deliveryDate}</s-text>
           {deliveryRelative && (
-            <Badge
+            <s-badge
               tone={
                 deliveryOverdue
                   ? "critical"
                   : deliveryRelative === "Today"
-                    ? "attention"
+                    ? "caution"
                     : undefined
               }
-              size="small"
             >
               {deliveryOverdue ? `Overdue · ${deliveryRelative}` : deliveryRelative}
-            </Badge>
+            </s-badge>
           )}
-        </InlineStack>
+        </s-stack>
       ),
     },
     {
       label: "Time slot",
-      content: <Text as="span">{timeWindow}</Text>,
+      content: <s-text>{timeWindow}</s-text>,
     },
     {
       label: "Delivery status",
       content: (
-        <Badge tone={polarisBadgeTone(deliveryStatus.tone)} size="small">
+        <s-badge tone={deliveryStatus.tone}>
           {deliveryStatus.label === "Rescheduled" && order.rescheduleBadgeLabel
             ? order.rescheduleBadgeLabel
             : deliveryStatus.label}
-        </Badge>
+        </s-badge>
       ),
     },
     {
       label: "Fulfillment",
       content: (
-        <Badge tone={polarisBadgeTone(ffBadge.tone)} size="small">
-          {ffBadge.label}
-        </Badge>
+        <s-badge tone={ffBadge.tone}>{ffBadge.label}</s-badge>
       ),
     },
     {
       label: "Payment",
       content: (
-        <Badge
-          tone={polarisBadgeTone(
-            financialStatusTone(order.displayFinancialStatus),
-          )}
-          size="small"
-        >
+        <s-badge tone={financialStatusTone(order.displayFinancialStatus)}>
           {formatStatusLabel(order.displayFinancialStatus)}
-        </Badge>
+        </s-badge>
       ),
     },
     {
@@ -242,45 +226,40 @@ export function DeliverySection({
     },
     {
       label: "Sender phone",
-      content: <Text as="span">{senderPhone}</Text>,
+      content: <s-text>{senderPhone}</s-text>,
     },
     {
       label: "Customer notes",
       content: (
         <div className={customerNote !== "—" ? "odp-dd--scrollable" : undefined}>
-          <Text as="span" tone={customerNote === "—" ? "subdued" : undefined}>
+          <s-text color={customerNote === "—" ? "subdued" : undefined}>
             {customerNote}
-          </Text>
+          </s-text>
         </div>
       ),
     },
   );
 
   return (
-    <BlockStack gap="300">
-      <Text as="h3" variant="headingSm">
-        Delivery
-      </Text>
+    <s-stack gap="small">
+      <s-heading>Delivery</s-heading>
       <dl className="odp-dl">
         {rows.map((row) => (
           <div style={{ display: "contents" }} key={row.label}>
             <dt className="odp-dt">
-              <Text as="span" variant="bodySm" tone="subdued">
+              <s-text color="subdued" fontSize="small">
                 {row.label}
-              </Text>
+              </s-text>
             </dt>
             <dd className="odp-dd">{row.content}</dd>
           </div>
         ))}
       </dl>
-      <InlineStack>
-        <Button
-          size="slim"
-          onClick={() => copyText(buildDeliveryInfoText(order))}
-        >
+      <s-stack direction="inline">
+        <s-button onClick={() => copyText(buildDeliveryInfoText(order))}>
           {copied ? "Copied" : "Copy delivery info"}
-        </Button>
-      </InlineStack>
-    </BlockStack>
+        </s-button>
+      </s-stack>
+    </s-stack>
   );
 }

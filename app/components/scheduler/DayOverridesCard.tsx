@@ -2,20 +2,11 @@
 // or set a capacity for a slot on a date. Each save is one `saveDayOverride` operation.
 
 import { useState } from "react";
-import {
-  Badge,
-  BlockStack,
-  Button,
-  ButtonGroup,
-  Card,
-  Checkbox,
-  Divider,
-  InlineStack,
-  Text,
-  TextField,
-} from "@shopify/polaris";
 
+import { disallowDatesBefore, isCompleteIsoDate } from "../../lib/date-field";
 import { buildUpcomingOverrides } from "../../lib/scheduler-overview";
+import { flag } from "../../lib/web-component-props";
+import { SectionHeader } from "../ui/SectionHeader";
 import type { SchedulerPageState } from "./op-plumbing";
 import { formatDateLabel, useSchedulerOp } from "./op-plumbing";
 
@@ -25,6 +16,7 @@ export interface DayDraft {
   capacities: Record<string, string>;
 }
 
+// Builds the editable draft for one date from the saved rules.
 export function buildDayDraft(
   state: SchedulerPageState,
   date: string,
@@ -66,6 +58,7 @@ export function DayOverridesCard({
 
   const upcoming = buildUpcomingOverrides(rules, today);
 
+  // Opens the panel for a date (or closes it when `date` is null) and loads its draft.
   function selectDate(date: string | null) {
     onSelectDate(date);
     setDraft(date ? buildDayDraft(state, date) : null);
@@ -78,67 +71,67 @@ export function DayOverridesCard({
       selectedDate in rules.slotCapacity);
 
   return (
-    <Card>
-      <BlockStack gap="400">
-        <BlockStack gap="100">
-          <Text as="h2" variant="headingMd">
-            Date overrides
-          </Text>
-          <Text as="p" tone="subdued" variant="bodySm">
-            Block a whole day, close individual windows, or cap how many orders
-            a window can take on one date.
-          </Text>
-        </BlockStack>
+    <s-section>
+      <s-stack gap="base">
+        <SectionHeader
+          title="Date overrides"
+          description="Block a whole day, close individual windows, or cap how many orders a window can take on one date."
+        />
 
-        <TextField
+        <s-date-field
           label="Pick a date"
-          type="date"
-          autoComplete="off"
-          min={today}
           value={selectedDate ?? ""}
-          onChange={(date) => selectDate(date || null)}
+          disallow={disallowDatesBefore(today)}
           error={fieldErrors.date}
+          onInput={(e) => {
+            const date = e.currentTarget.value;
+            if (date === "") selectDate(null);
+            else if (isCompleteIsoDate(date)) selectDate(date);
+          }}
         />
 
         {selectedDate && draft && (
-          <BlockStack gap="300">
-            <Divider />
-            <InlineStack align="space-between" blockAlign="center">
-              <Text as="h3" variant="headingSm">
-                {formatDateLabel(selectedDate)}
-              </Text>
-              {selectedDate < today && (
-                <Badge tone="warning">Past date</Badge>
-              )}
-            </InlineStack>
+          <s-stack gap="small">
+            <s-divider />
+            <s-stack
+              direction="inline"
+              justifyContent="space-between"
+              alignItems="center"
+            >
+              <s-heading>{formatDateLabel(selectedDate)}</s-heading>
+              {selectedDate < today && <s-badge tone="warning">Past date</s-badge>}
+            </s-stack>
 
-            <Checkbox
+            <s-checkbox
               label="Block the entire day"
-              checked={draft.blocked}
-              onChange={(blocked) =>
-                setDraft((d) => (d ? { ...d, blocked } : d))
-              }
-              helpText="Customers can’t pick this date at all."
+              checked={flag(draft.blocked)}
+              details="Customers can’t pick this date at all."
+              onInput={(e) => {
+                const blocked = e.currentTarget.checked;
+                setDraft((d) => (d ? { ...d, blocked } : d));
+              }}
             />
 
             {!draft.blocked && (
-              <BlockStack gap="300">
+              <s-stack gap="small">
                 {rules.slots.map((slot) => {
                   const blocked = draft.blockedSlots.includes(slot.value);
                   const liveBooked =
                     rules.slotCapacity[selectedDate]?.[slot.value]?.booked;
                   return (
-                    <InlineStack
+                    <s-stack
                       key={slot.value}
-                      gap="300"
-                      blockAlign="center"
-                      wrap
+                      direction="inline"
+                      gap="base"
+                      alignItems="center"
                     >
                       <div style={{ minWidth: "160px", flexGrow: 1 }}>
-                        <Checkbox
+                        <s-checkbox
                           label={`${slot.display} (${slot.value})`}
-                          checked={blocked}
-                          onChange={(checked) =>
+                          checked={flag(blocked)}
+                          details={blocked ? "Blocked on this date" : undefined}
+                          onInput={(e) => {
+                            const checked = e.currentTarget.checked;
                             setDraft((d) =>
                               d
                                 ? {
@@ -150,23 +143,26 @@ export function DayOverridesCard({
                                         ),
                                   }
                                 : d,
-                            )
-                          }
-                          helpText={blocked ? "Blocked on this date" : undefined}
+                            );
+                          }}
                         />
                       </div>
                       {!blocked && (
-                        <InlineStack gap="200" blockAlign="center">
+                        <s-stack
+                          direction="inline"
+                          gap="small-200"
+                          alignItems="center"
+                        >
                           <div style={{ width: "120px" }}>
-                            <TextField
+                            <s-number-field
                               label={`Capacity for ${slot.display}`}
-                              labelHidden
-                              type="number"
+                              labelAccessibilityVisibility="exclusive"
                               min={0}
-                              autoComplete="off"
+                              autocomplete="off"
                               placeholder="No cap"
                               value={draft.capacities[slot.value] ?? ""}
-                              onChange={(value) =>
+                              onInput={(e) => {
+                                const value = e.currentTarget.value;
                                 setDraft((d) =>
                                   d
                                     ? {
@@ -177,37 +173,31 @@ export function DayOverridesCard({
                                         },
                                       }
                                     : d,
-                                )
-                              }
+                                );
+                              }}
                             />
                           </div>
                           {typeof liveBooked === "number" && (
-                            <Text as="span" tone="subdued" variant="bodySm">
-                              {liveBooked} booked
-                            </Text>
+                            <s-text color="subdued">{liveBooked} booked</s-text>
                           )}
-                        </InlineStack>
+                        </s-stack>
                       )}
-                    </InlineStack>
+                    </s-stack>
                   );
                 })}
                 {fieldErrors.capacities && (
-                  <Text as="p" tone="critical" variant="bodySm">
-                    {fieldErrors.capacities}
-                  </Text>
+                  <s-text tone="critical">{fieldErrors.capacities}</s-text>
                 )}
                 {fieldErrors.blockedSlots && (
-                  <Text as="p" tone="critical" variant="bodySm">
-                    {fieldErrors.blockedSlots}
-                  </Text>
+                  <s-text tone="critical">{fieldErrors.blockedSlots}</s-text>
                 )}
-              </BlockStack>
+              </s-stack>
             )}
 
-            <ButtonGroup>
-              <Button
+            <s-stack direction="inline" gap="small-200">
+              <s-button
                 variant="primary"
-                loading={submitting}
+                loading={flag(submitting)}
                 onClick={() => {
                   const capacities: Record<string, number | null> = {};
                   for (const [slotValue, raw] of Object.entries(
@@ -217,17 +207,9 @@ export function DayOverridesCard({
                     capacities[slotValue] =
                       trimmed === "" ? null : Number(trimmed);
                   }
-                  // Blocking a day is a day-level flag, not an edit of that
-                  // date's per-slot config — post the drafted blocked slots and
-                  // capacities even when blocked so a block → unblock
-                  // round-trip is lossless. Fixed here rather than in the op
-                  // because saveDayOverride treats its payload as the date's
-                  // full desired state (it rewrites disabledSlots[date] and
-                  // slotCapacity[date] wholesale); posting `[]`/`{}` was what
-                  // destroyed them. A field the merchant clears still posts
-                  // null and still drops just that one cap, and "Clear
-                  // overrides" (clearDayOverride) remains the only way to wipe
-                  // a date.
+                  // Sends the drafted blocked slots and capacities even when the whole day is
+                  // blocked, because saveDayOverride treats the payload as the full state of
+                  // that date.
                   submitOp("saveDayOverride", {
                     version,
                     date: selectedDate,
@@ -238,11 +220,11 @@ export function DayOverridesCard({
                 }}
               >
                 Save day
-              </Button>
+              </s-button>
               {hasStoredOverride && (
-                <Button
+                <s-button
                   tone="critical"
-                  loading={submitting}
+                  loading={flag(submitting)}
                   onClick={() =>
                     submitOp("clearDayOverride", {
                       version,
@@ -251,48 +233,51 @@ export function DayOverridesCard({
                   }
                 >
                   Clear overrides
-                </Button>
+                </s-button>
               )}
-              <Button onClick={() => selectDate(null)}>Close</Button>
-            </ButtonGroup>
-          </BlockStack>
+              <s-button onClick={() => selectDate(null)}>Close</s-button>
+            </s-stack>
+          </s-stack>
         )}
 
         {upcoming.length > 0 && (
-          <BlockStack gap="200">
-            <Divider />
-            <Text as="h3" variant="headingSm">
-              Upcoming overrides
-            </Text>
-            <BlockStack gap="150">
+          <s-stack gap="small">
+            <s-divider />
+            <s-heading>Upcoming overrides</s-heading>
+            <s-stack gap="small-200">
               {upcoming.map((entry) => (
-                <InlineStack key={entry.date} gap="200" blockAlign="center" wrap>
-                  <Button
-                    variant="plain"
+                <s-stack
+                  key={entry.date}
+                  direction="inline"
+                  gap="small-200"
+                  alignItems="center"
+                >
+                  <s-button
+                    variant="tertiary"
                     onClick={() => selectDate(entry.date)}
                   >
                     {formatDateLabel(entry.date)}
-                  </Button>
-                  {entry.blocked && <Badge tone="critical">Blocked</Badge>}
+                  </s-button>
+                  {entry.blocked && <s-badge tone="critical">Blocked</s-badge>}
                   {entry.blockedSlots.map((slotValue) => (
-                    <Badge key={slotValue} tone="warning">
+                    <s-badge key={slotValue} tone="warning">
                       {`${slotValue} blocked`}
-                    </Badge>
+                    </s-badge>
                   ))}
                   {entry.capacities.map(({ slotValue, capacity, booked }) => (
-                    <Badge
+                    <s-badge
                       key={slotValue}
                       tone={booked >= capacity ? "critical" : "info"}
                     >
                       {`${slotValue}: ${booked}/${capacity}`}
-                    </Badge>
+                    </s-badge>
                   ))}
-                </InlineStack>
+                </s-stack>
               ))}
-            </BlockStack>
-          </BlockStack>
+            </s-stack>
+          </s-stack>
         )}
-      </BlockStack>
-    </Card>
+      </s-stack>
+    </s-section>
   );
 }

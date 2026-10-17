@@ -1,6 +1,5 @@
 // The order's line items in the order panel, with the item count.
 
-import { BlockStack, Text } from "@shopify/polaris";
 import { type Order, formatMoney } from "../../../lib/order-utils";
 
 export function ItemsSection({ order }: { order: Order }) {
@@ -30,14 +29,10 @@ export function ItemsSection({ order }: { order: Order }) {
     : "—";
 
   return (
-    <BlockStack gap="300">
-      <Text as="h3" variant="headingSm">
-        Items ({items.length})
-      </Text>
+    <s-stack gap="small">
+      <s-heading>Items ({items.length})</s-heading>
       {items.length === 0 ? (
-        <Text as="p" tone="subdued">
-          No items.
-        </Text>
+        <s-paragraph color="subdued">No items.</s-paragraph>
       ) : (
         <div>
           {items.map((edge, idx) => {
@@ -55,18 +50,16 @@ export function ItemsSection({ order }: { order: Order }) {
                   <div className="odp-item-thumb-placeholder" />
                 )}
                 <div className="odp-item-info">
-                  <Text as="p" fontWeight="medium" truncate>
-                    {item.name}
-                  </Text>
+                  <div className="odp-ellipsis">
+                    <s-text fontWeight="medium">{item.name}</s-text>
+                  </div>
                   {item.sku && (
-                    <Text as="p" variant="bodySm" tone="subdued">
+                    <s-paragraph color="subdued" fontSize="small">
                       SKU: {item.sku}
-                    </Text>
+                    </s-paragraph>
                   )}
                 </div>
-                <Text as="span" tone="subdued">
-                  × {item.quantity}
-                </Text>
+                <s-text color="subdued">× {item.quantity}</s-text>
               </div>
             );
           })}
@@ -74,26 +67,18 @@ export function ItemsSection({ order }: { order: Order }) {
       )}
       <div className="odp-totals">
         <div className="odp-totals-row">
-          <Text as="span" tone="subdued">
-            Subtotal
-          </Text>
-          <Text as="span">{subtotalFormatted}</Text>
+          <s-text color="subdued">Subtotal</s-text>
+          <s-text>{subtotalFormatted}</s-text>
         </div>
         <div className="odp-totals-row">
-          <Text as="span" tone="subdued">
-            Shipping fee
-          </Text>
-          <Text as="span">{shippingFormatted}</Text>
+          <s-text color="subdued">Shipping fee</s-text>
+          <s-text>{shippingFormatted}</s-text>
         </div>
         <div className="odp-totals-row">
-          <Text as="span" fontWeight="semibold">
-            Total
-          </Text>
-          <Text as="span" fontWeight="semibold">
-            {total}
-          </Text>
+          <s-text fontWeight="semibold">Total</s-text>
+          <s-text fontWeight="semibold">{total}</s-text>
         </div>
       </div>
-    </BlockStack>
+    </s-stack>
   );
 }

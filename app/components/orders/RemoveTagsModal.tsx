@@ -1,14 +1,8 @@
 // Modal to remove tags from the selected orders. The parent submits the `tagsRemove` bulk action.
 
-import { BlockStack, InlineStack, Modal, Tag, Text, TextField } from "@shopify/polaris";
 import { tagDisplayLabel } from "../../lib/order-utils";
+import { AppModal } from "../ui/AppModal";
 
-// Bulk "Remove tags" modal (Polaris React). Visibility is controlled by the
-// parent via `open`/`onClose`. `suggestedTags` (audit S4) is the union of the
-// selected orders' meaningful tags, computed client-side from already-loaded
-// data — clicking one appends the RAW tag to the input, so the merchant never
-// has to type an exact tag from memory. Schedule/system tags are excluded
-// upstream by getMeaningfulTags, so they can't be removed by accident here.
 export interface RemoveTagsModalProps {
   open: boolean;
   onClose: () => void;
@@ -20,6 +14,8 @@ export interface RemoveTagsModalProps {
   onConfirm: () => void;
 }
 
+// Shows a text field for the tags to remove, plus the tags found on the selected orders.
+// Clicking a suggested tag adds its exact name to the field.
 export function RemoveTagsModal({
   open,
   onClose,
@@ -30,6 +26,7 @@ export function RemoveTagsModal({
   suggestedTags,
   onConfirm,
 }: RemoveTagsModalProps) {
+  // Adds a suggested tag to the field unless it is already there.
   const appendSuggestion = (tag: string) => {
     const current = removeTagsInput
       .split(",")
@@ -40,7 +37,7 @@ export function RemoveTagsModal({
   };
 
   return (
-    <Modal
+    <AppModal
       open={open}
       onClose={onClose}
       title="Remove tags from selected orders"
@@ -55,35 +52,37 @@ export function RemoveTagsModal({
         { content: "Cancel", onAction: onClose, disabled: isSubmitting },
       ]}
     >
-      <Modal.Section>
-        <BlockStack gap="400">
-          <Text as="p">
-            Remove the tags below from {selectedCount}{" "}
-            {selectedCount === 1 ? "order" : "orders"}.
-          </Text>
-          <TextField
-            label="Tags (comma-separated)"
-            placeholder="e.g. priority, vip"
-            value={removeTagsInput}
-            onChange={setRemoveTagsInput}
-            autoComplete="off"
-          />
-          {suggestedTags.length > 0 && (
-            <BlockStack gap="200">
-              <Text as="p" variant="bodySm" tone="subdued">
-                Tags on the selected orders — click to add:
-              </Text>
-              <InlineStack gap="100" wrap>
-                {suggestedTags.map((tag) => (
-                  <Tag key={tag} onClick={() => appendSuggestion(tag)}>
-                    {tagDisplayLabel(tag)}
-                  </Tag>
-                ))}
-              </InlineStack>
-            </BlockStack>
-          )}
-        </BlockStack>
-      </Modal.Section>
-    </Modal>
+      <s-stack gap="base">
+        <s-paragraph>
+          Remove the tags below from {selectedCount}{" "}
+          {selectedCount === 1 ? "order" : "orders"}.
+        </s-paragraph>
+        <s-text-field
+          label="Tags (comma-separated)"
+          placeholder="e.g. priority, vip"
+          autocomplete="off"
+          value={removeTagsInput}
+          onInput={(e) => setRemoveTagsInput(e.currentTarget.value)}
+        />
+        {suggestedTags.length > 0 && (
+          <s-stack gap="small-200">
+            <s-text color="subdued">
+              Tags on the selected orders — click to add:
+            </s-text>
+            <s-stack direction="inline" gap="small-300">
+              {suggestedTags.map((tag) => (
+                <s-clickable-chip
+                  key={tag}
+                  accessibilityLabel={`Add tag ${tagDisplayLabel(tag)}`}
+                  onClick={() => appendSuggestion(tag)}
+                >
+                  {tagDisplayLabel(tag)}
+                </s-clickable-chip>
+              ))}
+            </s-stack>
+          </s-stack>
+        )}
+      </s-stack>
+    </AppModal>
   );
 }

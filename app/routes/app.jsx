@@ -1,6 +1,6 @@
 // Layout route for every page under /app. Authenticates the merchant with authenticate.admin,
-// wraps the page in the App Bridge and Polaris providers, renders the navigation menu
-// (Order operations, Delivery Scheduler) and keeps the `host`/`shop` parameters on links.
+// loads App Bridge and the Polaris web components through AppProvider, renders the navigation
+// menu (Order operations, Delivery Scheduler) and keeps the `host`/`shop` parameters on links.
 // If `host` is missing it redirects through /app so App Bridge can re-initialise.
 
 import {
@@ -13,19 +13,12 @@ import {
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
-// Polaris React: AppProvider (renamed to avoid clashing with the App Bridge one
-// above) + its i18n bundle + stylesheet. Nested inside the App Bridge provider so
-// /app/orders can use Polaris React components. Both providers coexist.
-import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
-import polarisEnTranslations from "@shopify/polaris/locales/en.json";
-import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 import {
   buildEmbeddedAppPath,
   buildEmbeddedBootstrapPath,
 } from "../lib/embedded-route";
+import { POLARIS_URL } from "../lib/polaris-url";
 import { authenticate } from "../shopify.server";
-
-export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -51,14 +44,12 @@ export default function App() {
   const schedulerHref = buildEmbeddedAppPath("/app/scheduler", searchParams);
 
   return (
-    <AppProvider embedded apiKey={apiKey}>
+    <AppProvider apiKey={apiKey} polarisUrl={POLARIS_URL}>
       <ui-nav-menu>
         <Link to={ordersHref} rel="home">Order operations</Link>
         <Link to={schedulerHref}>Delivery Scheduler</Link>
       </ui-nav-menu>
-      <PolarisAppProvider i18n={polarisEnTranslations}>
-        <Outlet />
-      </PolarisAppProvider>
+      <Outlet />
     </AppProvider>
   );
 }
