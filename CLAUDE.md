@@ -58,7 +58,11 @@ Where to look first
 - Customer email: `app/services/customer-inbox.server.ts` (reads the mailbox) and `app/routes/app.orders_.inbox.ts` (what the bell loads).
 - Secrets and settings on Cloud Run: `docs/gcp-inventory.md`.
 
+#Hard Rules - Huwag galawin ang tag, attribute, fulfillment, metafield, o ang ibang umiiral na flow
+
+
+
 ## Comments in code
 
-Every time code is added or changed, write or update the comment above it. The comment says what the code does, in plain English that a grade 8 student can follow: short sentences, everyday words, and a one-line meaning for any technical term it needs. Each file keeps a short comment at the top that says what the file is for; update it whenever the file changes.
+Every time code is added or changed, write or update the comment above it. The comment says what the code does, in plain English that a grade 8 student 
 
