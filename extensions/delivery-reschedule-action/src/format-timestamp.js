@@ -1,8 +1,7 @@
 // Shared timestamp formatting for the two read-only admin order-page
 // extensions. This file is a BYTE-IDENTICAL copy of
 // extensions/delivery-reschedule-action/src/format-timestamp.js — the two are
-// pinned together by test/extension-format-timestamp.test.ts, the same way
-// cod-fee.js is pinned across the two thank-you extensions. Extensions are
+// pinned together by test/extension-format-timestamp.test.ts. Extensions are
 // separate bundles and cannot import from app/lib, hence the duplication.
 
 /**

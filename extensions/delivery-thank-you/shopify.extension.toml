@@ -19,12 +19,6 @@ uid = "44f2b914-bc99-5eb8-57fb-7f587681a1863e539d62"
 module = "./src/Checkout.jsx"
 target = "purchase.thank-you.block.render"
 
-# NOTE: the COD *totals* live in the separate `cod-fee-notice` extension, whose
-# block the merchant positions directly below Shopify's Total in the checkout
-# editor. Keep this extension to ONE target — a second one here would put two
-# entries in the picker under near-identical names, which is how the merchant
-# ended up placing the totals block twice on 2026-08-14.
-
 [[extensions.metafields]]
 namespace = "custom"
 key = "date"
@@ -32,23 +26,3 @@ key = "date"
 [[extensions.metafields]]
 namespace = "custom"
 key = "time_slot"
-
-# The COD fee amount, mirrored here by /app/cod-settings so the Thank You page
-# shows the amount that will actually be charged. The extension cannot read the
-# COD Fee variant's price — that product is unpublished from the Online Store
-# on purpose — and the block's own `fee_amount` setting is a SEPARATE field that
-# does not follow the settings page (caught 2026-08-14: fee set to ₱85, page
-# still said ₱70). Same mechanism the delivery date/time already use.
-[[extensions.metafields]]
-namespace = "$app:cod"
-key = "fee"
-
-# COD fee display (merged from the retired cod-fee-notice block).
-# Keep in sync with the COD fee product variant price (COD-FEE) and the
-# /app/cod-settings fee field — this only controls what the card DISPLAYS.
-[extensions.settings]
-[[extensions.settings.fields]]
-key = "fee_amount"
-type = "number_decimal"
-name = "COD fee amount"
-description = "Displayed COD fee. Must match the COD Fee product price (default 70)."

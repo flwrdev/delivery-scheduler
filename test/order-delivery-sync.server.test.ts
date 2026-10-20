@@ -5,13 +5,11 @@ const {
   evaluateMock,
   syncMetafieldsMock,
   syncTagMock,
-  codFeeMock,
 } = vi.hoisted(() => ({
   rulesDetailedMock: vi.fn(),
   evaluateMock: vi.fn(),
   syncMetafieldsMock: vi.fn(),
   syncTagMock: vi.fn(),
-  codFeeMock: vi.fn(),
 }));
 
 vi.mock("../app/services/schedule-rules.server", () => ({
@@ -22,10 +20,6 @@ vi.mock("../app/services/order-delivery-metafields.server", () => ({
   evaluateDeliverySyncStatus: evaluateMock,
   syncOrderDeliveryMetafields: syncMetafieldsMock,
   syncOrderDeliveryScheduleTag: syncTagMock,
-}));
-
-vi.mock("../app/services/cod-fee.server", () => ({
-  applyCodFeeToOrder: codFeeMock,
 }));
 
 import {
@@ -46,7 +40,6 @@ function input(overrides: Partial<OrderDeliverySyncInput> = {}): OrderDeliverySy
     deliveryDate: "2026-08-27",
     timeSlot: "9AM-12PM",
     checkoutTime: CHECKOUT,
-    needsCodFee: false,
     ...overrides,
   };
 }
@@ -57,7 +50,6 @@ beforeEach(() => {
   evaluateMock.mockReturnValue("ok");
   syncMetafieldsMock.mockResolvedValue({ ok: true, skipped: false, metafieldCount: 5, errors: [] });
   syncTagMock.mockResolvedValue({ ok: true, skipped: false, scheduleTags: [], removedTags: [], errors: [] });
-  codFeeMock.mockResolvedValue({ ok: true, skipped: false, errors: [] });
 });
 
 describe("syncOrderDelivery", () => {
@@ -70,7 +62,6 @@ describe("syncOrderDelivery", () => {
       deliveryDate: "2026-08-27",
       timeSlot: "9AM-12PM",
     });
-    expect(codFeeMock).not.toHaveBeenCalled();
   });
 
   it("validates with the order's checkout time and passes the verdict as a flag", async () => {
@@ -96,11 +87,10 @@ describe("syncOrderDelivery", () => {
 
   it("runs every step even when one fails, and reports the failure", async () => {
     syncMetafieldsMock.mockResolvedValue({ ok: false, skipped: false, metafieldCount: 0, errors: ["boom"] });
-    const result = await syncOrderDelivery(admin, input({ needsCodFee: true }));
+    const result = await syncOrderDelivery(admin, input());
     expect(result.ok).toBe(false);
     expect(result.errors).toEqual(["metafields: boom"]);
     expect(syncTagMock).toHaveBeenCalledTimes(1);
-    expect(codFeeMock).toHaveBeenCalledTimes(1);
   });
 
   it("reports thrown errors per step", async () => {
@@ -108,17 +98,5 @@ describe("syncOrderDelivery", () => {
     syncTagMock.mockRejectedValue(new Error("network"));
     const result = await syncOrderDelivery(admin, input());
     expect(result).toEqual({ ok: false, errors: ["metafields: rules down", "tags: network"] });
-  });
-
-  it("runs only the COD step for a COD order without delivery attributes; skipped is success", async () => {
-    codFeeMock.mockResolvedValue({ ok: true, skipped: true, reason: "fee already on order", errors: [] });
-    const result = await syncOrderDelivery(
-      admin,
-      input({ deliveryDate: null, timeSlot: null, needsCodFee: true }),
-    );
-    expect(result.ok).toBe(true);
-    expect(codFeeMock).toHaveBeenCalledWith(admin, { orderId: ORDER_GID });
-    expect(rulesDetailedMock).not.toHaveBeenCalled();
-    expect(syncTagMock).not.toHaveBeenCalled();
   });
 });

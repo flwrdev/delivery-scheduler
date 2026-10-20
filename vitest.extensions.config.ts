@@ -10,8 +10,8 @@ export default defineConfig({
   esbuild: {
     jsx: "automatic",
     // LOAD-BEARING, not a convenience. The tester is inlined (see below), so it
-    // dynamic-imports each extension module through Vite — which means the four
-    // preact extensions (delivery-thank-you, cod-fee-notice, order-delivery-block,
+    // dynamic-imports each extension module through Vite — which means the three
+    // preact extensions (delivery-thank-you, order-delivery-block,
     // delivery-reschedule-action) have THEIR OWN sources transformed by this
     // esbuild config. Drop jsxImportSource and their JSX compiles against React's
     // runtime instead, failing at render with "Cannot add property __, object is
@@ -29,8 +29,6 @@ export default defineConfig({
       },
     },
     include: ["extensions/*/tests/**/*.test.{ts,tsx}"],
-    // cod-eligibility's tests/ run under its OWN vitest 3 config (wasm build,
-    // 45s timeout) — keep it out of this run.
-    exclude: ["extensions/cod-eligibility/**", "**/node_modules/**"],
+    exclude: ["**/node_modules/**"],
   },
 });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Payload extraction (attributes, COD detection, checkout time) runs real;
+// Payload extraction (attributes, checkout time) runs real;
 // only the Shopify auth and sync seams are mocked.
 
 const { webhookAuthMock, syncMock } = vi.hoisted(() => ({
@@ -31,7 +31,7 @@ function deliveryPayload(overrides: Record<string, unknown> = {}) {
       { name: "Delivery Date", value: "2026-08-27" },
       { name: "Delivery Time", value: "9AM-12PM" },
     ],
-    payment_gateway_names: ["cod"],
+    payment_gateway_names: ["shopify_payments"],
     ...overrides,
   };
 }
@@ -54,10 +54,8 @@ beforeEach(() => {
 });
 
 describe("webhooks.orders.create", () => {
-  it("acks without syncing when there is nothing to sync (no attrs, not COD)", async () => {
-    const res = await callAction(
-      deliveryPayload({ note_attributes: [], payment_gateway_names: ["shopify_payments"] }),
-    );
+  it("acks without syncing when there are no delivery attributes", async () => {
+    const res = await callAction(deliveryPayload({ note_attributes: [] }));
     expect(res.status).toBe(200);
     expect(syncMock).not.toHaveBeenCalled();
   });
@@ -72,17 +70,7 @@ describe("webhooks.orders.create", () => {
       timeSlot: "9AM-12PM",
       // 4:50 PM Manila — the order's created_at, never webhook processing time.
       checkoutTime: new Date("2026-08-26T08:50:00.000Z"),
-      needsCodFee: true,
     });
-  });
-
-  it("syncs a COD-only order (no delivery attrs) as fee-only", async () => {
-    const res = await callAction(deliveryPayload({ note_attributes: [] }));
-    expect(res.status).toBe(200);
-    expect(syncMock).toHaveBeenCalledWith(
-      admin,
-      expect.objectContaining({ deliveryDate: null, timeSlot: null, needsCodFee: true }),
-    );
   });
 
   it("answers 500 when a step fails so Shopify redelivers", async () => {
