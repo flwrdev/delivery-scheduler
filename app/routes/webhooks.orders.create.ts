@@ -1,7 +1,7 @@
 // orders/create delivery sync. The request is verified by Shopify's webhook
-// HMAC (authenticate.webhook) and the sync runs inside it: delivery
-// metafields, the schedule tag, and the COD fee line item are written straight
-// to the Shopify order. Nothing is stored in Postgres.
+// HMAC (authenticate.webhook) and the sync runs inside it: the delivery
+// metafields and the schedule tag are written straight to the Shopify order.
+// Nothing is stored in Postgres.
 //
 // A paid order's delivery data is always written when date+slot are
 // parseable; validation only stamps `delivery.sync_status`, and its clock is
@@ -12,7 +12,6 @@
 // still missing.
 
 import { authenticate } from "../shopify.server";
-import { isCashOnDeliveryOrder } from "../services/cod-fee.server";
 import {
   extractDeliveryAttributesFromPayload,
   getOrderGidFromPayload,
@@ -29,10 +28,8 @@ export const action = async ({ request }: { request: Request }) => {
 
   console.log("[orders/create] webhook received.");
 
-  const isCodOrder = orderId ? isCashOnDeliveryOrder(orderPayload) : false;
-  const hasDeliveryAttributes = Boolean(orderId && deliveryDate && timeSlot);
-
-  if (!orderId || (!hasDeliveryAttributes && !isCodOrder)) {
+  // An order with no delivery date and slot has nothing to write, so we stop here.
+  if (!orderId || !deliveryDate || !timeSlot) {
     console.log(
       "[orders/create] delivery sync skipped: missing required delivery attributes.",
     );
@@ -48,10 +45,9 @@ export const action = async ({ request }: { request: Request }) => {
   const result = await syncOrderDelivery(admin, {
     shop,
     orderId,
-    deliveryDate: hasDeliveryAttributes ? deliveryDate : null,
-    timeSlot: hasDeliveryAttributes ? timeSlot : null,
+    deliveryDate,
+    timeSlot,
     checkoutTime: resolveOrderCheckoutTime(orderPayload),
-    needsCodFee: isCodOrder,
   });
 
   if (!result.ok) {

@@ -1,9 +1,7 @@
 // What happens to a new order's delivery data (called by the orders/create webhook): loads the
-// schedule rules, evaluates the chosen date and slot, writes the metafields and the schedule tag,
-// and adds the COD fee for cash on delivery orders. Every step is idempotent, so Shopify can
-// safely redeliver the webhook.
+// schedule rules, evaluates the chosen date and slot, and writes the metafields and the schedule
+// tag. Every step is idempotent, so Shopify can safely redeliver the webhook.
 
-import { applyCodFeeToOrder } from "./cod-fee.server";
 import {
   type AdminGraphQLClient,
   evaluateDeliverySyncStatus,
@@ -18,7 +16,6 @@ export interface OrderDeliverySyncInput {
   deliveryDate: string | null;
   timeSlot: string | null;
   checkoutTime: Date;
-  needsCodFee: boolean;
 }
 
 export interface OrderDeliverySyncResult {
@@ -31,8 +28,7 @@ function errorMessage(error: unknown): string {
 }
 
 // Every step is idempotent on the Shopify side (metafieldsSet overwrites,
-// tagsAdd skips existing tags, applyCodFeeToOrder scans for the fee SKU
-// before adding), so a Shopify webhook redelivery can safely re-run it.
+// tagsAdd skips existing tags), so a Shopify webhook redelivery can safely re-run it.
 export async function syncOrderDelivery(
   admin: AdminGraphQLClient,
   input: OrderDeliverySyncInput,
@@ -87,17 +83,6 @@ export async function syncOrderDelivery(
       }
     } catch (error) {
       errors.push(`tags: ${errorMessage(error)}`);
-    }
-  }
-
-  if (input.needsCodFee) {
-    try {
-      const feeResult = await applyCodFeeToOrder(admin, { orderId: input.orderId });
-      if (!feeResult.ok) {
-        errors.push(`codFee: ${feeResult.errors.join("; ") || "fee failed"}`);
-      }
-    } catch (error) {
-      errors.push(`codFee: ${errorMessage(error)}`);
     }
   }
 

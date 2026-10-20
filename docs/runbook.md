@@ -68,7 +68,7 @@ gcloud secrets versions access latest --secret=NAME --project jhay-510919 | tr -
 - Google Cloud APIs enabled for this work: `run`, `cloudbuild`, `artifactregistry`, `iam`, `secretmanager`, `billingbudgets`.
 - Shopify Admin GraphQL (`2026-04`), Shopify Storefront API (token), Google Maps JavaScript SDK and Places API (New) in the browser (optional key), SMTP and IMAP on the Private Email mailbox, Neon Postgres through Prisma.
 - Routes: `app.*` use the Shopify session; `apps.schedule-rules.*` use the app proxy signature; `public.customer-account.*` verify the customer-account session token with `SHOPIFY_API_SECRET`; `webhooks.*` verify the webhook HMAC.
-- Extensions: `cod-eligibility` (function), `cod-fee-notice`, `delivery-thank-you`, `delivery-date-editor`, `delivery-reschedule-customer`, `delivery-reschedule-action`, `order-delivery-block`, `delivery-fee-checker` (theme).
+- Extensions: `delivery-thank-you`, `delivery-date-editor`, `delivery-reschedule-customer`, `delivery-reschedule-action`, `order-delivery-block`, `delivery-fee-checker` (theme).
 
 ## Cost guard
 Budget `delivery-scheduler-free-guard` (1 USD) only alerts. `min-instances 0`. Artifact Registry keeps the 2 newest images.

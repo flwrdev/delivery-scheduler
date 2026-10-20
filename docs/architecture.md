@@ -7,7 +7,7 @@ A Shopify embedded app for one merchant, The Flowercart (Metro Manila). It does 
 
 1. **Delivery scheduling.** Customers pick a delivery date and time slot. The app holds the rules (cutoff hour, preparation time, booking window, time slots, blocked dates, optional capacity per slot) and tells the storefront which dates and slots can be booked.
 2. **Order operations.** A workspace in the Shopify admin (`/app/orders`) where the merchant sees orders by delivery day, reschedules, tags, fulfils, cancels, edits the shipping address and emails customers.
-3. **Checkout helpers.** Cash on delivery (COD) rules and a COD fee, plus delivery information in the checkout, the order status page, the customer account and the admin order page.
+3. **Checkout helpers.** Delivery information on the thank-you page, the order status page, the customer account and the admin order page.
 
 It is built on React Router 7, the Shopify app toolkit (`@shopify/shopify-app-react-router`), Polaris web components (Polaris 2.0), Prisma and Postgres, and runs on Google Cloud Run. The Polaris script is loaded from a URL kept in `app/lib/polaris-url.ts`, not from an npm package.
 
@@ -47,9 +47,9 @@ Tags are capped at 40 characters by Shopify. `app/lib/order-tags.ts` owns the wh
 
 ### 1. A new order arrives
 `routes/webhooks.orders.create.ts` receives Shopify's `orders/create` webhook (HMAC verified).
-1. Reads `Delivery Date` and `Delivery Time` from the order attributes and detects a COD order.
+1. Reads `Delivery Date` and `Delivery Time` from the order attributes. An order without them is acknowledged and skipped.
 2. `services/order-delivery-sync.server.ts` loads the schedule rules and evaluates the choice against the moment the customer checked out (`delivery.sync_status`). Capacity is advisory: an over-capacity order is still accepted and flagged `attention:capacity`.
-3. Writes the metafields, replaces the schedule tags and, for COD orders, adds the COD fee line item (`services/cod-fee.server.ts`).
+3. Writes the metafields and replaces the schedule tags.
 4. If any step fails the handler answers `500`, so Shopify redelivers. Every step is idempotent, so a retry only fills in what is missing.
 
 ### 2. The storefront asks what can be booked
@@ -80,10 +80,6 @@ Both verify the customer owns the order and that it is still reschedulable (not 
 - **Send:** `services/send-customer-email.server.ts` (nodemailer over SMTP) sends from the business mailbox, adds a copy to the sender, supports up to 3 photos, and logs a row in `EmailSendLog` for the order timeline.
 - **Read:** `services/customer-inbox.server.ts` (imapflow) opens the same mailbox read-only during a request (Orders page load, Refresh, bell, order panel). There is no background connection. Replies are matched to orders by the order number in the subject and the customer address.
 - **State:** unseen/seen markers live in order metafields and the quick replies in a shop metafield (`$app.quick_replies`), so nothing about email is stored in Postgres except the send log.
-
-### 7. Cash on delivery
-- `extensions/cod-eligibility` (Shopify Function) runs at checkout. It hides the COD payment method when the subtotal is under the minimum (default 2500), above an optional maximum, or the address is outside Metro Manila (ZIP ranges first, city name as a fallback).
-- The COD fee cannot be charged at checkout, so the webhook adds the `COD-FEE` product to the order afterwards. `delivery-thank-you` and `cod-fee-notice` explain the fee and show the total with the fee on the thank-you page.
 
 ## The scheduling rules
 `app/lib/delivery-availability.ts` is the rules engine, used by the server and the extensions.
@@ -125,9 +121,7 @@ Migrations in `prisma/migrations` run when the container starts (`prisma migrate
 ## Extensions
 | Extension | Type | Where it shows | What it does |
 |---|---|---|---|
-| `cod-eligibility` | Function | checkout payment methods | hides or renames the COD method by amount and area |
-| `delivery-thank-you` | UI | thank-you page | delivery schedule card with the COD fee explanation |
-| `cod-fee-notice` | UI | thank-you page | "Total with fee" row |
+| `delivery-thank-you` | UI | thank-you page | delivery schedule card |
 | `delivery-date-editor` | UI | customer order status | shows the delivery date, reads `public/customer-account/order-delivery` |
 | `delivery-reschedule-customer` | UI | customer account order action | menu item and modal to reschedule |
 | `delivery-reschedule-action` | UI | admin order action | read-only reschedule status |
@@ -152,4 +146,3 @@ These exist in the code but no longer match how the shop works. They are safe to
 - References to a Messenger agent, Lalamove and `MESSENGER_*` / `LALAMOVE_SHOP` variables (`lib/messenger-conversation.ts`, `services/delivery-coverage.server.ts` wording, the Meta page link on the Orders page).
 - Code comments that cite documents that are not in this repository (`docs/api.md`, `docs/scheduler-v2-ux.md`, `customer-email-design.md`) and internal review codes (ADR, REC, DEF, E-).
 - The landing page at `/` still has the Shopify template placeholder text, and the toml still declares template demo metaobject and metafield definitions.
-- The `cod-eligibility` comments mention a COD settings page that was removed.
